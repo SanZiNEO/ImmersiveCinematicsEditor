@@ -1,0 +1,19 @@
+{
+  "name": "event-float",
+  "expect": ["event_record"],
+  "entry": {
+    "id": "track.CAMERA.object.position.x",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "position.x",
+    "type": "float",
+    "mode": "event",
+    "interp": "none",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "name": "unknown-timing",
+  "expect": ["未知时间映射类型"],
+  "doc": "paths[0].timing.type 未登记：cubic 不是 linear / keyframes。PathCollectionParser 报「未知时间映射类型 'cubic'」，不回落 linear。",
+  "meta": {
+    "id": "bad_timing",
+    "name": "Bad Timing",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_timing",
+      "track": "CAMERA",
+      "duration": 6,
+      "objects": {
+        "position.x": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        },
+        "position.y": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        },
+        "position.z": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        }
+      }
+    }
+  ],
+  "paths": [
+    {
+      "id": "path_timing",
+      "clip": "clip_timing",
+      "from": 0,
+      "to": 3,
+      "geometry": {
+        "type": "line"
+      },
+      "timing": {
+        "type": "cubic"
+      }
+    }
+  ]
+}

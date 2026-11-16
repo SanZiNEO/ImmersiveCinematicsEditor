@@ -13,25 +13,11 @@
 - 权威载体是**主模组源码**：`common/src/main/java/com/immersivecinematics/immersive_cinematics/script/` 下的 `schema/`、`track/`、`rule/`、`path/`、`spi/`。
 - **禁止**用 `scripts/export-schema.mjs` 组装 MC classpath 去导出快照；禁止为了导出而引入 `Vec3` / Mojang `Codec`。
 - `schema.get` 是运行时对账数据，不是目录的生成源；离线快照只做缓存。
-- wire 值一律小写（`value` / `animated` / `event`、`float` / `int` / `nullable_float`、`linear` / `angle` / `geometric` / `step`）；Java 枚举名不是 wire 值。
-
-## 任务文档
-
-| 文档 | 任务 |
-|---|---|
-| [02-01-field-catalog-source-rules.md](02-01-field-catalog-source-rules.md) | 总纲与源码读取规则 |
-| [02-02-field-catalog-model.md](02-02-field-catalog-model.md) | 字段目录数据模型与查询索引 |
-| [02-03-meta-fields.md](02-03-meta-fields.md) | meta 字段表与 screen_layers 键域 |
-| [02-04-track-objects.md](02-04-track-objects.md) | tracks 对象表与 playControl |
-| [02-05-trigger-fields.md](02-05-trigger-fields.md) | triggers 字段表 |
-| [02-06-model-curve-fields.md](02-06-model-curve-fields.md) | models 与 curveTypes 字段表 |
-| [02-07-script-structure.md](02-07-script-structure.md) | script_structure 字段表 |
-| [02-08-declaration-rules.md](02-08-declaration-rules.md) | 声明自检规则 |
-| [02-09-reconcile-fixtures.md](02-09-reconcile-fixtures.md) | schema.get 对账、离线快照与夹具 |
+- wire 值一律小写（`value` / `animated` / `event`、`float` / `int` / `nullable_float`、`linear` / `angle` / `geometric` / `step`）；`ParamKind` / `CurveCapability` 用 Java 枚举原样大写名；`enumValues` 按源码原值。
 
 ## 完成标准
 
 - 六段每个字段都有 `sourceRef`（类名 + 方法/行号），抽查 20 条与源码一致。
 - 目录里没有 `Vec3`、没有 `export-schema.mjs`、没有从快照反推的字段。
 - 编辑器代码里查字段只走目录；字段表只存在这一份。
-- 离线快照带来源（游戏版本 / 模组版本 / 时间 / `catalogHash`），只读，不自动覆盖在线目录。
+- 离线快照带来源（游戏版本 / 模组版本 / 时间 / `catalogHash`），只读，不自动覆盖在线目录；多实例快照由 `snapshots.ts` 写入 `fixtures/__snapshots__/`，同名不覆盖。

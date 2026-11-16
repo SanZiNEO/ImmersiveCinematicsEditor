@@ -1,0 +1,32 @@
+{
+  "name": "curve-default-kind",
+  "expect": ["default"],
+  "entry": {
+    "id": "curve.demo.params.ratio",
+    "segment": "curveTypes",
+    "scope": ["demo"],
+    "key": "ratio",
+    "type": "number",
+    "default": "1",
+    "hasDefault": true,
+    "required": false,
+    "sourceRef": "PathCurveRegistry#register:75"
+  },
+  "catalog": {
+    "curveTypes": {
+      "demo": {
+        "capabilities": [],
+        "params": [
+          {
+            "key": "ratio",
+            "kind": "NUMBER",
+            "default": "1",
+            "hasDefault": true,
+            "required": false,
+            "sourceRef": "PathCurveRegistry#register:75"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 ## 目标
 
-登记 `meta` 段的 21 个 `MetaSchemas` 字段 + 2 个仅解析期键，并把 `screen_layers` 这个「对象里再带键域」的特例单独写清。字段来源：`MetaSchemas.all()`（17–48）；`base_resolution` 的解析在 `ScriptParser.parseBaseResolution`（1263–1285）；`triggers` / `trigger_poll_interval` 在 `ScriptParser.metaKeys()`（76–81）。
+登记 `meta` 段的 21 个 `MetaSchemas` 字段 + 2 个仅解析期键，并把 `screen_layers` 这个「对象里再带键域」的特例单独写清。字段来源：`MetaSchemas.all()`（17–48）；`base_resolution` 的解析在 `ScriptParser.parseBaseResolution`（1269–1290，`positiveIntComponent` 1293–1300）；`triggers` / `trigger_poll_interval` 在 `ScriptParser.metaKeys()`（76–81）。
 
 ## 21 个 `MetaSchemas` 字段 + 2 个解析期键
 
@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | `id` | string | `"untitled"` | true | `^[a-zA-Z0-9_]{1,32}$` | info |
 | `name` | string | `"Untitled"` | true | ≤50 字符 | info |
-| `author` | string | `""` | false | — | info |
+| `author` | string | `""` | false | ≤30 字符（校验器） | info |
 | `description` | string | `""` | false | — | info |
 | `dimension` | string | `""` | false | — | info |
 | `base_resolution` | object | null（运行时回落 `1920×1080`） | false | `{w,h}` 正整数，`1~Integer.MAX_VALUE` | info |
@@ -39,8 +39,8 @@
 ## `base_resolution`
 
 - 形状必须是 `{w,h}`，两个正整数，范围 `1 ~ Integer.MAX_VALUE`。
-- 校验器（`ScriptValidator.checkBaseResolution`，1910–1935）：缺 `w` / `h`、0、负数、非整数、非对象 → 报错，脚本被拒。
-- 解析器（`ScriptParser.parseBaseResolution`，1263–1285）：非法 → 告警 + 回落 `1920×1080`，不阻断加载。两者口径不同，编辑器校验按 `block` / `warn` 分层处理。
+- 校验器（`ScriptValidator.checkBaseResolution`，1915–1925；分量 `checkBaseResolutionComponent` 1928–1947）：缺 `w` / `h`、0、负数、非整数、非对象 → 报错，脚本被拒。
+- 解析器（`ScriptParser.parseBaseResolution`，1269–1290）：非法 → 告警 + 回落 `1920×1080`，不阻断加载。两者口径不同，编辑器校验按 `block` / `warn` 分层处理。
 - 缺省 / `null` → `1920×1080`（`ScriptMeta.DEFAULT_BASE_WIDTH/HEIGHT`）。
 - 不是 `Vec3`、不是 `{x,y,z}`、不接受数组。
 - 编辑器只按 02 目录的 `object` 类型解释，不引入 MC 向量类。
@@ -71,7 +71,7 @@
 | `HUD_TITLE` | `hud.title` | HUD |
 | `HUD_SUBTITLE` | `hud.subtitle` | HUD |
 | `HUD_SKIP_PROMPT` | `hud.skip_prompt` | HUD |
-| `VIEWMODEL` | `viewmodel` | VIEW |
+| `VIEWMODEL` | `viewmodel` | WORLD |
 | `VIEW_BOBBING` | `view_bobbing` | VIEW |
 | `SCREEN_EFFECTS` | `screen_effects` | POST |
 | `PLAYER_MODEL` | `player_model` | WORLD |
@@ -86,7 +86,7 @@
 
 ## 显示状态
 
-02 只登记**键域与极性**（true/false）；显示状态不在字段目录里，由面板控件按字段值决定。
+02 只登记**键域、空间与极性**（true/false）：`screenLayers.fixed` 是 15 个规范层名，`screenLayers.spaces` 是每层的 `HUD` / `WORLD` / `VIEW` / `POST`，`screenLayers.valueType` 固定 `bool`，`screenLayers.dynamic` 固定 `true`；显示状态不在字段目录里，由面板控件按字段值决定。
 
 ## 验收标准
 

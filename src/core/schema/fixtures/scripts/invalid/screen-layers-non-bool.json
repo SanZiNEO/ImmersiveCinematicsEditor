@@ -1,0 +1,31 @@
+{
+  "name": "screen-layers-non-bool",
+  "expect": ["需要布尔值"],
+  "doc": "meta.screen_layers 的值不是布尔：{\"hud.hotbar\": 1}。ScriptParser 只记日志并跳过该键，不拒载；ScriptValidator 报「meta.screen_layers['hud.hotbar'] 需要布尔值」，属于 script.validate 层拦截。",
+  "meta": {
+    "id": "bad_screen_layers",
+    "name": "Bad Screen Layers",
+    "author": "omp",
+    "screen_layers": {
+      "hud.hotbar": 1
+    }
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

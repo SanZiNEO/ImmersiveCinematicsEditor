@@ -1,0 +1,28 @@
+{
+  "name": "path-index",
+  "expect": ["非法属性路径", "未知对象路径"],
+  "doc": "objects 路径写成数组下标：position[0] 不是合法点分路径（段名必须匹配 [a-z][a-z0-9_]*）。解析期 ObjectParser 报「非法属性路径」；校验期 ObjectValidator 报「未知对象路径」——两层文案不同，expect 同时列出。",
+  "meta": {
+    "id": "bad_path_index",
+    "name": "Bad Path Index",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "position[0]": {
+                "value": 0
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

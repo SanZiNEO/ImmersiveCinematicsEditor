@@ -1,0 +1,29 @@
+{
+  "name": "meta-unknown-key",
+  "expect": ["未知字段"],
+  "doc": "meta 目录外键：meta.no_such_field 不在 23 个 meta 键里。ScriptParser 解析 meta 时按 META_KEYS 白名单拒绝；ScriptValidator 同样报未知字段。",
+  "meta": {
+    "id": "bad_meta_key",
+    "name": "Bad Meta Key",
+    "author": "omp",
+    "no_such_field": true
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

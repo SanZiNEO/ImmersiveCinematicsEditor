@@ -1,0 +1,20 @@
+{
+  "name": "default-not-in-enum",
+  "expect": ["default"],
+  "entry": {
+    "id": "track.CAMERA.object.position.x",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "position.x",
+    "type": "enum",
+    "mode": "value",
+    "interp": "none",
+    "enumValues": ["a", "b"],
+    "default": "c",
+    "hasDefault": true,
+    "required": false,
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "base-resolution-zero",
+  "expect": ["超出范围"],
+  "doc": "meta.base_resolution 分量为 0：{w:0, h:1080}。ScriptParser 只记日志并回落 1920×1080，不拒载；ScriptValidator 报「meta.base_resolution.w 超出范围 1 ~ 2147483647」，属于 script.validate 层拦截。",
+  "meta": {
+    "id": "bad_base_res_zero",
+    "name": "Bad Base Resolution Zero",
+    "author": "omp",
+    "base_resolution": {
+      "w": 0,
+      "h": 1080
+    }
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

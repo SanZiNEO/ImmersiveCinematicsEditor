@@ -44,11 +44,11 @@ DriftReport
 - 快照与本地目录冲突 → 以本地目录为准，快照只做参考；冲突写进 `DriftReport`。
 - 快照不参与构建期代码生成，不引入 MC 类。
 
-快照的存放：编辑器仓库 `src/core/schema/catalog/__snapshots__/`，一个实例一份，文件名带版本与日期；不覆盖同名既有快照。
+快照的存放：编辑器仓库 `src/core/schema/fixtures/__snapshots__/`（现有默认离线快照仍是 `fixtures/snapshot.json`），一个实例一份，文件名 `snapshot-<gameVersion>-<modVersion>-<YYYYMMDD>.json`；由 `src/core/schema/snapshots.ts` 的 `saveSnapshot` 写入，同名已存在时依次让位 `-2`、`-3`，不覆盖既有快照。
 
 ## 夹具
 
-夹具用来证明「目录 + parser/validator 对得上」，分三类：
+夹具用来证明「目录 + parser/validator 对得上」，分三类，存放在 `src/core/schema/fixtures/scripts/`（`valid/` 6 条、`invalid/` 20 条）与 `src/core/schema/fixtures/reconcile/`（8 类对账）。
 
 ### 合法夹具（必须被接受）
 
@@ -57,7 +57,7 @@ DriftReport
 - **STEP 夹具**：`position_mode` / `position_space` / `look_at` 用 `step`，值切换不插值。
 - **独立片段 + 规则 + 绑定 + 路径**：顶层 `clips[]`、`rules[]`、`rule_bindings[]`、`paths[]` 各一条，引用互相对得上。
 - **七轨覆盖**：CAMERA / LETTERBOX / AUDIO / EVENT / MOD_EVENT / OVERLAY / ADJUST 各一个最小片段。
-- **meta 覆盖**：21 个 meta 字段各出现一次；`base_resolution {w:1920,h:1080}`；`screen_layers {"hud.hotbar":false}`；`skip_vote_ratio:50`。
+- **meta 覆盖**：23 个 meta 键各出现一次；`base_resolution {w:1920,h:1080}`；`screen_layers {"hud.hotbar":false}`；`skip_vote_ratio:50`。
 
 ### 非法夹具（必须被拒绝）
 
@@ -73,8 +73,8 @@ DriftReport
 
 ### 对账夹具
 
-- 一份本地目录 + 一份人工构造的远端 `schema.get`（含 `added` / `missing` / `typeChanged` / `enumChanged`），断言 `DriftReport` 条目齐全。
-- 一份离线快照（带来源元数据），断言断网时能打开文档、缺失字段标「未对账」。
+- 一份本地目录 + 一份人工构造的远端 `schema.get`（`fixtures/reconcile/remote-schema-8kinds.json`，含 `missing` / `added` / `typeChanged` / `enumChanged` / `defaultChanged` / `rangeChanged` / `dependencyChanged` / `segmentMissing` 8 类），由 `verify-reconcile.ts` 断言 `DriftReport` 条目齐全。
+- 一份离线快照（带来源元数据，`fixtures/snapshot.json` 或 `fixtures/__snapshots__/` 下的多实例快照），断言断网时能打开文档、缺失字段标「未对账」。
 
 ## 验收标准
 
@@ -82,6 +82,7 @@ DriftReport
 - 远端多一个字段：文档能显示该字段；既有文档不被自动补值。
 - 远端少一个字段：本地字段不删；文档里该路径仍可读，标「当前实例不提供」。
 - 断网：用快照打开 CAMERA 文档成功；快照里没有的字段标「未对账」，不猜。
-- 合法夹具逐条过真实 `ScriptParser` / `script.validate`，`ok:true`。
-- 非法夹具逐条 `block`，错误定位到 `clipKey + path + time`。
+- 合法夹具逐条过真实 `ScriptParser` / `script.validate`，`ok:true`。**本轮未执行**：这两项需要带 `ImmersiveCinematics` 的游戏实例；夹具已按主模组源码构造，运行时验收留待有实例的环境执行。
+- 非法夹具逐条 `block`，错误定位到 `clipKey + path + time`。**本轮未执行**：同上；`fixtures/scripts/invalid/` 已列出期望的 issue 关键字。
+- 对账与快照断言由 `verify-reconcile.ts` 本地执行（8 类差异 + 同名快照不覆盖），不需要游戏实例。
 - 夹具里没有 `Vec3`、没有 `export-schema.mjs` 产物、没有从快照反推的字段。

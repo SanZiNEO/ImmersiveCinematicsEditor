@@ -1,0 +1,170 @@
+{
+  "meta": {
+    "id": {
+      "type": "string",
+      "default": "untitled",
+      "required": true,
+      "enumValues": [],
+      "section": "info"
+    },
+    "name": {
+      "type": "string",
+      "default": "Untitled",
+      "required": true,
+      "enumValues": [],
+      "section": "info"
+    },
+    "author": {
+      "type": "string",
+      "default": "",
+      "required": false,
+      "enumValues": [],
+      "section": "info"
+    },
+    "description": {
+      "type": "string",
+      "default": "",
+      "required": false,
+      "enumValues": [],
+      "section": "info"
+    },
+    "dimension": {
+      "type": "string",
+      "default": "",
+      "required": false,
+      "enumValues": [],
+      "section": "info"
+    },
+    "base_resolution": {
+      "type": "object",
+      "default": null,
+      "required": false,
+      "enumValues": [],
+      "section": "info"
+    },
+    "listener": {
+      "type": "enum",
+      "default": "player",
+      "required": false,
+      "enumValues": ["player", "camera"],
+      "section": "runtime"
+    },
+    "block_keyboard": {
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "block_mouse": {
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "block_mob_ai": {
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "pause_when_game_paused": {
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "interruptible": {
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "play_mode": {
+      "type": "enum",
+      "default": "parallel",
+      "required": false,
+      "enumValues": ["parallel", "exclusive"],
+      "section": "runtime"
+    },
+    "skippable": {
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "macro_loop": {
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "macro_loop_count": {
+      "type": "int",
+      "default": -1,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "macro_loop_mode": {
+      "type": "enum",
+      "default": "repeat",
+      "required": false,
+      "enumValues": ["repeat", "pingpong"],
+      "section": "runtime"
+    },
+    "screen_layers": {
+      "type": "object",
+      "default": null,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "priority": {
+      "type": "float",
+      "default": 0,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "skip_vote_ratio": {
+      "type": "int",
+      "default": null,
+      "required": false,
+      "enumValues": [],
+      "section": "runtime"
+    },
+    "triggers": {
+      "type": "array",
+      "default": [],
+      "required": false,
+      "enumValues": [],
+      "section": "parse-only"
+    },
+    "trigger_poll_interval": {
+      "type": "int",
+      "default": null,
+      "required": false,
+      "enumValues": [],
+      "section": "parse-only"
+    },
+    "not_a_real_field": {
+      "type": "string",
+      "default": "",
+      "required": false,
+      "enumValues": [],
+      "section": "info"
+    }
+  },
+  "tracks": {},
+  "triggers": {},
+  "models": {},
+  "curveTypes": {},
+  "script_structure": {}
+}

@@ -2,7 +2,7 @@
 
 ## 目标
 
-登记 `script_structure` 段：`clips` / `rules` / `rule_bindings` / `paths` 四个结构，以及四组枚举。来源：`SchemaExporter.scriptStructure()`（151–246）。这一段的字段是**脚本结构**，不是轨道 objects；两者不混。
+登记 `scriptStructure` 段：`clips` / `rules` / `rule_bindings` / `paths` 四个结构，以及四组枚举。来源：`SchemaExporter.scriptStructure()`（151–246）。这一段的字段是**脚本结构**，不是轨道 objects；两者不混。
 
 ## 四个结构
 
@@ -14,7 +14,7 @@
 | `track` | string | true | 轨道类型；枚举 = 02-04 的轨道类型表 |
 | `duration` | number | true | 片段时长，`!= 0` |
 | `objects` | object | true | 该片段的对象表；键必须是 02-04 的 objects 路径 |
-| `exit` | object | false | 退出策略；`kind` 枚举见 `exit_kinds`，其余字段按 kind 分支 |
+| `exit` | object | false | 退出策略；`on_complete` 枚举见 `exit_kinds`，其余字段按 `on_complete` 分支 |
 
 `clips` 是**独立片段**（顶层 `clips[]`）。内联片段在 `timeline.tracks[].clips[]`，按该段字段表解析；本文件只登记顶层独立片段。
 
@@ -59,7 +59,7 @@
 | `from` | number | true | 起点时间；必须是目标片段 position 节点时间 |
 | `to` | number | true | 终点时间；必须与 `from` 相邻 |
 | `axes` | array | false | `x` / `y` / `z` 的子集；默认三轴 |
-| `geometry` | object | false | `{type, control_points}`；`type` 枚举 = `line` + 02-06 的曲线类型 |
+| `geometry` | object | true | `{type, control_points}`；`type` 枚举 = `line` + 02-06 的曲线类型 |
 | `timing` | object | false | `{type, points}`；`type` 枚举 = `linear` / `keyframes` |
 
 `geometry` 的参数按曲线类型分支：`line` 用通用 `control_points`；`bezier` / `arc` / `nurbs` 等按 02-06 的参数表。`script_structure` 这里只登记 `type` 的枚举域与 `control_points` 的通用数组形状，**不重抄 02-06 的曲线参数**。
@@ -71,8 +71,8 @@
 | 枚举 | 值来源 | 用途 |
 |---|---|---|
 | `action_types` | `RuleActions.ACTION_TYPES_V1` | `rules.actions[].type` |
-| `exit_kinds` | `ClipExitPolicyParser.KIND_NAMES` | `clips.exit.kind` / `rule_bindings.exit.kind` |
-| `schedule_kinds` | `RuleReleaseKind.SCRIPT_NAMES` | `rule_bindings.schedule.kind` |
+| `exit_kinds` | `ClipExitPolicyParser.KIND_NAMES` | `clips.exit.on_complete` / `rule_bindings.exit.on_complete` |
+| `schedule_kinds` | `RuleReleaseKind.SCRIPT_NAMES` | `rule_bindings.schedule.on` |
 | `condition_fact_types` | `SchemaExporter.scriptStructure()` 的 `condition_fact_types` | 条件里的 `clip_fact` / `rule_fact` |
 
 `condition_fact_types` 两族：

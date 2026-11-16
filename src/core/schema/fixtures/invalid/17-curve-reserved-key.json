@@ -1,0 +1,32 @@
+{
+  "name": "curve-reserved-key",
+  "expect": ["type"],
+  "entry": {
+    "id": "curve.demo.params.type",
+    "segment": "curveTypes",
+    "scope": ["demo"],
+    "key": "type",
+    "type": "string",
+    "default": "x",
+    "hasDefault": true,
+    "required": false,
+    "sourceRef": "PathCurveRegistry#register:1"
+  },
+  "catalog": {
+    "curveTypes": {
+      "demo": {
+        "capabilities": [],
+        "params": [
+          {
+            "key": "type",
+            "kind": "TEXT",
+            "default": "x",
+            "hasDefault": true,
+            "required": false,
+            "sourceRef": "PathCurveRegistry#register:1"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "name": "requires-cycle",
+  "expect": ["环"],
+  "entry": {
+    "id": "track.CAMERA.object.a",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "a",
+    "type": "bool",
+    "mode": "value",
+    "interp": "none",
+    "default": false,
+    "hasDefault": true,
+    "required": false,
+    "requires": "b=true",
+    "section": "test",
+    "sourceRef": "TrackSchemas#cameraObjects:1"
+  },
+  "catalog": {
+    "tracks": {
+      "CAMERA": {
+        "playControl": [],
+        "objects": [
+          {
+            "id": "track.CAMERA.object.a",
+            "segment": "tracks",
+            "scope": ["CAMERA"],
+            "key": "a",
+            "type": "bool",
+            "mode": "value",
+            "interp": "none",
+            "default": false,
+            "hasDefault": true,
+            "required": false,
+            "requires": "b=true",
+            "section": "test",
+            "sourceRef": "TrackSchemas#cameraObjects:1"
+          },
+          {
+            "id": "track.CAMERA.object.b",
+            "segment": "tracks",
+            "scope": ["CAMERA"],
+            "key": "b",
+            "type": "bool",
+            "mode": "value",
+            "interp": "none",
+            "default": false,
+            "hasDefault": true,
+            "required": false,
+            "requires": "a=true",
+            "section": "test",
+            "sourceRef": "TrackSchemas#cameraObjects:2"
+          }
+        ]
+      }
+    }
+  }
+}

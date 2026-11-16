@@ -1,0 +1,19 @@
+{
+  "name": "id-key-mismatch",
+  "expect": ["不一致"],
+  "entry": {
+    "id": "track.CAMERA.object.position.x",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "y",
+    "type": "float",
+    "mode": "animated",
+    "interp": "linear",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

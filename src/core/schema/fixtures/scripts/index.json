@@ -1,0 +1,32 @@
+{
+  "valid": [
+    "objects-demo.json",
+    "value.json",
+    "step.json",
+    "collections.json",
+    "seven-tracks.json",
+    "meta.json"
+  ],
+  "invalid": [
+    "meta-unknown-key.json",
+    "timeline-unknown-key.json",
+    "value-with-keyframes.json",
+    "event-empty-keyframes.json",
+    "keyframe-time-equal.json",
+    "keyframe-time-desc.json",
+    "keyframe-time-negative.json",
+    "string-number.json",
+    "int-fraction.json",
+    "nan.json",
+    "null-non-nullable.json",
+    "path-index.json",
+    "base-resolution-zero.json",
+    "base-resolution-vec3.json",
+    "screen-layers-non-bool.json",
+    "paths-not-adjacent.json",
+    "rule-binding-dangling.json",
+    "unknown-geometry.json",
+    "unknown-timing.json",
+    "unknown-action-type.json"
+  ]
+}

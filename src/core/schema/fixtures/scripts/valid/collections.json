@@ -1,0 +1,94 @@
+{
+  "meta": {
+    "id": "collections_demo",
+    "name": "Collections Demo",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_collect",
+      "track": "CAMERA",
+      "duration": 6,
+      "objects": {
+        "position.x": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        },
+        "position.y": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        },
+        "position.z": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        }
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule_collect",
+      "condition": {
+        "type": "time",
+        "at": 1.0
+      },
+      "actions": [
+        { "type": "pause" }
+      ],
+      "policy": {
+        "once": true,
+        "mode": "enter"
+      }
+    }
+  ],
+  "rule_bindings": [
+    {
+      "id": "bind_collect",
+      "rule": "rule_collect",
+      "clip": "clip_collect",
+      "gate": {
+        "at": 1.0
+      },
+      "control": "observe"
+    }
+  ],
+  "paths": [
+    {
+      "id": "path_collect",
+      "clip": "clip_collect",
+      "from": 0,
+      "to": 3,
+      "axes": ["x", "y", "z"],
+      "geometry": {
+        "type": "line"
+      },
+      "timing": {
+        "type": "linear"
+      }
+    }
+  ]
+}

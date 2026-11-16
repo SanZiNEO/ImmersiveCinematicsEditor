@@ -12,7 +12,7 @@
 | `segment` | enum | `meta` / `tracks` / `triggers` / `models` / `curveTypes` / `script_structure` |
 | `scope` | string[] | 段内定位：轨道类型、触发器类型、模型类型、曲线类型、结构段名 |
 | `key` | string | 字段名（wire 名） |
-| `type` | enum | `float` / `int` / `bool` / `string` / `enum` / `ref` / `nullable_float` / `struct` / `event_record` / `object` / `array` / `model` / `model_list` / `point` / `point_list` / `number_list` / `vector` / `integer` / `text` / `boolean` |
+| `type` | enum | 三组联合：`FieldType`（`string` / `int` / `float` / `bool` / `enum` / `object` / `array` / `map` / `number` / `boolean`）、`ObjectType`（`float` / `int` / `bool` / `string` / `enum` / `ref` / `nullable_float` / `struct` / `event_record`）、`ModelParamType`（`float` / `int` / `bool` / `string` / `enum` / `model` / `model_list` / `object` / `array`） |
 | `mode` | enum? | 仅 objects：`value` / `animated` / `event` |
 | `interp` | enum? | 仅 objects：`none` / `linear` / `angle` / `geometric` / `step` |
 | `default` | JsonValue? | 源码默认值；没有默认写 `null` 并标 `hasDefault:false` |
@@ -27,22 +27,29 @@
 | `doc` | string? | 源码注释里的说明，原样抄，不扩写 |
 | `sourceRef` | string | `类名#方法:行号` |
 
-**wire 值规则**：`type` / `mode` / `interp` / `enumValues` 全部小写；Java 枚举名不进目录。
+**wire 值规则**：`type` / `mode` / `interp` 用源码 wire 值（小写）；`enumValues` 按源码原值（轨道名 `CAMERA` 等大写保留）；`ParamKind` / `CurveCapability` 用 Java 枚举原样大写名。
 
-`type` 的命名按段：`meta` / `tracks` / `triggers` / `script_structure` 用 `FieldDef` 的 `float` / `int` / `bool` / `string` / `enum` / `object` / `array`；`curveTypes` 用 `PathParamKind` 的 `number` / `integer` / `boolean` / `text` / `point` / `point_list` / `number_list` / `vector`；`models` 用 `model` / `model_list`。同名不同段不合并。
+`type` 的命名按段：`meta` / `tracks` / `triggers` / `script_structure` 用 `FieldDef` 的 `float` / `int` / `bool` / `string` / `enum` / `object` / `array` / `map`，脚本级结构另用 `SchemaExporter` 的 `number` / `boolean`；`models` 用 `model` / `model_list`。曲线参数形态不用 `FieldEntry.type`，单独走 `CurveParamEntry.kind`（`PathParamKind` 的大写枚举名）。同名不同段不合并。
 
 ## 六段的形状
 
 ```text
 FieldCatalog
   catalogHash: string
-  sourceCommit?: string
-  meta:
-    fields: FieldEntry[]                    // 21 条
+  sourceCommit: string
+  meta: FieldEntry[]                        // 23 条
+  screenLayers:
+    fixed: string[]                         // 15 个规范层名
+    spaces: { [layerName]: HUD | WORLD | VIEW | POST }
+    valueType: 'bool'
+    dynamic: true
+  discovered:
+    tracks: { type: string; sourceRef: string }[]
+    triggers: { type: string; sourceRef: string }[]
   tracks:
     [trackType]:
       playControl: FieldEntry[]             // 5 条
-      objects: ObjectFieldEntry[]           // path + 16 项声明
+      objects: FieldEntry[]                 // path + 16 项声明
   triggers:
     types: string[]                         // 27 种
     conditions: { [type]: FieldEntry[] }
@@ -57,16 +64,15 @@ FieldCatalog
   curveTypes:
     [curveType]:
       capabilities: string[]                // ANALYTIC_ARC_LENGTH 等 5 个
-      params: CurveParamEntry[]             // key + paramKind + required + default
-  script_structure:
-    [section]:
-      fields: FieldEntry[]
+      params: CurveParamEntry[]             // key + kind + required + default + hasDefault + enumValues + doc + sourceRef
+  scriptStructure:
+    sections: { [section]: FieldEntry[] }
     enums: { [enumName]: string[] }
 ```
 
-`ObjectFieldEntry` 在 `FieldEntry` 基础上固定带 `ObjectDef` 的 16 项（含 `path`）：`path`、`mode`、`type`、`interp`、`default`、`required`、`enumValues`、`nullable`、`min`、`max`、`requires`、`section`、`group`、`appliesTo`、`labelKey`、`unit`、`sourceRef`——共 17 个键（16 项声明 + `sourceRef`）。
+`FieldEntry` 是统一外壳，共 22 个键：`id`、`segment`、`scope`、`key`、`type`、`mode`、`interp`、`default`、`hasDefault`、`required`、`enumValues`、`nullable`、`min`、`max`、`requires`、`appliesTo`、`section`、`group`、`labelKey`、`unit`、`doc`、`sourceRef`。轨道对象就是 `FieldEntry`（`scope=[trackType]`、`key`=对象路径），没有第二套 `ObjectFieldEntry` 类型；`ObjectDef` 的 16 项声明全部落在上面这些键里。
 
-`CurveParamEntry` 带 `key`、`paramKind`（`NUMBER` / `INTEGER` / `BOOLEAN` / `ENUM` / `TEXT` / `POINT` / `POINT_LIST` / `NUMBER_LIST` / `VECTOR`）、`required`、`default`、`enumValues`、`sourceRef`。
+`CurveParamEntry` 带 `key`、`kind`（`NUMBER` / `INTEGER` / `BOOLEAN` / `ENUM` / `TEXT` / `POINT` / `POINT_LIST` / `NUMBER_LIST` / `VECTOR`）、`default`、`hasDefault`、`required`、`enumValues`、`doc`、`sourceRef`。
 
 ## 查询索引
 
@@ -77,7 +83,7 @@ FieldCatalog
 | `meta(key)` | 一条 `FieldEntry` |
 | `track(type)` | `{playControl, objects}` |
 | `playControl(type, key)` | 一条 `FieldEntry` |
-| `objectDef(type, path)` | 一条 `ObjectFieldEntry` |
+| `objectDef(type, path)` | 一条 `FieldEntry` |
 | `paths(type)` | 该轨所有对象路径，保持声明顺序 |
 | `sectionGroups(type)` | 按 `section` / `group` 聚合的路径列表 |
 | `availability(type, path, values)` | `{available, reason}`，用 `requires` 求值 |
@@ -86,6 +92,7 @@ FieldCatalog
 | `model(type)` | 参数、值域、上限、回落 |
 | `curveType(type)` | 能力、参数形态 |
 | `scriptSection(section)` | 该段字段 + 枚举 |
+| `scriptEnum(name)` | `action_types` / `exit_kinds` / `schedule_kinds` / `condition_fact_types` 的取值表 |
 | `search({segment, scope?, key?})` | 匹配条目，按 `id` 稳定排序 |
 
 `availability` 只实现 `path=value` / `path!=value` 两种语法（与 `ObjectValidator.evalRequires` 一致），不支持表达式、布尔组合、函数调用。

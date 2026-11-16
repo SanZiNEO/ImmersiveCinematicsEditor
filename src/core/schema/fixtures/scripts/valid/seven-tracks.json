@@ -1,0 +1,136 @@
+{
+  "meta": {
+    "id": "seven_tracks",
+    "name": "Seven Tracks",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      },
+      {
+        "type": "LETTERBOX",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "aspect_ratio": {
+                "value": 2.35
+              },
+              "opacity": {
+                "value": 1
+              }
+            }
+          }
+        ]
+      },
+      {
+        "type": "AUDIO",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "sound": {
+                "value": "minecraft:ambient.cave"
+              },
+              "volume": {
+                "value": 1
+              }
+            }
+          }
+        ]
+      },
+      {
+        "type": "EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "event": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": {
+                      "command": "say seven_tracks",
+                      "event_type": "command"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "type": "MOD_EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "mod_event": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": {
+                      "event_type": "demo",
+                      "data": {
+                        "speed": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "type": "OVERLAY",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "layer_type": {
+                "value": "fade"
+              },
+              "opacity": {
+                "value": 1
+              }
+            }
+          }
+        ]
+      },
+      {
+        "type": "ADJUST",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "exposure": {
+                "value": 0
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

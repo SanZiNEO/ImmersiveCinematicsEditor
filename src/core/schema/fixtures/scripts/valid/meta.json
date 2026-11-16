@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "id": "meta_cover",
+    "name": "Meta Coverage",
+    "author": "omp",
+    "description": "23 个 meta 键各出现一次",
+    "dimension": "minecraft:overworld",
+    "base_resolution": {
+      "w": 1920,
+      "h": 1080
+    },
+    "listener": "player",
+    "block_keyboard": true,
+    "block_mouse": true,
+    "block_mob_ai": false,
+    "pause_when_game_paused": true,
+    "interruptible": true,
+    "play_mode": "parallel",
+    "skippable": true,
+    "hold_at_end": false,
+    "macro_loop": false,
+    "macro_loop_count": 1,
+    "macro_loop_mode": "repeat",
+    "screen_layers": {
+      "hud.hotbar": false
+    },
+    "priority": 0,
+    "skip_vote_ratio": 50,
+    "triggers": [
+      {
+        "type": "login",
+        "id": "on_login",
+        "repeatable": false
+      }
+    ],
+    "trigger_poll_interval": 20
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

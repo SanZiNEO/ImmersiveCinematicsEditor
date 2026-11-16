@@ -1,0 +1,22 @@
+[
+  "01-path-syntax.json",
+  "02-id-key-mismatch.json",
+  "03-value-with-interp.json",
+  "04-animated-struct.json",
+  "05-event-float.json",
+  "06-enum-empty.json",
+  "07-default-not-in-enum.json",
+  "08-min-gt-max.json",
+  "09-min-on-bool.json",
+  "10-requires-syntax.json",
+  "11-requires-unknown-path.json",
+  "12-missing-sourceref.json",
+  "13-requires-cycle.json",
+  "14-requires-literal-type.json",
+  "15-unit-unknown.json",
+  "16-intermediate-path.json",
+  "17-curve-reserved-key.json",
+  "18-curve-default-kind.json",
+  "19-model-bad-domain.json",
+  "20-model-bad-fallback.json"
+]

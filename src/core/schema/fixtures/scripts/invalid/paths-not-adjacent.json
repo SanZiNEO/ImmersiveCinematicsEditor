@@ -1,0 +1,69 @@
+{
+  "name": "paths-not-adjacent",
+  "expect": ["相邻"],
+  "doc": "paths[0].from / to 不相邻：目标片段 position 节点时间为 [0,1,2]，路径从 0 直接到 2 跳过了 1。PathCollectionParser 报「端点必须与 from 相邻」，ScriptValidator 同口径。",
+  "meta": {
+    "id": "bad_path_adjacent",
+    "name": "Bad Path Adjacency",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_path",
+      "track": "CAMERA",
+      "duration": 6,
+      "objects": {
+        "position.x": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 1, "value": 1 },
+            { "time": 2, "value": 2 }
+          ]
+        },
+        "position.y": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 1, "value": 1 },
+            { "time": 2, "value": 2 }
+          ]
+        },
+        "position.z": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 1, "value": 1 },
+            { "time": 2, "value": 2 }
+          ]
+        }
+      }
+    }
+  ],
+  "paths": [
+    {
+      "id": "path_skip",
+      "clip": "clip_path",
+      "from": 0,
+      "to": 2,
+      "geometry": {
+        "type": "line"
+      }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "unit-unknown",
+  "expect": ["unit"],
+  "entry": {
+    "id": "meta.probe",
+    "segment": "meta",
+    "scope": [],
+    "key": "probe",
+    "type": "float",
+    "mode": "value",
+    "interp": "none",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "unit": "meter",
+    "section": "test",
+    "sourceRef": "MetaSchemas#fields:1"
+  },
+  "catalog": {
+    "meta": [
+      {
+        "id": "meta.probe",
+        "segment": "meta",
+        "scope": [],
+        "key": "probe",
+        "type": "float",
+        "mode": "value",
+        "interp": "none",
+        "default": 0,
+        "hasDefault": true,
+        "required": false,
+        "unit": "meter",
+        "section": "test",
+        "sourceRef": "MetaSchemas#fields:1"
+      }
+    ]
+  }
+}

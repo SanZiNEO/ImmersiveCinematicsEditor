@@ -1,0 +1,33 @@
+{
+  "name": "base-resolution-vec3",
+  "expect": ["base_resolution"],
+  "doc": "meta.base_resolution 写成坐标三元组：{x:0, y:64, z:-64}。ScriptParser 只记日志并回落 1920×1080，不拒载；ScriptValidator 报 w / h 缺失（「meta.base_resolution.w 缺失」「meta.base_resolution.h 缺失」），属于 script.validate 层拦截。",
+  "meta": {
+    "id": "bad_base_res_vec3",
+    "name": "Bad Base Resolution Vec3",
+    "author": "omp",
+    "base_resolution": {
+      "x": 0,
+      "y": 64,
+      "z": -64
+    }
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

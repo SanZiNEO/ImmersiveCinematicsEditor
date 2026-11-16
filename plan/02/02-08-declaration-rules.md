@@ -10,7 +10,7 @@
 
 - 路径必须匹配 `[a-z][a-z0-9_]*` 的点分段。
 - 同一轨道内路径唯一；重复 → 报错。
-- 路径末段与字段 `key` 一致；不一致 → 报错。
+- `id` 末段与字段 `key` 一致；同轨 map 键与 `ObjectDef.path` 一致；不一致 → 报错。
 - `position` 这种中间名不是合法叶子；只有 `position.x` 这类完整路径才登记。
 
 ### `mode` / `type` / `interp` 组合
@@ -44,8 +44,8 @@
 ### 其他
 
 - `section` / `group` 若出现必须非空字符串；空串归一为 `null`。
-- `unit` 只允许源码登记过的单位（如 `degree`）；不自己发明单位。
-- `appliesTo` 里的轨道类型必须是 02-04 的已知类型，或 `modid:xxx` 形式。
+- `unit` 只允许源码登记过的单位（当前只有 `degree`）；不自己发明单位。
+- `appliesTo` 里的项必须是 02-04 的轨道类型、层类型与轨道子类型（`fade` / `image` / `subtitle`）或 `modid:xxx` 形式。
 - `labelKey` 只做展示键，不参与类型检查。
 
 ## 注册期检查
@@ -55,18 +55,18 @@
 - 重复注册同一 `type` → 报错，不静默覆盖。
 - 参数名重复 → 报错。
 - 参数名与保留键冲突 → 报错。
-- 参数默认值的 `paramKind` 与声明不一致 → 报错。
+- 参数默认值的 `kind` 与声明不一致 → 报错。
 - 必填参数不能同时缺默认值又标 optional；至少给一个来源。
 
 ### `MathModelRegistry`
 
-- 同一 `type` 不重复登记；目录里一种模型只有一条声明。
+- 同一 `type` 重复注册 → 覆盖 + 告警（`MathModelRegistry.register`，`MathModelRegistry.java:128-134`）；目录里一种模型只有一条声明。
 - 参数类型与 `FieldEntry` 的 `type` 一致。
 - 值域必须是 `scalar` / `angle` / `vector` / `color` 之一。
 
 ### 目录整体
 
-- 六段 `catalogHash` 由排序后的字段内容计算；任何字段增删改都变。
+- `catalogHash` 由整个目录（六段 + `screenLayers` + `sourceCommit`）去掉 `catalogHash` 后的规范形式 SHA-256 计算；任何字段增删改都变（`src/core/schema/hash.ts:43-46`）。
 - 同一段内 `id` 唯一；跨段同名不合并。
 - 每条 `FieldEntry` 必须有 `sourceRef`；缺失 → 加载期报错。
 

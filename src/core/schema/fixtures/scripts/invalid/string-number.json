@@ -1,0 +1,28 @@
+{
+  "name": "string-number",
+  "expect": ["需要有限数字"],
+  "doc": "float 字段写成字符串 \"70\"：ObjectCodec 不做类型转换，fov.value 必须是 JSON number。",
+  "meta": {
+    "id": "bad_string_number",
+    "name": "Bad String Number",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": "70"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

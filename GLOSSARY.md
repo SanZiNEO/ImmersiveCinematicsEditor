@@ -1,0 +1,34 @@
+本表是编辑器仓库（含 src/core/schema 字段目录）的术语表。术语定义以主模组源码与 src/core/schema 的实现为准；同名概念在旧前端里有不同含义时，以本表为准。
+
+| 术语 | 定义 | 权威来源 |
+|---|---|---|
+| 字段目录（field catalog） | 编辑器对主模组全部字段声明的静态抄录，类型是 `FieldCatalog`。它由六段字段表（`meta` / `tracks` / `triggers` / `models` / `curveTypes` / `script_structure`）、`screenLayers` 键域、`catalogHash` 与 `sourceCommit` 组成，由 `buildCatalog(sourceCommit)` 组装并递归冻结。目录是编辑器查询字段事实的唯一数据源。 | `src/core/schema/types.ts:107`；`src/core/schema/index.ts:372` |
+| `FieldEntry` | 单个字段的完整声明，把 Java 的 `FieldDef` 与 `ObjectDef` 统一成同一形状。它包含 `id`、`segment`、`scope`、`key`、`type`、`default`、`hasDefault`、`required` 与 `sourceRef`，并按声明补齐 `mode`、`interp`、`enumValues`、`nullable`、`min`、`max`、`requires`、`appliesTo`、`section`、`group`、`labelKey`、`unit`、`doc`。`id` 是全局稳定键，`sourceRef` 是源码锚点。 | `src/core/schema/types.ts:38` |
+| `segment` | 字段所属的目录段名，取值固定为 `meta`、`tracks`、`triggers`、`models`、`curveTypes`、`script_structure` 六者之一。段决定字段在目录里的存放位置与查询入口。 | `src/core/schema/types.ts:7` |
+| `scope` | 段内作用域，说明一条字段声明属于哪个轨道类型、触发器类型、模型类型、曲线类型或结构段。没有作用域的段（如 `meta`）用空数组表示。 | `src/core/schema/types.ts:43` |
+| `sourceRef` | Java 源码锚点，格式为 `类名#方法:行号`，指向该字段声明在主线模组源码中的确切位置。它是字段事实可追溯的凭据，V10 规定为空即自检失败。 | `src/core/schema/types.ts:63`；`src/core/schema/validate.ts:262` |
+| `catalogHash` | 目录的规范形式哈希：去掉 `catalogHash` 字段本身，对象键递归升序、数组保持原序后 `JSON.stringify`，再取 SHA-256 的 64 位小写 hex。占位空串与真实哈希算出同一个值。 | `src/core/schema/hash.ts:43`；`src/core/schema/types.ts:108` |
+| `sourceCommit` | 抄录字段目录时主工作区 `ImmersiveCinematics` 的完整 40 位 git commit。它把目录内容钉到一次具体源码状态，快照的 `source.sourceCommit` 记录的也是它。 | `src/core/schema/types.ts:109`；`src/core/schema/fixtures/snapshot.json` |
+| `playControl` | 片段级播放控制的 5 个字段：`start_time` / `duration` / `loop` / `loop_count` / `loop_mode`。七条轨道共用同一份声明对象，因此 id 是 `track.playControl.<key>`、不带轨道名；轨道归属由 `TrackCatalog.playControl` 与索引键 `type:key` 表达。 | `src/core/schema/catalog/tracks.ts:29-74`；`TrackSchemas.java:86-93` |
+| `objects` | 轨道对象模型：一组按 `path` 索引的 `FieldEntry`，描述该轨可写哪些点分路径以及每条路径的形态与类型。条目 id 形如 `track.<TYPE>.object.<path>`，索引键是 `type:path`。 | `src/core/schema/types.ts:77`；`src/core/schema/catalog/tracks.ts:118` |
+| `mode` | 字段形态，取值 `value` / `animated` / `event`。`value` 只接受静态值，`animated` 接受静态值加可选关键帧，`event` 是必须有 keyframes 的离散事件记录。 | `src/core/schema/types.ts:32`；`spi/PropertyMode.java:12-15` |
+| `interp` | 关键帧之间的插值方式，取值 `none` / `linear` / `angle` / `geometric` / `step`。`none` 不插值，`linear` 线性，`angle` 走最短角度路径，`geometric` 用对数空间插值，`step` 在末尾阶跃。 | `src/core/schema/types.ts:33`；`spi/Interp.java:11-21` |
+| `requires` | 字段的启用前置条件，只接受 `path=value` 与 `path!=value` 两种写法，`!=` 优先匹配。引用路径必须是同轨已登记路径，且不能引用字段自身。 | `spi/ObjectDef.java:24`；`src/core/schema/index.ts:63`；`src/core/schema/validate.ts:171` |
+| `appliesTo` | 限定字段适用的层类型或轨道子类型，空数组表示对所有子类型生效。OVERLAY 轨的真值是 `fade` / `image` / `subtitle`，字段只在对应 `layer_type` 下可用。 | `spi/ObjectDef.java:32`；`script/schema/TrackSchemas.java:407-452`；`src/core/schema/validate.ts:197` |
+| `section` | 编辑器分组名，用于在属性面板里把字段归到同一组，不参与运行时。`FieldDef` 的 `section` 缺省归一为 `info`。 | `spi/ObjectDef.java:30`；`spi/FieldDef.java:18,27` |
+| `group` | 运行时组名：同一组的参数与组成员取同一个值。它与 `section` 的编辑器分组相互独立，只在轨道对象声明里出现。 | `spi/ObjectDef.java:31` |
+| `nullable` | 字段是否允许 `null`，只允许出现在 `type=nullable_float` 的条目上。`ObjectDef` 构造期把 `nullable_float` 的 `nullable` 强制为 `true`。 | `spi/ObjectDef.java:27,66`；`src/core/schema/validate.ts:256` |
+| `enumValues` | 枚举字段的完整取值表，按声明顺序排列。`type=enum` 时该表不能为空，且 `default` 必须落在表内。 | `spi/ObjectDef.java:26`；`src/core/schema/validate.ts:249` |
+| 规范层名 | `screen_layers` 的 15 个固定键，如 `hud.hotbar`、`viewmodel`、`player_model`。每个键属于 HUD / WORLD / VIEW / POST 四个空间之一，值类型固定为 bool。 | `script/ScreenLayer.java:15-32`；`src/core/schema/catalog/screenLayers.ts:14-48` |
+| 动态层名 | 不在 15 个规范层名里的合法键，来自 `HudLayerRegistry` 注册的分类名，或未注册 overlay 的完整资源 ID（`modid:path`）。动态键按原始字符串匹配，不是枚举别名；未声明的键一律隐藏。 | `api/HudLayerRegistry.java:65,80`；`src/core/schema/catalog/screenLayers.ts:1-12` |
+| `schema.get` | 主模组在运行时导出的 schema JSON，形状等于 `SchemaExporter.exportAll()`。它是编辑器对账的远端数据源，不是字段目录的生成源；目录的字段事实仍逐条抄自 Java 声明。 | `editor/shared/WebEditorApi.java:58,225`；`script/schema/SchemaExporter.java:43` |
+| 离线快照 | 带来源元数据的目录 JSON，位于 `src/core/schema/fixtures/snapshot.json`。`source` 记录 `gameVersion` / `modVersion` / `capturedAt` / `sourceCommit` / `catalogHash`，`catalog` 是完整目录；它用于离线自检与回归比对，是只读缓存。 | `src/core/schema/fixtures/snapshot.json`；`src/core/schema/verify.ts:502` |
+| `DriftReport` / `DriftKind` | 本地目录与 `schema.get` 响应对账后的差异报告，`DriftKind` 固定八类：`missing` / `added` / `typeChanged` / `enumChanged` / `defaultChanged` / `rangeChanged` / `dependencyChanged` / `segmentMissing`。报告附本地与远端 hash、游戏版本、模组版本与抓取时间，条目按 `segment + scope + key` 稳定排序。 | `src/core/schema/types.ts:119,133`；`src/core/schema/reconcile.ts:557` |
+| `CatalogIndex` | 目录查询索引：主键 `id` 全量唯一，并提供 `meta` / `track` / `playControl` / `objectDef` / `paths` / `sectionGroups` / `availability` / `trigger` / `triggerField` / `model` / `curveType` / `scriptSection` / `scriptEnum` / `search` 查询。重复键在 `buildCatalog` 阶段直接抛错，不允许后者覆盖前者。 | `src/core/schema/index.ts:45,134` |
+| `availability` | 按字段的 `requires` 与当前轨道值判断该路径是否适用，返回 `{available, reason?}`。被引用路径没有出现在传入值里时，取该字段的缺省值参与比较；语法非法、引用未知路径或条件不满足都返回 `available:false` 并给出原因。 | `src/core/schema/index.ts:279` |
+| 声明自检（V1–V12） | 目录自身的结构校验，逐条对应 `ObjectSchemaValidator` 与 `PathCurveRegistry` / `MathModelRegistry` 的注册期检查：V1 路径语法、V2 路径唯一、V3 形态/类型/插值组合、V4 默认值类型、V5 枚举、V6 可空、V7 范围、V8 `requires`、V9 段内 id 唯一、V10 `sourceRef` 必填、V11 `section`/`group` 非空、V12 `appliesTo` 域。`buildCatalog` 在 issue 非空时直接抛 `Error`。 | `src/core/schema/validate.ts:298`；`script/schema/ObjectSchemaValidator.java:116,231` |
+| `TrackTypeId` | 轨道类型标识，区分大小写；内置 7 个：`CAMERA` / `LETTERBOX` / `AUDIO` / `EVENT` / `MOD_EVENT` / `OVERLAY` / `ADJUST`。`ADJUST` 是 master 级整体调色轨，作用于合成输出。 | `spi/TrackTypeId.java:19-37`；`script/schema/TrackSchemas.java:27-33` |
+| `legacy/src` | 0.3.6 之前的完整 WebUI 前端（Vue 3 + Vite），整体迁入 `legacy/`，仍由 `index.html` 构建。它只作旧 → 新转换参考，`src/` 下的新代码不 import 其中任何类型或模块。 | `legacy/README.md`；`index.html` |
+| `hasDefault` | 标记字段是否有缺省值，目录里由 `default !== null` 决定。`false` 表示运行时没有可回落的缺省值，例如必填的 `start_time`。 | `src/core/schema/types.ts:49`；`src/core/schema/catalog/tracks.ts:126` |
+| `FieldType` / `ObjectType` | `FieldType` 是 `meta` / `tracks.playControl` / `triggers` / `models` / `script_structure` 的字段类型集，含 `string` / `int` / `float` / `bool` / `enum` / `object` / `array` / `map` 以及 `SchemaExporter` 的 `number` / `boolean`。`ObjectType` 只用于 `tracks.objects`，额外包含 `ref` / `nullable_float` / `struct` / `event_record`。 | `src/core/schema/types.ts:15,20` |
+| `CurveParamEntry` / `ParamKind` | 曲线参数条目由 `key`、`kind`、`default`、`hasDefault`、`required`、`enumValues`、`doc`、`sourceRef` 组成。`ParamKind` 用枚举原样大写名：`NUMBER` / `INTEGER` / `BOOLEAN` / `ENUM` / `TEXT` / `POINT` / `POINT_LIST` / `NUMBER_LIST` / `VECTOR`，因为 `SchemaExporter` 导出时就是 `.name()`。 | `src/core/schema/types.ts:24,66` |

@@ -1,0 +1,28 @@
+{
+  "name": "event-empty-keyframes",
+  "expect": ["mode=event 必须有 keyframes"],
+  "doc": "mode=event 的属性空 keyframes：EVENT 轨的 event 对象必须至少一帧事件记录，空数组被 ObjectParser 与 ObjectValidator 拒绝。",
+  "meta": {
+    "id": "bad_event_empty",
+    "name": "Bad Event Empty",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "event": {
+                "keyframes": []
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

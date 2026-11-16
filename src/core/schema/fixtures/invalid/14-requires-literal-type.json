@@ -1,0 +1,60 @@
+{
+  "name": "requires-literal-type",
+  "expect": ["requires"],
+  "entry": {
+    "id": "track.CAMERA.object.yaw_offset",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "yaw_offset",
+    "type": "float",
+    "mode": "value",
+    "interp": "none",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "requires": "orient=1",
+    "unit": "degree",
+    "section": "orientation",
+    "sourceRef": "TrackSchemas#cameraObjects:244"
+  },
+  "catalog": {
+    "tracks": {
+      "CAMERA": {
+        "playControl": [],
+        "objects": [
+          {
+            "id": "track.CAMERA.object.orient",
+            "segment": "tracks",
+            "scope": ["CAMERA"],
+            "key": "orient",
+            "type": "enum",
+            "mode": "value",
+            "interp": "none",
+            "enumValues": ["manual", "tangent"],
+            "default": "manual",
+            "hasDefault": true,
+            "required": false,
+            "section": "orientation",
+            "sourceRef": "TrackSchemas#cameraObjects:242"
+          },
+          {
+            "id": "track.CAMERA.object.yaw_offset",
+            "segment": "tracks",
+            "scope": ["CAMERA"],
+            "key": "yaw_offset",
+            "type": "float",
+            "mode": "value",
+            "interp": "none",
+            "default": 0,
+            "hasDefault": true,
+            "required": false,
+            "requires": "orient=1",
+            "unit": "degree",
+            "section": "orientation",
+            "sourceRef": "TrackSchemas#cameraObjects:244"
+          }
+        ]
+      }
+    }
+  }
+}

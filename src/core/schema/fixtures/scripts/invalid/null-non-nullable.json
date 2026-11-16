@@ -1,0 +1,28 @@
+{
+  "name": "null-non-nullable",
+  "expect": ["需要有限数字"],
+  "doc": "不可空 float 写成 null：yaw 是普通 float（只有 yaw_lock / pitch_lock 是 nullable_float），ObjectCodec 拒绝 null。",
+  "meta": {
+    "id": "bad_null_float",
+    "name": "Bad Null Float",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "yaw": {
+                "value": null
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

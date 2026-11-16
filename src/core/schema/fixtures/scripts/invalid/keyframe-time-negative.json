@@ -1,0 +1,30 @@
+{
+  "name": "keyframe-time-negative",
+  "expect": ["不能为负数"],
+  "doc": "关键帧时间为负数：position.z 首帧 time = -1。ObjectParser 报「不能为负数」；ObjectValidator 同口径。",
+  "meta": {
+    "id": "bad_kf_negative",
+    "name": "Bad Keyframe Negative",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "position.z": {
+                "keyframes": [
+                  { "time": -1, "value": 0 }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

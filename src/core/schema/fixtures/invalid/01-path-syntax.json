@@ -1,0 +1,19 @@
+{
+  "name": "path-syntax",
+  "expect": ["路径"],
+  "entry": {
+    "id": "track.CAMERA.object.Position",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "Position",
+    "type": "float",
+    "mode": "animated",
+    "interp": "linear",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

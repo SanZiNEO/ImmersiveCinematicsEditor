@@ -1,0 +1,30 @@
+{
+  "name": "nan",
+  "expect": ["必须为有限数字"],
+  "doc": "非有限数：JSON 没有 NaN 字面量，这里用 1e400 表达（JSON.parse 得到 Infinity，Gson 同样按非有限数处理）。关键帧 time 必须是有限数字。注意：用 JSON.stringify 往返会把它变成 null，不要重新序列化本文件。",
+  "meta": {
+    "id": "bad_nan",
+    "name": "Bad NonFinite",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "keyframes": [
+                  { "time": 1e400, "value": 70 }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

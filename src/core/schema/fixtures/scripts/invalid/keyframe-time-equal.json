@@ -1,0 +1,31 @@
+{
+  "name": "keyframe-time-equal",
+  "expect": ["单调递增"],
+  "doc": "关键帧时间相等：position.x 两帧同一 time。ObjectParser 报「关键帧时间必须单调递增」；ObjectValidator 同口径。",
+  "meta": {
+    "id": "bad_kf_equal",
+    "name": "Bad Keyframe Equal",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "position.x": {
+                "keyframes": [
+                  { "time": 1, "value": 0 },
+                  { "time": 1, "value": 3 }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

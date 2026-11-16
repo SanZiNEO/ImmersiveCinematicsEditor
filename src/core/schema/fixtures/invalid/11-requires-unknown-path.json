@@ -1,0 +1,21 @@
+{
+  "name": "requires-unknown-path",
+  "expect": ["requires"],
+  "knownPaths": ["position.x"],
+  "entry": {
+    "id": "track.CAMERA.object.position.x",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "position.x",
+    "type": "float",
+    "mode": "animated",
+    "interp": "linear",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "requires": "orient=tangent",
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

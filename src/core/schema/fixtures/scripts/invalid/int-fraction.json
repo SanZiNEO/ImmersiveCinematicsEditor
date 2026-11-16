@@ -1,0 +1,28 @@
+{
+  "name": "int-fraction",
+  "expect": ["需要整数"],
+  "doc": "int 字段写成小数 2.5：cam_breath_seed 是整数（PropertyType.INT），ObjectCodec 拒绝非整数值。",
+  "meta": {
+    "id": "bad_int_fraction",
+    "name": "Bad Int Fraction",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "cam_breath_seed": {
+                "value": 2.5
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

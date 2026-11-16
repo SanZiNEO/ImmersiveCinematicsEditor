@@ -1,0 +1,58 @@
+{
+  "name": "intermediate-path",
+  "expect": ["中间名"],
+  "entry": {
+    "id": "track.CAMERA.object.position",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "position",
+    "type": "float",
+    "mode": "value",
+    "interp": "none",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:113"
+  },
+  "catalog": {
+    "tracks": {
+      "CAMERA": {
+        "playControl": [],
+        "objects": [
+          {
+            "id": "track.CAMERA.object.position",
+            "segment": "tracks",
+            "scope": ["CAMERA"],
+            "key": "position",
+            "type": "float",
+            "mode": "value",
+            "interp": "none",
+            "default": 0,
+            "hasDefault": true,
+            "required": false,
+            "section": "position",
+            "group": "position",
+            "sourceRef": "TrackSchemas#cameraObjects:113"
+          },
+          {
+            "id": "track.CAMERA.object.position.x",
+            "segment": "tracks",
+            "scope": ["CAMERA"],
+            "key": "position.x",
+            "type": "float",
+            "mode": "value",
+            "interp": "none",
+            "default": 0,
+            "hasDefault": true,
+            "required": false,
+            "section": "position",
+            "group": "position",
+            "sourceRef": "TrackSchemas#cameraObjects:114"
+          }
+        ]
+      }
+    }
+  }
+}

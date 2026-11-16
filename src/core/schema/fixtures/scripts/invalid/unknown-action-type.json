@@ -1,0 +1,40 @@
+{
+  "name": "unknown-action-type",
+  "expect": ["未知动作"],
+  "doc": "rules[0].actions[0].type 不在 action_types：teleport 不是 v1 九种动作。RuleCollectionParser 只做结构拷贝、不判动作类型，所以本文件能被 ScriptParser 解析；ScriptValidator 报「未知动作: teleport」，由 script.validate 拦截。",
+  "meta": {
+    "id": "bad_action_type",
+    "name": "Bad Action Type",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": [
+    {
+      "id": "rule_bad_action",
+      "condition": {
+        "type": "time",
+        "at": 0.5
+      },
+      "actions": [
+        { "type": "teleport" }
+      ]
+    }
+  ]
+}

@@ -38,7 +38,9 @@
 
 字段类型按源码逐条登记：字符串、布尔、映射、数组、int32、有限 float、枚举。目录里不把 `position` 写成 `Vec3`，位置按触发器自己的 `position` 结构登记（`{x,y,z}` 或 `{x,z}`，以 `TriggerSchemas` 为准）。
 
-## `meta.triggers[]` 条目字段（10 项）
+## `meta.triggers[]` 条目字段（10 项运行时字段；目录只登记 2 项）
+
+下表是 `ScriptParser.parseTriggerDefinition` 接受的 10 个运行时字段；02 目录的 `triggerFields` 只登记 `id` + `continuity`（与 `SchemaExporter` 的 `triggerFields` 同口径），其余 8 项由解析器直接读，不复制到目录。
 
 | 字段 | type | default | required | 说明 |
 |---|---|---|---|---|
@@ -81,9 +83,9 @@
 
 ## 跨字段 / 场景约束
 
-- **位置二选一**：`position + radius` 与 `corner1 + corner2` 不能同时出现，也不能都不出现；两套都出现 → 报错（`ScriptValidator` 1454–1462、2388–2398）。
+- **位置区域是运行时 OR 语义**：`Evaluators.evaluateLocation`（`Evaluators.java:63-88`）先判 `corner1 + corner2`（方体），再判 `position + radius`（球），命中任一即触发；只写 `dimension` 也合法。02 目录不登记这条跨字段约束，也不把它写成声明自检。
 - **`corner1` / `corner2` 成对**：只给一个 → 报错。
-- **`dimension_change`**：`dimension` 与 `from_dimension` 至少一个；两个都给时按源码顺序判定。
+- **`dimension_change`**：`dimension` 必填（`TriggerSchemas.java:168`），`from_dimension` 可选、缺省 `""`（`:169`）。
 - **`all_of` / `any`**：`conditions` 表为空，但组合子内部必须有子条件；空组合子 → 报错。
 - **`item_on_interact` / `observation` 的 `target_type`**：必须在 `TriggerSchemas` 给出的枚举内。
 
@@ -100,7 +102,7 @@
 - `requires` 字符串写法等价于 `script_played`；引用不存在的脚本 id → issue；非数组 → 解析错误。
 - `poll_interval:0` / `601` / `2.5`：解析器告警 + null，校验器报 issue；`meta.trigger_poll_interval` 同口径。
 - `repeatable` 缺省为 `false`；`delay` / `on_enter` / `exit_buffer` 缺省为 `0` / `false` / `0`。
-- `location` 同时写 `position+radius` 和 `corner1+corner2` → 报错；只写 `corner1` → 报错。
+- `location` 同时写 `position+radius` 和 `corner1+corner2`：运行时先判方体、再判球，两套都保留；只写 `corner1`：运行时按剩余条件判定，解析器与校验器都不阻断。
 - `continuity.sweep` 用在 `item_use` → 报错；`window` 用在 `location` → 报错；`dwell` 超出 `1200` → 报错。
 - 触发器多一个 `x_custom` 字段：保留、不报错；已知字段类型错（如 `radius:"5"`）仍报错。
 - `all_of` / `any` 空组合子 → 报错。

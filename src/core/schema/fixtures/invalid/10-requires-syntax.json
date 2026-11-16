@@ -1,0 +1,21 @@
+{
+  "name": "requires-syntax",
+  "expect": ["requires"],
+  "knownPaths": ["a", "b"],
+  "entry": {
+    "id": "track.CAMERA.object.position.x",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "position.x",
+    "type": "float",
+    "mode": "animated",
+    "interp": "linear",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "requires": "a=1 && b=2",
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

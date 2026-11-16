@@ -1,0 +1,30 @@
+{
+  "name": "value-with-keyframes",
+  "expect": ["mode=value 不允许 keyframes"],
+  "doc": "mode=value 的属性带 keyframes：mask_shape 是固定值（CAMERA 合成遮罩形状），ObjectParser 与 ObjectValidator 都拒绝 value 模式下的 keyframes。",
+  "meta": {
+    "id": "bad_value_kfs",
+    "name": "Bad Value Keyframes",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "mask_shape": {
+                "keyframes": [
+                  { "time": 0, "value": "rect" }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

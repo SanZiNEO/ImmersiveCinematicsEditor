@@ -1,0 +1,19 @@
+{
+  "name": "value-with-interp",
+  "expect": ["interp"],
+  "entry": {
+    "id": "track.CAMERA.object.position.x",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "position.x",
+    "type": "float",
+    "mode": "value",
+    "interp": "linear",
+    "default": 0,
+    "hasDefault": true,
+    "required": false,
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "name": "rule-binding-dangling",
+  "expect": ["未知规则引用"],
+  "doc": "rule_bindings[0].rule 指向不存在的规则：只声明了 rule_collect，绑定引用 rule_missing。RuleCollectionParser 报「未知规则引用」；ScriptValidator 同口径。",
+  "meta": {
+    "id": "bad_binding_rule",
+    "name": "Bad Binding Rule",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_rule",
+      "track": "CAMERA",
+      "duration": 2,
+      "objects": {
+        "fov": {
+          "value": 70
+        }
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule_collect",
+      "condition": {
+        "type": "time",
+        "at": 1.0
+      },
+      "actions": [
+        { "type": "pause" }
+      ]
+    }
+  ],
+  "rule_bindings": [
+    {
+      "id": "bind_collect",
+      "rule": "rule_missing",
+      "clip": "clip_rule",
+      "gate": {
+        "at": 0.5
+      }
+    }
+  ]
+}

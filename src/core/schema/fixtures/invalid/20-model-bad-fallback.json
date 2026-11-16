@@ -1,0 +1,27 @@
+{
+  "name": "model-bad-fallback",
+  "expect": ["fallback"],
+  "entry": {
+    "id": "model.linear.weight",
+    "segment": "models",
+    "scope": ["linear"],
+    "key": "weight",
+    "type": "float",
+    "default": 1,
+    "hasDefault": true,
+    "required": false,
+    "section": "info",
+    "sourceRef": "MathModelRegistry#LINEAR_PARAMS:70"
+  },
+  "catalog": {
+    "models": {
+      "linear": {
+        "params": [],
+        "domains": ["scalar"],
+        "maxDepth": 8,
+        "maxNodes": 32,
+        "fallback": "spring"
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "keyframe-time-desc",
+  "expect": ["单调递增"],
+  "doc": "关键帧时间倒序：position.y 第二帧 time 小于第一帧。ObjectParser 报「关键帧时间必须单调递增」；ObjectValidator 同口径。",
+  "meta": {
+    "id": "bad_kf_desc",
+    "name": "Bad Keyframe Descending",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "position.y": {
+                "keyframes": [
+                  { "time": 2, "value": 0 },
+                  { "time": 1, "value": 3 }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

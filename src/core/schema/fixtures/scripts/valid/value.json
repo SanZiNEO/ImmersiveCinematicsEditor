@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "id": "value_demo",
+    "name": "Value Demo",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              },
+              "position_mode": {
+                "value": "relative"
+              },
+              "position_space": {
+                "value": "world"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

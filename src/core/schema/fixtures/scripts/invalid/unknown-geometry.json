@@ -1,0 +1,66 @@
+{
+  "name": "unknown-geometry",
+  "expect": ["未知曲线类型"],
+  "doc": "paths[0].geometry.type 未登记：spline 不是 line + 02-06 的已注册曲线类型。PathCurveRegistry 报「未知曲线类型 'spline'」，PathCollectionParser 原样上抛，不回落 line。",
+  "meta": {
+    "id": "bad_geometry",
+    "name": "Bad Geometry",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_geometry",
+      "track": "CAMERA",
+      "duration": 6,
+      "objects": {
+        "position.x": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        },
+        "position.y": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        },
+        "position.z": {
+          "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 3 }
+          ]
+        }
+      }
+    }
+  ],
+  "paths": [
+    {
+      "id": "path_geometry",
+      "clip": "clip_geometry",
+      "from": 0,
+      "to": 3,
+      "geometry": {
+        "type": "spline"
+      }
+    }
+  ]
+}

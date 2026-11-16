@@ -1,0 +1,19 @@
+{
+  "name": "animated-struct",
+  "expect": ["struct"],
+  "entry": {
+    "id": "track.CAMERA.object.position.x",
+    "segment": "tracks",
+    "scope": ["CAMERA"],
+    "key": "position.x",
+    "type": "struct",
+    "mode": "animated",
+    "interp": "none",
+    "default": null,
+    "hasDefault": false,
+    "required": false,
+    "section": "position",
+    "group": "position",
+    "sourceRef": "TrackSchemas#cameraObjects:114"
+  }
+}

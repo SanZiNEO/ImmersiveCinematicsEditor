@@ -1,0 +1,29 @@
+{
+  "name": "timeline-unknown-key",
+  "expect": ["未知字段"],
+  "doc": "timeline 目录外键：timeline 只允许 tracks / loop_start / loop_end（ScriptParser.TIMELINE_KEYS）。unknown_timeline_key 被拒绝。",
+  "meta": {
+    "id": "bad_timeline_key",
+    "name": "Bad Timeline Key",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "unknown_timeline_key": true
+  }
+}

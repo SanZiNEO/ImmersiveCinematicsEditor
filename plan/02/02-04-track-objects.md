@@ -9,7 +9,7 @@
 `CAMERA` / `LETTERBOX` / `AUDIO` / `EVENT` / `MOD_EVENT` / `OVERLAY` / `ADJUST`。
 
 - 轨道类型表来自 `TrackSchemas` 登记，不写死前端枚举。
-- 第三方轨道类型形如 `modid:xxx`，目录只登记「已发现」，字段由该模组自己的 schema 提供；不替它编字段。
+- 第三方轨道类型形如 `modid:xxx`，目录只登记「已发现」：`FieldCatalog.discovered.tracks` 收 `{type, sourceRef}`，字段由该模组自己的 schema 提供；不替它编字段。触发器同口径，收在 `discovered.triggers`。
 - 轨道类型大小写以源码 wire 名为准。
 
 ## `playControl`（每条轨道都有，5 字段）
@@ -80,7 +80,7 @@
 - `requires` 只支持 `path=value` / `path!=value`，求值与 `ObjectValidator.evalRequires` 同语法。
 - 不满足时字段置灰 + 提示，不删除字段、不删关键帧；作者切回条件时数据还在。
 - 当前唯一用 `requires` 的是 `yaw_offset` / `pitch_offset`（`requires="orient=tangent"`）。
-- `appliesTo` 只登记适用轨道/场景，不做跨轨复制。
+- `appliesTo` 只登记适用轨道/场景，不做跨轨复制；域 = 02-04 的轨道类型 / 层类型与轨道子类型（`fade` / `image` / `subtitle`）/ `modid:xxx`。
 
 ## 语义组名（界面分组用）
 
@@ -96,9 +96,9 @@
 
 - `objectDef('CAMERA','position.x')` 返回 `{mode:'animated', type:'float', interp:'linear', section:'position', group:'position'}`。
 - `objectDef('CAMERA','position.y')` / `position.z` 是两条独立记录，不是嵌套在 `position` 下。
-- `availability('CAMERA','yaw_offset',{orient:'manual'})` = `{available:false, reason:'requires=orient=tangent'}`；`{orient:'tangent'}` = `{available:true}`。
+- `availability('CAMERA','yaw_offset',{orient:'manual'})` = `{available:false, reason:'需要 orient=tangent（当前 orient=manual）'}`；`{orient:'tangent'}` = `{available:true}`。
 - 切 `orient` 从 `manual` 到 `tangent`：`yaw_offset` 从置灰变可用，keyframes 数量不变。
-- 轨道列表含 `ADJUST` 和第三方 `modid:foo`。
+- 内置轨道列表含 `ADJUST`；第三方 `modid:foo` 在 `discovered.tracks` 登记，不进入内置 `tracks` 表。
 - `playControl` 五字段齐全；`start_time` / `duration` 缺一即拒绝。
 - 非法路径 `position[0]` / `Position.X` / `position..x` 全部拒绝。
 - `grep` 目录：没有把 `position` 写成嵌套对象的结构。

@@ -25,8 +25,8 @@
 - 值域：`scalar` / `angle` / `vector` / `color`。
 - 模型与值域不匹配 → **回落 `linear`**，不报阻断。
 - 未知模型类型 / 非法参数 → 回落 `linear`，给警告。
-- 已知参数类型错 → 报错，不静默转。
-- 深度上限 8，节点上限 32；超限 → 回落 `linear` 或截断，以 `MathModelRegistry` 的判定为准。
+- 模型参数：缺失 → 取 `FieldDef` 缺省；非数字 / 非有限 / 类型不符 → 告警 + 回落缺省（`MathModelRegistry.numberParam`，`MathModelRegistry.java:353-365`），不静默转。曲线参数：类型不符 / 非有限 → 报错（`PathCurveRegistry.create`，严格抛错）。
+- 深度上限 8，节点上限 32；超限 → 整链回落 `linear`（`MathModelRegistry.create`，`MathModelRegistry.java:151-156`）。
 - `chain` 的 `models` 递归受深度/节点上限约束；循环引用 → 报错。
 
 ## `curveTypes`（11 种）

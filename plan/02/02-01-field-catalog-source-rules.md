@@ -8,7 +8,7 @@
 
 | 段 | 权威文件 / 方法 | 产出 |
 |---|---|---|
-| `meta` | `MetaSchemas.all()`（17–48） | 21 个 meta 字段 |
+| `meta` | `MetaSchemas.all()`（17–48） | 21 个 MetaSchemas 字段 + 2 个解析期键 |
 | `tracks` | `TrackSchemas` 的 `playControl()` + 各轨 `objects()`；`ObjectDef`（36–52） | 7 条内置轨 + 注册扩展；每轨 playControl 5 字段 + objects 表 |
 | `triggers` | `TriggerSchemas`（23–53）；`TriggerDefinition` / `ContinuitySpec` | 27 种触发器 + conditions + triggerFields |
 | `models` | `MathModelRegistry`（105–117） | 11 种模型 + 参数 + 值域 + 上限 |
@@ -38,9 +38,11 @@
 
 目录是编辑器仓库里的**只读数据模块**（建议 `src/core/schema/catalog/`），由人手按源码登记，带：
 
-- `catalogHash`：目录内容指纹（六段排序后哈希）。
+- `catalogHash`：整个目录（六段 + `screenLayers` + `sourceCommit`）去掉 `catalogHash` 后的规范形式 SHA-256（`src/core/schema/hash.ts:43-46`）。
 - `sourceCommit`：登记时的主模组提交号（可选，但要有）。
-- 每段的 `fields` / `objects` / `types` 表。
+- 每段的 `fields` / `objects` / `types` 表（`meta: FieldEntry[]`、`tracks[type].playControl/objects`、`triggers.types/conditions/triggerFields`、`models[type].params/domains/上限`、`curveTypes[type].capabilities/params`、`scriptStructure.sections/enums`）。
+- `screenLayers`：`fixed` / `spaces` / `valueType` / `dynamic`。
+- `discovered`：`tracks` / `triggers` 的「已发现」类型名与 `sourceRef`。
 - 每条的 `sourceRef`。
 
 它不是运行时导出产物，不参与构建期代码生成，不依赖游戏类。

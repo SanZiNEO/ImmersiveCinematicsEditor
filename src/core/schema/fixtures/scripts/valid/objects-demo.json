@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "id": "objects_demo",
+    "name": "Objects Demo",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 4,
+            "objects": {
+              "position.x": {
+                "keyframes": [
+                  { "time": 0, "value": 0 },
+                  { "time": 3, "value": 3 }
+                ]
+              },
+              "position.y": {
+                "keyframes": [
+                  { "time": 0, "value": 0 },
+                  { "time": 3, "value": 3 }
+                ]
+              },
+              "position.z": {
+                "keyframes": [
+                  { "time": 0, "value": 0 },
+                  { "time": 3, "value": 3 }
+                ]
+              },
+              "yaw": {
+                "keyframes": [
+                  { "time": 1, "value": 0 },
+                  { "time": 2, "value": 90 }
+                ]
+              },
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

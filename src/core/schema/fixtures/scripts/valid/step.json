@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "id": "step_demo",
+    "name": "Step Demo",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 3,
+            "objects": {
+              "position.x": {
+                "keyframes": [
+                  { "time": 0, "value": 0 },
+                  { "time": 2, "value": 3 }
+                ]
+              },
+              "position.y": {
+                "keyframes": [
+                  { "time": 0, "value": 0 },
+                  { "time": 2, "value": 3 }
+                ]
+              },
+              "position.z": {
+                "keyframes": [
+                  { "time": 0, "value": 0 },
+                  { "time": 2, "value": 3 }
+                ]
+              },
+              "position_mode": {
+                "keyframes": [
+                  { "time": 0, "value": "relative" },
+                  { "time": 2, "value": "absolute" }
+                ]
+              },
+              "position_space": {
+                "keyframes": [
+                  { "time": 0, "value": "base" },
+                  { "time": 2, "value": "world" }
+                ]
+              },
+              "look_at": {
+                "keyframes": [
+                  { "time": 0, "value": "none" },
+                  { "time": 2, "value": "player" }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
