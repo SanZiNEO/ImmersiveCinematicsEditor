@@ -180,7 +180,7 @@ script.graph  请求 { sinceVersion?: number }
 - `sinceVersion` 缺省 → 全量。
 - `sinceVersion` 等于当前版本且缓存有效 → `{version, unchanged:true}`；前端保留当前图，不重排。
 - 服务端只返回全量快照；`sinceVersion` 只做「要不要重发全量」的短路，不提供增量补丁。
-- 响应大小上限：nodes 800、edges 2000、warnings 200；超过上限截断并置 `truncated` 标记，前端显示「脚本过多，已截断」，不假装完整。
+- 响应大小上限（**实现变更**）：`nodes 100000`、`edges 300000`、`warnings 200`；超过上限截断并置 `truncated` 标记，前端显示「脚本过多，已截断」，不假装完整。渲染侧由三层 LOD 控制（见 05-08）。
 
 ## 验收标准
 

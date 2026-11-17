@@ -6,7 +6,14 @@
 
 ## 节点卡片
 
-固定尺寸 `196×64`（沿用 `graphLayout.NODE_W/H`）；三层：
+> **实现变更（以实际代码为准）**：05 轮最终提供**双渲染模式**，右上角切换：
+> - `dot`（默认，简洁）：小圆点 + 标签；悬停弹出卡片看详情、改前置。
+> - `card`：固定 `196×64` 卡片常显。
+>
+> 两种模式共用同一套力导向坐标；卡片以圆心居中（`left = x − NODE_W/2`）。
+> 代码：`DotNode.vue`（圆点）、`NodeCard.vue`（卡片）、`GraphCanvas.vue`（模式分支）。
+
+卡片模式固定尺寸 `196×64`（沿用 `graphLayout.NODE_W/H`）；三层：
 
 ```text
 NodeCard
@@ -20,7 +27,7 @@ NodeCard
 | 区域 | 内容 | 约束 |
 |---|---|---|
 | 名称 | `node.name`，空则 `scriptId`，再空则文件名 | 最多 1 行，省略号；不换行撑高 |
-| 状态徽标 | `invalid`、`inCycle`、`isolated` 三选一优先：invalid > cycle > isolated | 不用纯颜色；带 `!`/`环`/`孤` 字符与 tooltip |
+| 状态徽标 | **只保留 `invalid`（`!`）**；`环 / 孤` 结构标注已移除 | 用户要求「先不用标注孤和环」 |
 | 路径 | `node.path` | 相对 `scripts`；不显示绝对路径 |
 | 时长 | `infinite ? "无限" : duration.toFixed(1)+"s"` | `duration=0` 且 `infinite=false` 显示 `0.0s` |
 | 前置 | `requiresTargets.length` + 出边数 | 显示「前置 N / 依赖方 M」，不列目标名 |
