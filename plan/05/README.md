@@ -1,92 +1,114 @@
-# 05 项目图接入与主轴工作区
+# 05 脚本关系图与编辑器页
 
 ## 这一轮的定位
 
-04 已经把工作台骨架立起来：布局树、停靠、主题注册表、面板宿主、命令/快捷键/焦点、Electron 窗口与偏好。05 往这个骨架里装两组真实内容：
+04 已经把工作台骨架立起来：布局树、停靠、主题注册表、面板宿主、命令/快捷键/焦点、Electron 窗口与偏好。05 在这个骨架上装**两个页面**，并且只装这两个页面：
 
-- **A 组：项目图接入。** 把 04-04 项目启动页的 `project.main` 占位换成可用的脚本关系图，包含项目索引、文件夹泳道、节点/悬停/打开、图布局持久化、移动与重命名事务、受控依赖维护、刷新与规模降级。
-- **B 组：主轴工作区。** `TimelinePanel` 只编排片段的主时间轴：几何/显示范围/吸附/选择、轨道与片段渲染、片段移动/裁切/分割/复制/粘贴/删除/循环/波纹、标尺/播放头/标记/脚本 A-B/UI 预览范围/缩放/跟随。
+| 页面 | pageId | 是什么 | 能改什么 | 不能改什么 |
+|---|---|---|---|---|
+| 脚本页 | `project` | 无限画布 + 脚本关系图：看整体结构、看每个脚本的触发器设定、快速改前置关系 | 只改「前置关系」（某个触发器的 `requires` 条目） | 不改触发器内容、不改片段、不改轨道、不写脚本正文 |
+| 编辑器页 | `document` | 单个脚本的编辑工作区：触发器表单、主时间轴、片段、双宿主面板 | 脚本的全部内容（含前置关系） | 不承担「看全局结构」的职责 |
 
-04 的 `05-02 DocumentHeader`、`05-09 GraphEntry`、`05-20~23` 已经落在 04-04、04-02、04-05、04-07、04-08、04-09、04-10；05 在这些合同上装图与主轴。
+页面数量在 05 收敛为两个：`settings` 仍是设置页（04 的路由保留），但**编辑器的工作面只有脚本页与编辑器页**，不存在第三个「项目启动页」或第三个「图页」。
+
+## 设计前提（这条决定 05 的全部交互）
+
+**脚本页之所以能改关系，是因为它展示的就是前置依赖关系。**
+
+- 图上的一条边 = 某个脚本的某个触发器的 `requires` 里的一条内置前置条目（`script_played` / `script_started` / `script_completed`）。
+- 图上的节点 = 一个脚本文件；图上悬停展示的「触发器设定」= 该脚本 `meta.triggers[]` 里每个触发器的条件与前置摘要。
+- 因此「在图上加一条前置」「在图上删一条前置」「把前置换目标」都是**同一条数据的直接编辑**，不是跳去编辑器改另一个文件，也不是另一套关系存储。
+- 图上**只能**改这一层；触发器类型、条件、`delay`、`repeatable`、`continuity` 等仍然只在编辑器页改。
+- 图上不提供拖线建依赖：关系用显式操作（悬停卡片里的「加前置 / 删前置 / 换目标」）改，避免误连。
+
+推论（必须遵守）：
+
+1. 图上改关系与编辑器页改同一个 `requires` 是**同一份文档命令**，撤销语义一致，不出现第二套关系存储。
+2. 图上改关系后，编辑器页打开同一脚本必须看到同一结果（不缓存关系副本）。
+3. 图的数据源是**活文档索引**，不是一次性静态扫描；编辑后图要能刷新（05-08）。
+4. 关系写失败（目标缺失、重复 id、自引用、指纹过期、断连）时不改文件、不乐观更新图，错误留在图上可见。
 
 ## 这一轮的出口
 
-1. 项目页出现真实图，不再是启动页占位；图数据来自 `script.graph`，节点=脚本、边=触发器 `requires`、泳道=文件夹。
-2. 文件夹可新建、重命名、删除空目录；脚本可移入文件夹，移动只改路径，不改 `meta.id`，不改任何 `requires` 文本。
-3. 图布局可手摆、可持久化、移动/重命名后能重绑定；坏布局回落自动布局，不丢用户文件。
-4. 改脚本 `meta.id` 有预览、备份、原子改写、失败回滚；只改真实引用，不改触发器 identity、规则、路径、exit。
-5. 图内可新增/修改/移除一条内置 `requires`；自定义前置只读但可定位；不靠拖线隐式改依赖。
-6. 主轴只显示轨道和片段，不出现对象行、属性节点、关键帧菱形、属性数量汇总。
-7. 轨道可新增/删除空轨/排序/重命名；片段可新建/移动/跨轨移动/左右裁切/分割/剪切/复制粘贴/复制一份/删除/循环/波纹删除/顺排，全部走 03 的 `EditorCommand` 与 `commit`；一次拖拽一次撤销。
-8. 标尺/播放头/标记/脚本 A-B/UI 预览范围/缩放/自动跟随分工明确；不写总时长字段，不把无限内容伪装成固定长度。
-9. 四个真实插件 `core.project-graph`、`core.timeline`、`core.clip-effects`、`core.selection-properties` 按 04 合同注册；加面板不改 04 内核。
-10. `05-14` 的闭环验收可复现：项目图打开脚本 → 主轴编辑 → 保存 → 返回图 → 图更新。
+1. 脚本页是真实入口：打开应用先看到关系图，不是启动器卡片；节点=脚本、边=前置引用、按目录分组。
+2. 无限画布可用：平移/缩放/适配/搜索/过滤；视图状态（缩放、平移、节点位置）能持久化并在重启后恢复。
+3. 悬停节点能看到该脚本**全部触发器**的设定摘要（类型、单次/可重复、条件树、前置列表），只读。
+4. 悬停卡片里能直接改前置：加一条内置前置、删一条、换目标；每次只改一条，走显式对话框/内联操作。
+5. 图上的写操作与编辑器页写同一个 `requires`：同一份文档命令、同一套校验、同一套撤销。
+6. 关系异常可见：目标缺失（悬空）、自引用、重复 `meta.id`、`requires` 成环，各有明确标记；不自动修复、不静默删条目。
+7. 编辑器页承接单脚本编辑：触发器表单、主轴、片段、双宿主面板；不再有「项目启动页」占位。
+8. 两个页面之间的切换不丢状态：脏文档先走 `UnsavedGuard`；返回脚本页时图保留视图与选中。
 
 ## 依赖的既有合同
 
 | 合同 | 文件 | 05 怎么用 |
 |---|---|---|
-| 片段身份/选择 | `03-03-selection-identity.md` | 主轴选择只用 `clipKey`；不用 `{track,clip,keyframe}` 下标；引用完整性检查走 03 |
-| 文档命令/撤销 | `03-05-editor-store.md` | 片段编辑只发 `EditorCommand`；`commit` 不重算总时长；快照式撤销 |
-| 校验 | `03-06-validation-bridge.md` | 本地结构检查 + 服务端 `script.validate`；主轴的 block/error 只显示，不改语义 |
-| 文档 IO | `03-07-document-io.md` | 打开不改写文档；保存从 `serializeDoc` 派生；脏标记等服务端回执 |
-| 布局树 | `04-02-layout-tree.md` | 面板默认槽位、尺寸约束、每页布局；尺寸由 04 布局树持有 |
-| 面板宿主 | `04-05-panel-host.md` | `PanelContext`、选区四态、双宿主 ID；05 只注册面板 |
-| 外壳/页面 | `04-04-workspace-shell.md` | `project/document/settings` 页面路由；项目页顶部工具保留 |
-| 命令/焦点 | `04-10-command-keybinding-focus.md` | 05 命令在插件 `activate` 注册；不写回全局键盘分支 |
+| 片段身份/选择 | `03-03-selection-identity.md` | 编辑器页选择只用 `clipKey`；不用下标 |
+| 文档命令/撤销 | `03-05-editor-store.md` | 图上改前置与编辑器页改前置都发同一条 `DocCommand`，走 `commit`；一次操作一次撤销 |
+| 校验 | `03-06-validation-bridge.md` | 图上不重写校验；`requires` 断引/环的显示复用 03 的结构检查结果 |
+| 文档 IO | `03-07-document-io.md` | 保存从 `serializeDoc` 派生；脏标记等服务端回执；图上写关系不改这套语义 |
+| 布局树 | `04-02-layout-tree.md` | 两个页面各自的布局；脚本页的图面板占 `project.main` |
+| 面板宿主 | `04-05-panel-host.md` | `PanelContext`、选区四态、双宿主 ID |
+| 外壳/页面 | `04-04-workspace-shell.md` | `project/document/settings` 路由；脚本页不再有启动器主体 |
+| 命令/焦点 | `04-10-command-keybinding-focus.md` | 05 命令在插件 `activate` 注册；键盘可达 |
 
 ## 文档
 
-### A 组 · 项目图接入
+### A 组 · 脚本页（关系图）
 
 | 文档 | 内容 |
 |---|---|
-| [05-01 项目索引与图数据契约](05-01-project-index-and-graph-contract.md) | `ScriptIndexService`、`script.graph` 扩展、节点/触发器/边/文件夹/warnings、版本与 `sinceVersion` |
-| [05-02 图外壳与文件夹泳道](05-02-graph-shell-and-folder-lanes.md) | 图视图、加载/错误/空态、平移缩放、泳道、空目录、文件夹 CRUD、脚本移入 |
-| [05-03 节点卡片、悬停与打开](05-03-node-card-hover-open.md) | 节点卡片、悬停摘要、上下游高亮、双击/Enter 打开、失败留在图页 |
-| [05-04 图布局与持久化](05-04-graph-layout-persistence.md) | 自动布局 + 手摆覆盖、`graph-layout.json`、路径/ID 重绑定、原子写 |
-| [05-05 依赖边与诊断](05-05-dependency-edges-and-diagnostics.md) | 边来源身份、悬空桩、重复/自引用、可维护性分级、自定义前置只读 |
-| [05-06 脚本移动与重命名事务](05-06-move-rename-refactor.md) | 移动只改路径；改 `meta.id` 预览/备份/原子改写/回滚 |
-| [05-07 图内依赖维护](05-07-graph-dependency-mutation.md) | 新增/修改/移除一条内置 `requires`；指纹、校验、原子写 |
-| [05-08 图刷新与规模诊断](05-08-graph-refresh-scale-diagnostics.md) | `script.graph.invalidated`、过期角标、stats、warnings 分组、200/800 节点降级 |
+| [05-01 脚本索引与前置关系契约](05-01-project-index-and-graph-contract.md) | `ScriptIndexService`、`script.graph`、节点/触发器/前置/边/诊断、版本与增量判定 |
+| [05-02 脚本页与无限画布](05-02-graph-shell-and-folder-lanes.md) | 图作为 `project.main` 面板、加载/错误/空态、平移缩放适配、搜索过滤、按目录分组 |
+| [05-03 节点卡片、悬停与快速改前置](05-03-node-card-hover-open.md) | 节点摘要、悬停展示全部触发器设定（只读）、上下游高亮、图上改前置的入口与边界 |
+| [05-04 图布局与视图持久化](05-04-graph-layout-persistence.md) | 自动布局 + 手摆覆盖、`graph-layout.json`、路径/ID 重绑定、原子写 |
+| [05-05 前置边与关系诊断](05-05-dependency-edges-and-diagnostics.md) | 边来源身份、悬空桩、自引用、重复 id、环、自定义前置只读 |
+| [05-06 脚本 id 重命名与引用同步](05-06-move-rename-refactor.md) | 改 `meta.id` 的预览/备份/原子改写/回滚；图与引用保持一致 |
+| [05-07 图上改前置关系](05-07-graph-dependency-mutation.md) | 加/删/换一条内置前置；身份+指纹；与编辑器页同一份命令 |
+| [05-08 图刷新与规模降级](05-08-graph-refresh-scale-diagnostics.md) | 失效广播、过期角标、stats、warnings 分组、200/800 节点降级 |
 
-### B 组 · 主轴工作区
+### B 组 · 编辑器页
 
 | 文档 | 内容 |
 |---|---|
 | [05-09 主轴几何、显示范围与选择](05-09-timeline-geometry-and-selection.md) | `TimelineScale`、`DisplayRange`、吸附、命中、拖动会话、`clipKey` 选择 |
-| [05-10 主轴视图与轨道/片段](05-10-timeline-view.md) | `TimelineView`、轨道头、轨道行、`ClipBlock`、工具栏、右键菜单、轨道增删/排序/重命名、新建片段、刀片工具 |
-| [05-11 片段编辑](05-11-clip-editing.md) | 新建/移动/跨轨/裁切/分割/剪切/复制粘贴/复制一份/删除/循环/波纹/顺排；引用影响预检 |
-| [05-12 标尺、播放头、标记、A-B、缩放](05-12-ruler-playhead-markers.md) | 三件事分开：脚本 A-B、UI 预览范围、播放头；标记只存 session |
-| [05-13 工作区面板接线](05-13-workspace-panel-integration.md) | 四个插件、面板 ID/槽位、命令/快捷键/状态项、双宿主空态 |
-| [05-14 05 闭环验收](05-14-r5-acceptance.md) | 图 + 主轴 + 插件 + 键盘 + 性能 + 离线断连的验收矩阵 |
+| [05-10 主轴视图与轨道/片段](05-10-timeline-view.md) | `TimelineView`、轨道头、轨道行、`ClipBlock`、工具栏、右键菜单、轨道增删/排序/重命名 |
+| [05-11 片段编辑](05-11-clip-editing.md) | 移动/跨轨/裁切/分割/复制粘贴/删除/循环/波纹/顺排；引用影响预检 |
+| [05-12 标尺、播放头、标记、A-B、缩放](05-12-ruler-playhead-markers.md) | 脚本 A-B、UI 预览范围、播放头三件事分开；标记只存 session |
+| [05-13 两页接线与插件](05-13-workspace-panel-integration.md) | `core.script-graph`、`core.timeline`、`core.clip-effects`、`core.selection-properties` 的 ID/槽位/命令/状态项 |
+| [05-14 05 闭环验收](05-14-r5-acceptance.md) | 脚本页看图 → 图上改前置 → 进编辑器 → 改触发器 → 保存 → 回图 → 图更新 |
 
 ## 这一轮会碰的模组侧
 
-05 同时改模组侧。项目图需要以下模组侧服务，落在 01 已经划好的 `editor` / `editor.shared` / `editor.webui` 包里，沿用 01 的包边界、总开关、七接口：
+05 需要以下模组侧服务（沿用 01 的包边界与七接口），比 04 的「只读打开」多一层「关系写」：
 
-- `ScriptIndexService`：一次扫描脚本 + 目录，给图数据、空目录、版本。
-- `ScriptFolderService`：新建/重命名（可非空，仅改目录名）/删除（仅空目录）；脚本移入由 `ScriptFileService.moveScript` 完成。
-- `GraphLayoutStore`：读写 `immersive_cinematics/editor/graph-layout.json`。
+- `ScriptIndexService`：一次扫描脚本 + 目录，产出节点/触发器/前置/边/诊断/版本。
+- `ScriptGraphService`：补 trigger identity/index、`requiresFingerprint`、warnings severity、stats/version。
+- `GraphLayoutStore`：读写 `immersive_cinematics/editor/graph-layout.json`（视图与节点位置）。
 - `ScriptRefactorService`：改 `meta.id` 的预览/应用/备份/回滚。
-- `ScriptGraphService`：补 trigger identity/index、文件夹 parent/empty、warnings severity、stats/version。
 - `WebEditorApi` 新增/扩展消息，统一在 `shared/contracts` 登记后冻结。
 
-消息类别（具体形状见各文档）：
+消息类别：
 
 ```text
-script.graph                // 扩展 version/sinceVersion/stats
+script.graph                // 全量 / unchanged 短路
 script.graph.invalidated    // 服务端广播失效
-script.folder.new/rename/delete
-script.move
-graph.layout.get/put
-script.refs.preview/apply
-script.requires.mutate
+graph.layout.get/put        // 视图 + 节点位置
+script.refs.preview/apply   // 改 meta.id 的引用同步
+script.requires.mutate      // 图上改一条前置（与编辑器页同一语义）
 ```
 
-## 验收顺序## 验收顺序
+## 明确不做（避免范围膨胀）
 
-1. 先跑 `05-01`～`05-08` 的图数据/文件夹/布局/移动/重命名/依赖维护单组验收。
-2. 再跑 `05-09`～`05-12` 的主轴几何/视图/片段编辑/标尺单组验收。
-3. 最后跑 `05-13` 的面板接线与 `05-14` 的图→文档→主轴→保存→图闭环。
+- 不做依赖图的「路径查找 / 环检测报告 / DOT/SVG/PNG 导出」等分析工具；环只做**标记**，不做自动修复。
+- 不做目录 CRUD（新建/重命名/删除文件夹）与脚本拖入文件夹；按目录**分组显示**即可，目录由外部文件管理。
+- 不在图上改触发器类型/条件/延时/重复性；这些只在编辑器页。
+- 不在图上拖线建依赖；不做「拖动排序 requires」。
+- 不在图上编辑片段、轨道、关键帧。
+
+## 验收顺序
+
+1. 先跑 `05-01`～`05-08` 的图数据 / 视图 / 悬停 / 图上改前置 / 诊断 / 刷新。
+2. 再跑 `05-09`～`05-12` 的编辑器页主轴几何 / 视图 / 片段编辑 / 标尺。
+3. 最后跑 `05-13` 的四插件接线与 `05-14` 的「图 → 改前置 → 编辑器 → 保存 → 回图」闭环。
 4. 每一组都先跑离线/断连路径，再跑连接态；断连不能白屏，不能假装保存成功。
