@@ -25,6 +25,7 @@
 | [06-09-clip-properties-panel](06-09-clip-properties-panel.md) | 属性面板：全部适用组/叶子、静态值、未设置行、时钟、片段摘要 |
 | [06-10-object-diagnostics](06-10-object-diagnostics.md) | 对象/节点 issue、行角标、缺失叶子、未知路径、双面板 reveal |
 | [06-11-r6-acceptance](06-11-r6-acceptance.md) | 双面板、性能、保存重开、整帧路径移除、验收矩阵 |
+| [06-12-architecture-cleanup](06-12-architecture-cleanup.md) | 架构整理：按层分（core / features / plugins），拆胖控制器，跨轮基础设施落位 |
 
 ## 面板职责
 
@@ -167,6 +168,7 @@ object.remove
 4. 跑通“属性面板改值 → 开时钟 → 效果面板出现 → 加帧/拖动/撤销 → 关动画 → 回属性面板”的迁移闭环。
 5. 接局部视口、轴外、无限片段、事件、缓动、诊断和双面板定位。
 6. 移除整帧路径和主轴节点入口，跑 06-11 全矩阵。
+7. 按 06-12 收口结构：业务内核落 `features/`，插件目录只留装配；`core/` 与 `plugins/` 的分层约束保持成立。
 
 ## 完成定义
 

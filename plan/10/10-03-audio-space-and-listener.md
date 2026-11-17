@@ -1,153 +1,111 @@
-# 10-03 AUDIO 空间语义与监听
+# 10-03 · AUDIO 空间语义与监听
 
-## 目标
+> 状态：未实现
+> 范围：`category` 的两类声音语义、`position_mode` 与 `attenuation`、脚本级 `meta.listener` 与镜头听者回落
+> 关联：10-01 字段面、10-02 播放与包络、10-09 媒体检查
 
-把 `AUDIO` 的空间参数和脚本级 `meta.listener` 分开：
+## 一、摘要
 
-- `category` 决定这条声音是背景音还是环境音；
-- `position_mode` 只对 `ambient` 生效；
-- `meta.listener` 决定听者是玩家还是相机；
-- 相机听者只在顶层实例存在活跃 `CAMERA` 片段时生效，否则回落玩家。
+把 `AUDIO` 的空间参数和脚本级监听声明分开处理。`category` 决定这条声音是背景音还是环境音：背景音固定贴着听者、不衰减，环境音才参与空间定位。`meta.listener` 决定听者是玩家还是相机，而相机听者只有在存在活跃 `CAMERA` 片段时才真的生效，否则回落到玩家。编辑器要把这两层关系和回落条件说清楚，避免作者以为设了 `camera` 就一定是相机在听。
 
-不新增“音频监听器”对象，不新增监听消息，不把 `category=music` 的 x/y/z 当空间定位。
+## 二、为什么做
 
-## 源码事实
+### 2.1 问题
 
-`CinematicAudioInstance` / `AudioTrackPlayer`：
+空间参数目前全靠作者记忆。三件事容易搞错：给 `category=music` 的声音填了 `x/y/z`，以为能摆到某个方向，实际运行时根本不读；把 `position_mode=absolute` 当成「相对相机」，实际它是世界坐标，不跟随听者；把 `meta.listener=camera` 当成开关，但脚本里没有 `CAMERA` 片段、或者播放头正处在镜头空档，听者其实还是玩家。这三种误解都不报错，只表现为「声音方向不对」或「听感没变化」。
 
-- `category=music`：强制相对听者、`attenuation=none`、位置取玩家位置；x/y/z 不参与空间定位。
-- `category=ambient`：使用 `position_mode` 和 `attenuation`；`relative` 时位置 = `AudioListenerController.getListenerPosition() + offset`；`absolute` 时位置 = offset 世界坐标。
-- `attenuation`：`none` 不衰减；`linear` 按距离线性衰减。
-- `position_mode`：`relative` / `absolute`，只对 `ambient` 有意义。
-- `AudioListenerController.isCameraListener()` 需要同时满足：
-  1. `CameraManager.isActive()`；
-  2. 顶层实例当前存在活跃 `CAMERA` 片段；
-  3. `meta.listener=camera`。
-  否则 `getListenerPosition()` 返回玩家位置。
+### 2.2 目标
 
-`MetaSchemas.listener` 是脚本级 value：`player/camera`，默认 `player`。
+- `category=music` 时空间控件禁用并注明「固定相对玩家、无衰减」，值保留不删。
+- `ambient` 下 `relative` 明确标为「听者偏移」，`absolute` 明确标为「世界坐标」。
+- 监听卡同时展示声明值和当前播放头的实际状态：以相机为锚点、还是回落玩家。
+- 脚本没有 `CAMERA` 片段而声明了 `camera` 时，给出「始终回落玩家」的警告。
+- `music` 与监听的关系说明白：`listener=camera` 不改变 `music` 的听者行为。
 
-## 字段表
+### 2.3 非目标
 
-| 字段 | 模式 | 类型 | 默认 | 适用范围 | 面板 |
+- 不新增「音频监听器」对象，不新增监听消息。
+- 不采样玩家或相机位置，不做 3D 场景预览，不做实时空间试听。
+- 不伪造顶层实例选择：多脚本并行时的监听归属属于播放期状态，编辑器不猜。
+- 不把 `music` 的空间值写死成 0，也不在切到 `music` 时删除空间字段。
+
+## 三、方案
+
+空间组有四个部分：`category` 分段开关、`position_mode` 分段开关、`attenuation` 分段开关、`x/y/z` 三行数值。`category=music` 时后三者全部禁用，并标注当前不参与空间定位；切回 `ambient` 后原值恢复可编辑。`x/y/z` 的标签随模式变化：`relative` 写「听者偏移」并说明实际听者可能是玩家或相机，`absolute` 写「世界坐标」。
+
+脚本属性里增加一张「音频监听」卡，显示 `listener` 的两个选项和当前播放头的实际状态。声明 `camera` 且当前播放头有活跃 `CAMERA` 片段时，写「以相机位置为锚点」；播放头落在镜头空档时，写「当前回落玩家」——这是提示，不改 `listener` 的值。整个脚本没有 `CAMERA` 片段时升级为警告，并提供跳到 `CAMERA` 轨的入口。
+
+`x/y/z` 一旦有帧，空间组只保留一句「在效果面板编辑」的摘要，不重复放值控件。
+
+## 四、技术细节
+
+### 4.1 核心模型
+
+声音分两类。`music` 是非空间声音：位置固定到玩家位置，无衰减，`position_mode` 与 `attenuation` 都不参与。`ambient` 是空间声音：`relative` 时位置 = 实际听者位置 + 偏移，`absolute` 时位置就是世界坐标，不跟随听者。听者位置的来源由 `meta.listener` 和「当前是否存在活跃 `CAMERA` 片段」共同决定，三个条件同时满足才用相机，否则一律玩家。
+
+### 4.2 契约
+
+- `category` 默认 `music`，`position_mode` 默认 `relative`，`attenuation` 默认 `linear`，`meta.listener` 默认 `player`。
+- `category=music` 强制相对听者、`attenuation=none`，与 `meta.listener` 无关。
+- `position_mode` 与 `attenuation` 只对 `ambient` 有意义。
+- `attenuation=none` 无距离衰减，`linear` 按距离线性衰减。
+- `absolute` 声源永远不跟随听者，监听切换只影响 `relative`。
+- 相机听者生效需要三个条件同时成立：相机在活跃状态、顶层实例当前存在活跃 `CAMERA` 片段、`meta.listener=camera`。
+- 运行时只看顶层实例，并行脚本不叠加监听。
+
+### 4.3 数据形态
+
+| 字段 | 模式 | 类型 | 默认 | 适用范围 | 落点 |
 |---|---|---|---|---|---|
-| `category` | value | enum `music/ambient` | `music` | 全部 | 空间组 |
-| `position_mode` | value | enum `relative/absolute` | `relative` | `ambient` | 空间组 |
-| `attenuation` | value | enum `none/linear` | `linear` | `ambient` | 空间组 |
-| `x` | animated | float | 0 | `ambient` | 空间组 / 效果 |
-| `y` | animated | float | 0 | `ambient` | 空间组 / 效果 |
-| `z` | animated | float | 0 | `ambient` | 空间组 / 效果 |
-| `meta.listener` | value | enum `player/camera` | `player` | 脚本 | 脚本属性“监听”卡 |
+| `category` | value | `music` / `ambient` | `music` | 全部 | 空间组 |
+| `position_mode` | value | `relative` / `absolute` | `relative` | `ambient` | 空间组 |
+| `attenuation` | value | `none` / `linear` | `linear` | `ambient` | 空间组 |
+| `x` / `y` / `z` | animated | float | 0 | `ambient` | 空间组 / 效果面板 |
+| `meta.listener` | value | `player` / `camera` | `player` | 脚本 | 脚本属性监听卡 |
 
-## 两类声音
+监听卡展示的是「声明 + 当前播放头检查结果」两段信息，前者来自文档，后者来自播放头位置，两者不混写。
 
-### `category=music`
+### 4.4 边界
 
-- 背景音乐/非空间声音；
-- 强制 `relative` 听者锚点，`attenuation=none`；
-- 位置固定到玩家位置；
-- `x/y/z` 可以保留在脚本里，但运行时不用；属性面板显示为禁用并标注“music 不参与空间定位”；
-- `meta.listener=camera` 不改变 `music` 的听者行为；
-- 游戏会压制原版背景音乐，但编辑器不把这件事做成开关。
+- 编辑器按当前文档判断「有没有 `CAMERA` 片段」，按播放头判断「当前有没有活跃 `CAMERA` 片段」，两者分别给不同级别的提示。
+- 多脚本并行时的顶层实例归属不展示、不推测。
+- 距离为 0 时 `linear` 与 `none` 无差别，只作说明，不改值。
+- 不画 3D 空间示意，不读取运行时听者坐标。
 
-### `category=ambient`
+## 五、为什么不选别的
 
-- 环境声音，参与空间定位；
-- `position_mode=relative`：坐标是相对实际听者的偏移；
-  - 听者是玩家时：玩家位置 + 偏移；
-  - 听者是相机时：相机位置 + 偏移；
-- `position_mode=absolute`：坐标是世界绝对坐标，不跟随听者；
-- `attenuation=none`：无距离衰减；
-- `attenuation=linear`：按距离线性衰减；
-- `x/y/z` 可动画；有帧进效果面板。
-
-## `category` 切换
-
-`category` 是语义开关，不是结构类型。切换时：
-
-1. 保留 `position_mode` / `attenuation` / `x/y/z` 原值；
-2. 切到 `music` 后，空间组显示但禁用，标注“music 固定相对玩家、无衰减”；
-3. 切回 `ambient` 后，原值恢复可编辑；
-4. 一次撤销回到切换前。
-
-不自动删除空间字段，不把 `music` 的空间值写死成 0；这样切回 `ambient` 不会丢作者已调好的偏移。
-
-## 监听卡
-
-`Script Properties` 增加“音频监听”卡：
-
-```text
-音频监听
-listener   [ 玩家 player ][ 相机 camera ]
-当前播放头：玩家（没有活跃 CAMERA 片段）
-```
-
-### 显示规则
-
-- `listener=player`：显示“相对声源以玩家位置为锚点”。
-- `listener=camera` 且当前播放头有活跃 `CAMERA` 片段：显示“相对声源以相机位置为锚点”。
-- `listener=camera` 且当前播放头没有活跃 `CAMERA` 片段：显示“当前回落玩家”；这是文档级提示，不修改 `listener`。
-- `listener=camera` 但整个脚本没有 `CAMERA` 片段：显示警告“没有 CAMERA 片段，监听始终回落玩家”，并提供“定位到 CAMERA 轨”。
-- `category=music` 的片段不参与监听提示；监听卡只说明相对声源锚点。
-
-### 顶层实例规则
-
-- 运行时只检查顶层实例的活跃 `CAMERA` 片段；并行脚本不叠加监听。
-- 编辑器按当前文档检查“是否有 CAMERA 片段”，按播放头检查“当前是否有活跃 CAMERA 片段”。
-- 多脚本并行属于播放期状态，编辑器不伪造顶层实例选择；监听卡只展示当前文档的声明和当前播放头检查。
-
-## 空间控件
-
-`AudioSpatialField` 由四部分组成：
-
-1. `category` 分段开关：`music` / `ambient`；
-2. `position_mode` 分段开关：`relative` / `absolute`；
-3. `attenuation` 分段开关：`none` / `linear`；
-4. `x/y/z` 三行数值，带“相对听者偏移”或“世界坐标”标签。
-
-规则：
-
-- `category=music` 时 2/3/4 全部禁用；
-- `ambient + relative`：标签“听者偏移”；说明“实际听者 = 玩家或相机”；
-- `ambient + absolute`：标签“世界坐标”；
-- `ambient + none`：标签“无衰减”；
-- `ambient + linear`：标签“线性衰减”；
-- `x/y/z` 有帧时，空间组只显示“在效果面板编辑”摘要，不重复值控件；
-- 不画 3D 场景、不采样玩家/相机位置、不做实时空间预览。
-
-## 监听与相对声源
-
-| `listener` | `position_mode` | 相对声源锚点 | 绝对声源 |
+| 备选方案 | 做法 | 代价 | 为什么没选 |
 |---|---|---|---|
-| `player` | `relative` | 玩家位置 + 偏移 | 世界坐标，不受影响 |
-| `player` | `absolute` | 不适用 | 世界坐标 |
-| `camera`（有活跃 CAMERA） | `relative` | 相机位置 + 偏移 | 世界坐标，不受影响 |
-| `camera`（无活跃 CAMERA） | `relative` | 玩家位置 + 偏移（回落） | 世界坐标，不受影响 |
+| 把 `music` 与 `ambient` 做成两种片段类型 | 结构上分开 | 语义最清晰 | 会改动脚本结构，等于新增类型，越过本轮边界 |
+| `category=music` 时自动清零 `x/y/z` | 切到 music 就写 0 | 界面干净 | 切回 `ambient` 会丢掉作者调好的偏移 |
+| 监听只显示声明值 | 监听卡只写 `player`/`camera` | 实现最简单 | 作者会以为设了 camera 就生效，实际常回落玩家 |
+| 监听卡自动改写 `listener` | 检测到没有 `CAMERA` 片段就改成 `player` | 「自动修好」 | 静默改文档，作者不知道被改过 |
 
-- `music` 不按上表；它固定相对玩家、无衰减。
-- `absolute` 声源永远不跟随听者；监听切换只影响 `relative`。
-- `camera` 监听不会把 `absolute` 坐标改成相对坐标。
+**本方案的缺点**：
 
-## 本地校验
+- 监听卡要同时表达声明和实际状态，文案容易变长。
+- `category=music` 时禁用空间控件会让面板出现一整块灰控件，需要靠文案解释。
+- 相机听者的真实效果依赖运行时，编辑器只能给文档级与播放头级判断，不能给最终结论。
 
-| 检查 | 级别 | 处理 |
+## 六、实现结果
+
+状态：未实现
+
+空间控件、监听卡与回落提示尚未落地。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `meta.listener=camera`，脚本无 `CAMERA` 片段 | warn | 监听卡黄点；“始终回落玩家” |
-| `meta.listener=camera`，播放头无活跃 `CAMERA` 片段 | info | 监听卡“当前回落玩家” |
-| `category=music`，`x/y/z` 有非零值 | info | 空间组标“music 不读，值保留” |
-| `category=music`，`position_mode=absolute` | info | 只提示不生效，不自动改值 |
-| `category=ambient`，`attenuation=linear` 且距离为 0 | info | 空间组提示“距离 0 无衰减差” |
-| `x/y/z` 非有限 | block | 拒绝提交 |
+| 两类声音语义 + 监听卡回落提示 | 未实现 | — |
 
-## 验收标准
+**验收要点**
 
-1. `category=music`：空间组禁用，提示“固定相对玩家、无衰减”；`x=5` 仍保留，切回 `ambient` 后 5 恢复可编辑。
-2. `category=ambient`、`position_mode=relative`、`x=2`：标签“听者偏移”，说明实际听者可能是玩家或相机。
-3. `category=ambient`、`position_mode=absolute`、`x=100`：标签“世界坐标”，切换 `listener` 不改变 x。
-4. `listener=player`：监听卡显示“相对声源以玩家为锚点”。
-5. `listener=camera` 且播放头在 CAMERA 片段内：显示“以相机为锚点”。
-6. `listener=camera` 且播放头在 CAMERA 空档：显示“当前回落玩家”；`listener` 值不改。
-7. `listener=camera` 且脚本无 CAMERA 片段：监听卡警告“没有 CAMERA 片段，始终回落玩家”。
-8. `category=music` + `listener=camera`：监听卡仍显示 camera，但说明“music 不受监听影响”；不产生“相机听者生效”的错误结论。
-9. `attenuation=none`：空间组显示“无距离衰减”；`linear` 显示“线性衰减”。
-10. 保存重开：`listener`、`category`、`position_mode`、`attenuation`、`x/y/z` 原样恢复。
+- `category=music` 时空间组禁用并提示「固定相对玩家、无衰减」，`x=5` 保留，切回 `ambient` 后可编辑。
+- `ambient + relative + x=2` 时标签为「听者偏移」，说明实际听者可能是玩家或相机。
+- `ambient + absolute + x=100` 时标签为「世界坐标」，切换 `listener` 不改变该值。
+- `listener=player` 时监听卡显示以玩家为锚点。
+- `listener=camera` 且播放头在 `CAMERA` 片段内时显示以相机为锚点。
+- `listener=camera` 且播放头在镜头空档时显示「当前回落玩家」，`listener` 值不变。
+- 脚本无 `CAMERA` 片段时给出「始终回落玩家」警告。
+- `category=music` 配 `listener=camera` 时不产生「相机听者已生效」的错误结论。
+- `attenuation` 的 `none`/`linear` 在空间组有对应文案。
+- 保存重开后 `listener`、`category`、`position_mode`、`attenuation`、`x/y/z` 原样恢复。

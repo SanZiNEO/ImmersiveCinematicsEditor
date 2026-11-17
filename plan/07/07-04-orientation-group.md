@@ -1,205 +1,127 @@
-# 07-04 朝向组
+# 朝向组
 
-## 目标
+> 状态：未实现
+> 范围：CAMERA 朝向字段的优先级链、支路可见性、基准与锁的语义
+> 关联：02 字段目录、03 文档模型、06 双面板归属、07-03 点源五形态
 
-把 CAMERA 的朝向字段做成一条可读的优先级链：
+## 一、摘要
 
-```text
-look_at > tangent > manual
-```
+朝向字段比位置更绕：yaw/pitch/roll 三个角度之外，还有「注视目标」「切线方向」「基准」「锁」四层机制，最终生效的是哪一层取决于当前字段组合。朝向组要做的，是把这条优先级链在界面上变得可读——作者一眼能看出现在哪个支路在生效、哪些字段被压住、被压住的字段为什么不参与求值。当前状态：未实现。
 
-作者在属性面板/效果面板里只看到当前生效支路需要的控件；被压住的字段保留数据但不参与求值。`yaw/pitch/roll`、锁、基准、线端点、切线偏移都按 03 文档模型编辑。
+## 二、为什么做
 
-## 字段表
+### 2.1 问题
 
-| 字段 | 形态 | 类型 | 插值 | 默认 | 组 |
-|---|---|---|---|---|---|
-| `yaw` | animated | float angle | linear | `0` | orientation |
-| `pitch` | animated | float angle | linear | `0` | orientation |
-| `roll` | animated | float angle | linear | `0` | orientation |
-| `yaw_lock` | animated | nullable float angle | linear | `null` | orientation |
-| `pitch_lock` | animated | nullable float angle | linear | `null` | orientation |
-| `yaw_base` | animated | enum `world/entity/line` | step | `world` | orientation |
-| `pitch_base` | animated | enum `world/entity/line` | step | `world` | orientation |
-| `yaw_base_selector` | animated | ref | step | `@p` | yaw_base_from |
-| `yaw_base_from` | animated | ref | step | `""` | yaw_base_from |
-| `yaw_base_from_x/y/z` | animated | float | linear | `null` | yaw_base_from |
-| `yaw_base_from_offset.x/y/z` | animated | float | linear | `0` | yaw_base_from |
-| `yaw_base_from_offset.space` | animated | enum `world/base` | step | `world` | yaw_base_from |
-| `yaw_base_from_freeze` | animated | bool | step | `false` | yaw_base_from |
-| `yaw_base_to` | animated | ref | step | `""` | yaw_base_to |
-| `yaw_base_to_x/y/z` | animated | float | linear | `null` | yaw_base_to |
-| `yaw_base_to_offset.x/y/z` | animated | float | linear | `0` | yaw_base_to |
-| `yaw_base_to_offset.space` | animated | enum `world/base` | step | `world` | yaw_base_to |
-| `yaw_base_to_freeze` | animated | bool | step | `false` | yaw_base_to |
-| `look_at` | animated | enum `none/player/coordinate/entity/block` | step | `none` | look_at |
-| `look_at_selector` | animated | ref | step | `@p` | look_at |
-| `look_at_part.x/y/z` | animated | float | linear | `50` | look_at |
-| `look_at_target_x/y/z` | animated | float | linear | `null` | look_at |
-| `look_at_target_structure` | animated | string | step | `""` | look_at |
-| `look_at_target_block` | animated | string | step | `""` | look_at |
-| `look_at_offset.x/y/z` | animated | float | linear | `0` | look_at |
-| `look_at_offset.space` | animated | enum `world/base` | step | `world` | look_at |
-| `look_at_freeze` | animated | bool | step | `false` | look_at |
-| `orient` | value | enum `manual/tangent` | — | `manual` | orientation |
-| `yaw_offset` | animated | float angle | linear | `0` | orientation |
-| `pitch_offset` | animated | float angle | linear | `0` | orientation |
+- 作者填了 `yaw=15`，保存后发现相机根本没朝这个方向，因为 `look_at` 不为 `none` 且目标可解析——`yaw` 整个被跳过。现在没有任何界面提示这件事。
+- `orient=tangent` 时，`yaw_offset`/`pitch_offset` 才叠加；`orient=manual` 时这两个字段被忽略。字段照常显示、照常能填、照常能打帧，运行时不读。
+- `yaw_base` 与 `pitch_base` 各自独立，可以一个是 `entity`、另一个是 `world`；`yaw_base_selector` 一个字段同时服务两个轴。作者容易以为只有 yaw 用得上它。
+- 线基准的端点不可解析、或两端水平退化时，角度会回落到 0 而不是保持原值。这个回落如果不可见，作者会以为自己的输入丢了。
 
-`orient` 是 `value`，没有 `keyframes`；永远在属性面板。`yaw_offset/pitch_offset` 有 `requires("orient=tangent")`。
+### 2.2 目标
 
-## 优先级
+- 组头显示当前生效的支路和回退情况，例如「`look_at=entity` 目标可解析：注视支路」或「`orient=tangent` 无切线：回退 manual」。
+- 只有当前支路需要的控件可编辑；被压住的控件禁用或隐藏，但数据保留。
+- 目标不可解析时给出警告，不把角度静默改成 0。
+- 角度按输入原样写，不做 `[-180,180]` 归一化。
 
-### 1. `look_at`
+### 2.3 非目标
 
-当 `look_at != none` 且目标可解析：
+- 不改模组的求值顺序，不改字段集合。
+- 不在效果面板里画角度合并帧或朝向汇总行。
+- 不对角度做归一化或单位换算（度就是度）。
+- 不自动清理被压住字段的已有帧。
 
-```text
-yaw/pitch = 当前世界位置 → 目标点方向
-roll = roll 规格
-```
+## 三、方案
 
-- `look_at` 的形态、载荷、取点、偏移、冻结见 07-03。
-- `look_at_freeze` 只在 `look_at=entity` 时被读取；其他分支禁用。
-- `yaw/pitch`、`yaw_lock/pitch_lock`、`yaw_base*`、`pitch_base*`、`yaw_offset/pitch_offset` 不参与。
-- `roll` 保留。
-- 目标不可解析：回退到切线；没有切线再回退手动。
-- 坐标/结构/方块/玩家的目标不可解析：显示 `warn`；不把角度改成 0。
+优先级链是三段：`look_at` 压过 `tangent`，`tangent` 压过 `manual`。组头把当前声明和实际回退都写出来，作者不用自己推。
 
-### 2. `orient=tangent`
+第一段，`look_at != none` 且目标可解析：yaw/pitch 由「当前位置 → 目标点」的方向决定，roll 保留；`yaw/pitch`、锁、基准、切线偏移全部不参与。目标不可解析时回退到切线，没有切线再回退手动，并显示「look_at 目标不可解析」。坐标/结构/方块/玩家的目标不可解析时给 `warn`，不把角度改成 0。
 
-当 `look_at` 不生效，且位置方向有非零切线：
+第二段，`orient=tangent` 且位置方向有非零切线：yaw/pitch 由切线算，`yaw_offset`/`pitch_offset` 叠加在上面，roll 保留。切线来自当前路径/位置采样；没有路径时来自位置关键帧差分。水平分量近似 0 时按 `yaw=0`、`pitch=±90` 处理。没有切线则回退手动，并禁用切线偏移控件。
 
-```text
-yaw   = atan2(dz, dx) - 90 + yaw_offset
-pitch = -atan2(dy, horizontal) + pitch_offset
-roll  = roll
-```
+第三段，手动：`yaw = (yaw_lock ?? yaw_base) + yaw`，pitch 同理，roll 直接输出。`yaw_base` 与 `pitch_base` 各自是 `world` / `entity` / `line`：
 
-- 水平分量近似 0：`yaw=0`、`pitch=±90`。
-- 切线来自当前路径/位置采样；没有路径时来自位置关键帧差分。
-- `yaw_offset/pitch_offset` 只在切线支叠加；手动支忽略。
-- `orient=manual` 时偏移控件禁用；已有关键帧保留。
+- `world` 基准是 0。
+- `entity` 基准取实体身体水平朝向（yaw）和视线 pitch；`yaw_base_selector` 一个字段同时服务两个轴，空值为 `@p`；实体解析失败按 0 处理并给警告。
+- `line` 基准任一轴为 `line` 就显示端点与载荷；端点不可解析或水平分量过小时角度取 `{0,0}` 并回退 world 基准，同时给警告。
 
-### 3. 手动
+`yaw_lock`/`pitch_lock` 为 `null` 时用基准；有值时直接替换基准，再叠加 `yaw`/`pitch`。所以 `yaw_lock=90` + `yaw=15` + `yaw_base=entity` 的结果是 105，与基准无关。
 
-```text
-yaw   = (yaw_lock ?? yaw_base) + yaw
-pitch = (pitch_lock ?? pitch_base) + pitch
-roll  = roll
-```
-
-- `yaw_base`、`pitch_base` 各自独立：`world` / `entity` / `line`。
-- `world` 基准 = 0。
-- `entity` 基准：
-  - yaw 取实体身体水平朝向；
-  - pitch 取实体视线 pitch；
-  - `yaw_base_selector` 一个字段同时服务两个轴；空 = `@p`。
-  - 实体未解析 = 0，并给 `warn`。
-- `line` 基准：
-  - 任一轴为 `line` 就显示 `yaw_base_from/to` 与载荷；
-  - 连线方向给 yaw/pitch；
-  - 端点不可解析或水平分量 < `1e-6` = `{0,0}`，回退 world 基准，并给 `warn`。
-- `yaw_lock/pitch_lock` 为 `null` 时用基准；有值时直接替换基准，再叠加 `yaw/pitch`。
-- `roll` 不参与优先级，直接输出。
-
-## 生效矩阵
+生效矩阵（组头也用这套措辞）：
 
 | `look_at` | `orient` | 生效 | 禁用 |
 |---|---|---|---|
 | 非 none 且目标可解析 | 任意 | look_at | yaw/pitch、锁、基准、切线偏移 |
-| 非 none 但目标不可解析 | tangent | tangent | 同上；显示 look_at 失败 |
+| 非 none 但目标不可解析 | tangent | tangent | 同上，另显示 look_at 失败 |
 | 非 none 但目标不可解析 | manual | manual | 锁/基准恢复可用 |
 | none | tangent 且有切线 | tangent | 锁、基准、look_at 载荷 |
-| none | tangent 但无切线 | manual | 切线偏移禁用；显示回退 |
-| none | manual | manual | 切线偏移禁用 |
+| none | tangent 但无切线 | manual | 切线偏移；显示回退 |
+| none | manual | manual | 切线偏移 |
 
-UI 在组头显示当前声明链与回退提示：
+`orient` 是静态值字段，没有关键帧，永远在属性面板；`yaw_offset`/`pitch_offset` 有 `requires("orient=tangent")`，条件不满足时控件禁用、已有帧保留，效果面板行显示「依赖不满足」。
 
-```text
-look_at=entity → 目标可解析：注视支路
-look_at=entity → 目标不可解析：回退 tangent/manual
-orient=tangent → 无切线：回退 manual
-```
+## 四、技术细节
 
-## 控件与禁用
+### 4.1 核心模型
 
-### `look_at` 行
+朝向的最终结果是三个角度，但输入分成四层：注视目标（一个点）、切线（一个方向）、基准（一个参考角）、锁（一个覆盖值）。求值是一条短路链，前一层成立就不看后面的层。编辑器需要做的不是重算这条链，而是把「哪一层现在成立」反推成界面状态。
 
-- `look_at=none`：载荷全部隐藏；`look_at_selector` 等已有值显示“不读取”。
-- `look_at=player`：只显示枚举；selector 不参与。
-- `look_at=coordinate`：坐标 / 结构二选一；结构非空时坐标禁用。
-- `look_at=entity`：selector + part；冻结可用。
-- `look_at=block`：block 字符串；冻结禁用。
-- `look_at_offset.space=base` 且当前不是 `base`：显示 `warn`。
+### 4.2 契约
 
-### 手动基准
+- `look_at` 的形态、载荷、取点、偏移、冻结完全走 07-03 的约定；`look_at_freeze` 只在 `look_at=entity` 时被读取。
+- `look_at_offset.space=base` 且当前不是 `base` 空间时显示警告，值保留。
+- 线基准端点的冻结只在对应端点是选择器时可用。
+- 切线偏移不改变 `yaw_base`/`pitch_base`；切线支根本不读基准。
+- 角度不做归一化：`yaw=720`、`pitch=-540` 原样写入。
 
-- `yaw_base=entity` 或 `pitch_base=entity`：显示 `yaw_base_selector`。
-- 只有 `yaw_base=line` 或 `pitch_base=line`：显示 `yaw_base_from/to` 和载荷。
-- `yaw_base_from/to` 的 freeze 只在对应端点是选择器时可用。
-- `yaw_base_from_offset.space=base` 且无 base 参考系：`warn`。
+### 4.3 数据形态
 
-### 切线偏移
+朝向字段同样落在 `clips[].objects[path]` 的 `AnimObject` 里。`yaw/pitch/roll`、`yaw_lock/pitch_lock`、`yaw_base_from/to` 的坐标、偏移分量、`look_at_part`、`look_at_target_x/y/z` 是连续值；`yaw_base`、`pitch_base`、`look_at`、`yaw_base_selector`、`yaw_base_from/to`、`look_at_target_structure`、`look_at_target_block`、冻结字段是 step；`orient` 是 `value`，没有 `keyframes`。
 
-- `orient=tangent` 才可编辑 `yaw_offset`/`pitch_offset`。
-- `orient=manual`：控件禁用；已有帧保留；效果面板行显示“依赖不满足”。
-- 切线偏移不改变 `yaw_base`/`pitch_base`；切线支不读基准。
+### 4.4 边界
 
-## 双面板归属
+- `orient` 永远不进效果面板。
+- `yaw/pitch/roll` 有帧时三行各自独立，不合并。
+- `look_at`、`yaw_base` 等 step 字段有帧时作为行进入效果面板，不出现「朝向全字段组」。
+- `yaw_offset/pitch_offset` 有帧但 `orient=manual` 时，行保留、值保留、运行时不读。
+- 主时间轴不出现朝向行、角度节点或 `orient` 控件。
 
-### 属性面板
+## 五、为什么不选别的
 
-- 朝向组头“朝向”。
-- `orient`（value）永远在这里。
-- `yaw/pitch/roll` 无帧时显示静态值 + 时钟。
-- `yaw_base/pitch_base`、`yaw_base_selector`、`yaw_base_from/to`、`look_at` 等 step 字段无帧时在这里。
-- `yaw_lock/pitch_lock` 无帧时在这里。
-- 已有关键帧的叶子不在这里重复。
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 全部字段常显，靠文档解释优先级 | 不隐藏、不禁用 | 实现最简单 | 作者填了不生效的字段却不知道，这是当前最主要的问题来源 |
+| 把优先级链做成显式的模式选择 | 让作者直接选「注视/切线/手动」 | 心智模型简单 | 优先级由字段组合隐式决定（比如 `look_at` 有值就走注视），显式模式会与字段状态打架 |
+| 自动清理被压住字段的帧 | 切支路时删掉不用的关键帧 | 数据干净 | 切回去原数据没了；作者无法「先看看手动支路长什么样」 |
+| 目标不可解析时按 0 度输出 | 保持角度字段有值 | 求值不会失败 | 0 度是一个合法的朝向，作者会误以为「朝向真的是朝东」，掩盖了配置错误 |
+| 角度归一化到 `[-180,180]` | 输出更整齐 | 数值规整 | 运行时按原值算，编辑器归一化会让预览与游戏不一致；且 720 与 0 在插值上不同 |
+| 给 yaw/pitch 各配一个基准选择器 | 轴与字段一一对应 | 概念直白 | schema 里只有一个 `yaw_base_selector`，两个轴共用；编辑器不能发明字段 |
 
-### 效果面板
+**本方案的缺点**：
 
-- 只列已有关键帧的叶子。
-- `orient` 永远不进来。
-- `yaw/pitch/roll` 有帧时三行各自节点，不合并。
-- `look_at`、`yaw_base` 等 step 字段有帧时作为行进入；不出现“朝向全字段组”。
-- `yaw_offset/pitch_offset` 有帧但 `orient=manual`：行显示“依赖不满足”，值保留，运行时不读取。
+- 三段优先级链即使有组头提示，作者仍需理解「填了不一定生效」这件事。
+- 被压住的字段保留数据，界面上会出现一批禁用控件，视觉噪音不小。
+- `yaw_base_selector` 一个字段服务两个轴，当两个轴基准不同（一个 entity 一个 world）时，界面要额外解释它为什么还显示。
+- 线基准的退化回落是 0 度，虽然给了警告，但 0 度本身是有效值，作者容易忽略警告。
 
-## 组件
+## 六、实现结果
 
-```text
-src/components/orientation/
-  OrientationGroupHeader.vue
-  OrientationModeField.vue
-  LookAtBranchFields.vue
-  OrientationManualFields.vue
-  OrientationBaseFields.vue
-  OrientationLineEndpointFields.vue
-  OrientationTangentFields.vue
-  OrientationEffectiveBanner.vue
-src/model/orientation/
-  orientationBranch.ts      优先级/生效/禁用/警告
-  orientationAngles.ts      yaw/pitch/roll 读写；不做归一化
-  orientationBase.ts        world/entity/line 基准可见性
-```
+状态：未实现
 
-- `LookAtBranchFields` 复用 07-03 的点源/偏移/冻结组件，不复制表单。
-- `OrientationBaseFields` 的 selector 一个字段服务 yaw/pitch 两个轴。
-- `OrientationEffectiveBanner` 只显示派生结果，不改字段。
+按本方案实现优先级链的界面投影、支路可见性与禁用、基准与锁的语义提示、退化回落警告；字段集合与模组求值逻辑不变。
 
-## 验收
+| 原设计 | 实际实现 | 偏离原因 |
+|---|---|---|
+| — | — | 尚未实现 |
 
-1. `look_at=none`、`orient=manual`、`yaw_base=world`：yaw/pitch/roll 可编辑；切线偏移禁用；保存通过。
-2. `look_at=entity` 且目标可解析：yaw/pitch、锁、基准禁用；roll 可编辑；保存后朝向指向实体。
-3. `look_at=entity` 但 selector 查不到实体：显示“目标不可解析，回退 tangent/manual”；不改成 0 度。
-4. `orient=tangent`、有位置路径、无 look_at：yaw/pitch 由切线算；yaw_offset/pitch_offset 可编辑并叠加上去。
-5. 同一文档 `orient=manual` 且 yaw_offset 已有帧：行显示依赖不满足；运行时不读取；切回 tangent 后恢复。
-6. `yaw_base=entity`、`pitch_base=world`：selector 显示；yaw 用实体身体朝向，pitch 用 world 基准 0。
-7. `pitch_base=entity`、`yaw_base=world`：selector 仍显示，并服务 pitch。
-8. `yaw_base=line`、`yaw_base_from=@p`、`yaw_base_to=coordinate (10,64,0)`：显示端点；from freeze 可用，to freeze 禁用。
-9. 线端点重合或水平退化：角度回退 0，显示 `warn`；不抛异常。
-10. `yaw_lock=90`、`yaw=15`、`yaw_base=entity`：结果 `105`；`yaw_lock=null` 时用实体基准。
-11. `yaw=720`、`pitch=-540`：按输入角度写，不做 `[-180,180]` 归一化。
-12. `look_at=coordinate` + structure：坐标字段禁用；清空 structure 后恢复坐标。
-13. 属性面板开 `yaw` 时钟：yaw 进效果面板；`orient` 仍留属性面板；组头“1 项在效果面板”。
-14. 效果面板关闭 `roll` 动画：roll 回属性面板；一次撤销恢复。
-15. 主时间轴不出现朝向行、角度节点或 `orient` 控件。
+验收要点：
+
+- `look_at=none`、`orient=manual`、`yaw_base=world`：三角度可编辑、切线偏移禁用、保存通过。
+- `look_at=entity` 目标可解析：角度、锁、基准禁用，roll 仍可编辑，游戏内朝向指向实体。
+- 目标不可解析：组头显示回退到切线或手动，角度不被改成 0。
+- `orient=tangent` 且有位置路径：角度由切线算出，切线偏移叠加生效；无切线时回退手动并禁用偏移。
+- `orient=manual` 且切线偏移已有帧：行显示依赖不满足、值保留、运行时不读；切回 tangent 后恢复。
+- `yaw_base=entity` 与 `pitch_base=world`（以及反向组合）：基准选择器在任一侧为 `entity` 时显示，并只影响对应轴。
+- 线基准端点：两端各自显示载荷，冻结只在选择器端点可用；端点重合或水平退化时角度回退 0 并给警告，不抛异常。
+- `yaw_lock` 有值时替换基准再叠加角度；`yaw=720`、`pitch=-540` 原样写入不归一化。
+- `orient` 只在属性面板；有帧的叶子进效果面板；主时间轴无朝向行。

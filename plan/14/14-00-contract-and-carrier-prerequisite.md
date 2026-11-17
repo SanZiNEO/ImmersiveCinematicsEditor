@@ -1,190 +1,115 @@
-# 14-00 合同、载体指针与 GPU 前置审计
+# AUI 迁移前置：合同、载体指针与 GPU 租约
 
-> 前置：13 全部出口 PASS
-> 后续：14-01～14-09
-> 状态：设计合同；审计结果未执行时不填 PASS
+> 状态：未实现
+> 范围：`api/editor` 七接口的可用性核对、单键入口的载体指针、`CaptureHub` 的 GPU 纹理出口与所有权
+> 关联：14-01 附属模组、14-03 帧源、14-04 端点
 
-## 1. 职责
+## 一、摘要
 
-在写 AUI Screen 之前，先把三件事钉死：
+14 轮把编辑器从 Electron 窗口搬进游戏内的 AUI 宿主。搬之前要先确认三件事真的可用，而不是停在纸面：主模组 `api/editor` 的七个接口、单键入口背后的载体指针、以及捕获画面能否以 GPU 纹理的形式被同进程消费者借用。本文只闭合这三件事的合同、所有权与前置缺口，不写 Screen、不写页面、不写面板。
 
-1. 01 的 `api/editor` 7 个接口在当前主模组里真实可用，不是只有文字合同。
-2. 单键入口需要一个载体指针：主模组注册 `WEBUI`，AUI 附属模组注册 `INGAME`，`F6` 只调用活动载体。
-3. `CaptureHub` 已有 FBO/纹理，但 `texId`/`fboId` 私有、`captureFrame` 总是走 CPU PBO 读回；14 只增加 GPU 租约出口，不能重写捕获中心，也不能让 AUI 消费者调用 `CaptureHub.close()`。
+## 二、为什么做
 
-本文件不实现 AUI 页面，不写 Screen、不写面板；只闭合合同、所有权与前置缺口，供 14-01～14-09 使用。
+### 2.1 问题
 
-## 2. 当前事实
+01 定下的七个接口是设计合同，不是已实现代码。主模组当前只有 WebSocket 会话这一条实现路径：端点身份包在会话里，推送散落在三个类里，没有进程内端点，也没有统一的会话挂载入口。如果直接开始写 AUI，第一屏就会卡在"接口不存在"。
 
-### 2.1 01 合同
+入口也是缺的。主模组现在只有 WebUI 预览屏这一条路径和一个旧键位；没有"活动载体"这个概念，附属模组也没有自己的入口。谁注册入口键、注册几个键，没有定论时最省事的做法就是各注册一个，结果是用户面对两个打开键和两个可能同时存在的界面。
 
-01 设计已冻结 7 个接口 + `EditorCommandAck`：
+画面更微妙。`CaptureHub` 确实已经有固定的 FBO 和纹理，但纹理标识是私有的，`captureFrame` 每次都会走 CPU 读回。照现状消费，AUI 只能拿到 CPU 帧再上传，等于把桌面端那条 H264/RGBA 预览路径搬进游戏进程：多一次拷贝、多一帧延迟，还得为它维护一套编码链路。
 
-| 接口 | 职责 | 当前主模组事实 |
+### 2.2 目标
+
+- 七个接口在主模组可编译、可被附属模组访问；关键消息发送能返回明确的成功或失败，不静默丢弃。
+- 一个可改绑的单键只调活动载体：主模组注册 `WEBUI`，附属模组注册 `INGAME`，AUI 能把活动指针指向自己，主模组保留可用性校验与回退。
+- 捕获纹理能以租约形式交给同进程消费者；只有 GPU 消费者时不做 CPU 读回；租约释放不影响纹理与其他消费者。
+- 依赖方向与打包边界定死：主模组不依赖 AUI，AUI 不进任何发布 jar。
+
+### 2.3 非目标
+
+- 不写 AUI 页面、Screen、面板，也不写帧源/端点的具体实现。
+- 不重写 `CaptureHub` 的捕获、格式协商与 CPU 预览路径。
+- 不改 01 已冻结的接口语义，不新增第二套消息名、字段或信封。
+- 不做 Fabric AUI。
+
+## 三、方案
+
+用户视角只有两件事：按一个键会打开哪个编辑器，以及游戏画面怎么出现在编辑器中央。
+
+入口不再"每个实现注册一个键"，而是收敛成一个指针。按键只做一件事：问入口"现在谁是活动载体"，然后打开它。主模组把自己的 WebUI 预览屏注册成 `WEBUI` 载体；附属模组把 AUI Screen 注册成 `INGAME` 载体，并在初始化时把活动指针指向自己。指针可改，但可用性由主模组判断：AUI 不可用时回退到 `WEBUI`，两个都不可用时给明确提示，而不是打开一个空壳。同一时刻只允许一个载体打开，切换载体先关再开。
+
+画面方面，AUI 不是"再抓一次图"，而是借走捕获中心已经渲染好的那张纹理。借出以租约形式进行：租约期间消费者能看到纹理标识、尺寸、格式代数、帧号与时间，能决定这一帧画不画；租约结束时只注销自己，纹理还在，WebUI 的 CPU 预览照旧可用。
+
+哪些指针附属模组能动，哪些不能，是本轮最容易出错的地方，单独列出：
+
+| 指针 | 附属模组能否改 | 说明 |
 |---|---|---|
-| `EditorEndpoint` | 端点身份、状态/关键消息发送 | 当前 `WebSocketSession` 包私有；没有进程内端点实现 |
-| `EditorPush` | 广播/定向/端点列表 | 当前推送分散在 `WebEditorApi`/`PreviewStreamer`/`WebPreviewScreen`；没有统一抽象 |
-| `EditorSessionApi` | `attach/detach/handle` | 当前 `WebEditorApi.handle` 绑定 WebSocket 会话；没有通用 attach/detach |
-| `EditorFrameSource` | GPU 纹理租约 | 当前不存在；`CaptureHub` 无公开纹理 getter |
-| `EditorPlaybackControl` | seek/play/pause/stop | 当前播放控制与 WebUI 会话耦合，需适配为宿主无关 |
-| `EditorFlightControl` | 飞控 owner/enter/exit/state | 当前退出依赖 `WebPreviewScreen.activeScreen`，`flight.exit` 有广播风险 |
-| `EditorHostApi` | 总开关、模式、能力、schema | 当前无 `editor` 总开关；无 `modes()`/`capabilities()` |
+| 活动载体 | 能 | 指向 `INGAME`；主模组校验可用性并保留回退 |
+| AUI 页面根 | 能 | 随附属模组走，开发期可被游戏目录覆盖 |
+| 帧源消费 | 能 | 只借纹理租约，不替换捕获中心 |
+| 本 Screen 的输入路由 | 能 | 不改全局键位表 |
+| 消息路由/字段/信封 | 不能 | 由主模组权威服务保持 |
+| 飞控 owner 与退出通知 | 不能 | 由主模组飞控合同保持 |
+| 捕获中心所有权与关闭 | 不能 | 附属模组只持租约 |
 
-**结论**：01 是设计合同，不是已实现代码。14 开工前必须由 01 落地并由 13 验收；14 不在 AUI 里重定义 7 个接口。
+## 四、技术细节
 
-### 2.2 `CaptureHub`
+### 4.1 核心模型
 
-当前事实：
+三方各管一段。载体（`EditorCarrier`）回答四个问题：我是谁、在当前环境下能不能用、现在是否已经打开、打开与关闭怎么做；它不知道也不该知道另一个载体的界面类型。入口（`EditorEntry`）是唯一的调度者，持有活动指针，负责互斥、回退与关闭。GPU 租约是 `CaptureHub` 对外的最小出口：捕获中心继续拥有纹理，租约只表达"这一帧可以给谁看"，14-03 再把它包装成 `EditorFrameSource`。
 
-- `CaptureHub.INSTANCE` 是全局唯一捕获入口；`CaptureSpec(1920,1080,60)`。
-- `initFbo()` 生成 `texId`（`GL_RGBA8`、`GL_LINEAR`、`CLAMP_TO_EDGE`）和 `fboId`，把纹理挂在 `GL_COLOR_ATTACHMENT0`。
-- `captureFrame()` 先 `blitToFbo()`，然后总是绑 PBO、`glReadPixels`、映射、翻行、交给 `CapturedFrame`。
-- `Consumer` 只有 `needsFrame/onFrame/onCaptureFormatChanged/captureSpec`；没有 GPU 纹理消费者。
-- `texId`/`fboId` 私有；没有公开 getter；`close()` 是捕获中心级操作，会清消费者、删 FBO/PBO，不属于消费者 API。
-- 捕获挂点在 `Gui.render` 之后、`Screen.render` 之前；编辑器 UI 不会进入捕获画面。
+七个接口的分工不变：端点负责身份与发送，推送负责定向与广播，会话负责挂载与路由，帧源负责纹理租约，播放控制与飞控各自负责其领域，宿主接口回答总开关、模式、能力与 schema。
 
-**结论**：地图说“GPU 帧源已存在，只做小改适配”，准确含义是：**固定 FBO/纹理已经存在，缺的是公开的 GPU 租约/消费者出口，以及“只有 GPU 消费者时跳过 CPU 读回”的小改**。不能写成“CaptureHub 完全没有 GPU 纹理”，也不能写成“GPU 帧源已经可直接用”。
+### 4.2 契约
 
-### 2.3 载体指针
+- 入口只允许一个活动载体，同一时刻不能打开两个界面；切换载体必须"先关当前、再开目标"。
+- 载体的可用性由主模组判定，附属模组只能表达意愿；不可用时回退，不静默失败。
+- 载体类型不进入 `api/editor`：主模组侧只看到"一个可以打开的东西"，AUI 的 Screen 类型留在附属模组内部。
+- 入口不替代宿主总开关。总开关、模式列表、能力与 schema 仍由宿主接口回答，入口只负责"打开哪一个"。
+- 租约在渲染线程登记与注销；规格变化导致捕获目标重建时，代数加一，旧租约停止绘制，等新帧到达再恢复。
+- 纹理生命周期归捕获中心。租约释放不删纹理、不关闭捕获中心；捕获中心的关闭仍然只由主模组决定。
 
-当前主模组只有 `WebPreviewScreen` 路径和 F9 键；没有 `EditorEntry`、没有活动载体、没有 `EditorCarrier`。AUI 附属模组没有独立入口；若直接注册 F6，会与主模组键冲突。
+### 4.3 数据形态
 
-**结论**：14-00 需要新增一个不改变 7 接口语义的载体扩展，主模组持有 `F6` 键，AUI 只注册 `INGAME` 载体并改活动指针。
+租约携带的是元数据而不是像素：纹理标识、宽高、格式代数、帧号、时间戳、是否需要翻转、alpha 语义。格式代数是唯一能判断"这帧还能不能用"的依据，消费者不得用尺寸变化去猜。没有消费者需要帧时不做捕获，这一点沿用现有按需语义。
 
-## 3. 方案
+### 4.4 边界
 
-### 3.1 `EditorCarrier` 与 `EditorEntry`
+- 捕获中心不被消费者关闭，也不被消费者删除纹理。
+- GPU 路径不能拿 CPU 读回当回退：宁可报"暂无画面"，也不假装零拷贝。
+- 附属模组不得复制一张自己的纹理，也不得每帧把整帧搬到 CPU 再传回去。
+- 本文不产出可运行的界面；它产出的是合同、所有权规则与前置清单。
 
-新增在 `api/editor` 的宿主扩展：
+## 五、为什么不选别的
 
-```text
-EditorCarrier
-  id()                 -> "WEBUI" | "INGAME"
-  isAvailable(host)    -> boolean
-  isOpen()             -> boolean
-  open(host)           -> void / 明确失败
-  closeIfOpen(reason)  -> void
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 各实现直接开自己的 Screen | 按键处理里直接 new 目标界面 | 双入口、双界面叠加、回退逻辑散落各处 | 入口必须唯一，否则互斥无法保证 |
+| 附属模组注册自己的入口键 | 主模组留旧键，附属模组另加一个键 | 用户要记两个键；两个键可能同时打开两个界面 | 一个可改绑的键 + 活动指针更简单 |
+| AUI 复用 WebSocket 连本机 | 进程内也起服务、连回环 | 多一条网络栈、多一份鉴权、与"同进程"目标矛盾 | 进程内端点才是本轮要证明的东西 |
+| 复制捕获纹理给 AUI | 每帧从捕获纹理再拷一份 | 显存翻倍，两套生命周期 | 租约不改所有权，代价最小 |
+| 缺帧时回退 CPU 读回 | GPU 不可用就走 PBO | 掩盖 GPU 路径没接通，验收无法判定 | 缺帧就该显示占位，而不是换一条慢路 |
 
-EditorEntry
-  register(carrier)
-  setActive(carrierId) // AUI 可把指针指向 INGAME
-  activeCarrierId()
-  open()               // F6 调用
-  closeIfOpen(reason)
-```
+**本方案的缺点**：
 
-规则：
+- 多一层入口与租约，代码路径比"直接 new 一个 Screen"长，出问题时定位要多跳一次。
+- 代数机制要求消费者自己判断有效性，写错就花屏，且这类错误在小分辨率下不容易发现。
+- 本文自身不产出任何可见成果，只产出前置；它做错的时候，错误会延迟到 14-02 之后才暴露。
 
-- `EditorEntry` 只允许一个活动载体；同一时刻不能打开两个 Screen。
-- 主模组注册 `WEBUI` 载体；AUI 附属模组注册 `INGAME` 载体。
-- `setActive("INGAME")` 是 AUI 可改的“入口指针”；主模组保留 `isAvailable` 校验与回退。
-- 载体不可用时：`INGAME` 不可用 → 回退 `WEBUI`；`WEBUI` 不可用 → 明确提示，不打开空壳。
-- `F6` 只调 `EditorEntry.open()`；不直接 `new EditorAuiScreen()`，也不直接 `new WebPreviewScreen()`。
-- `EditorCarrier` 不传递 AUI 类型；AUI 类型只在附属模组内部。
-- `EditorEntry` 不替代 `EditorHostApi`；总开关、模式、能力仍由 `EditorHostApi` 回答。
+## 六、实现结果
 
-### 3.2 可改与不可改的指针
+状态：未实现
 
-| 指针 | AUI 附属模组能否改 | 说明 |
+合同与所有权规则已定，尚无代码与真机证据。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `EditorEntry.activeCarrier` | 能 | 指向 `INGAME`；主模组校验可用性 |
-| AUI 页面根 | 能 | `assets/apricityui/apricity/editor/`；开发期 `<gameDir>/apricity/editor/` |
-| AUI 帧源消费 | 能 | 注册 `EditorFrameSource` 消费者，借用纹理 |
-| AUI 输入路由 | 能 | 只限本 Screen；不改全局键位表 |
-| 消息路由/字段/信封 | 不能 | 由 `EditorSessionApi`/主模组权威服务保持 |
-| 飞控 owner/`flight.exit` | 不能 | 由 `EditorFlightControl` 主模组实现保持 |
-| `CaptureHub` 所有权/`close()` | 不能 | 附属模组只持租约，不持捕获中心 |
+| — | — | — |
 
-### 3.3 GPU 租约前置
+### 验收要点
 
-`CaptureHub` 增加最小的 GPU 消费者路径：
-
-```text
-GpuConsumer
-  needsGpuFrame(nowNanos)
-  onGpuFrame(GpuFrame)
-  onGpuFormatChanged(width,height,fps,generation)
-
-GpuFrame
-  textureId, width, height, generation, frameId, timeNanos, flipY, alpha
-```
-
-行为：
-
-1. `registerGpu/unregisterGpu` 只在渲染线程增删。
-2. `captureFrame` 先 `blitToFbo`；有 GPU 消费者时调用 `onGpuFrame`；只有存在 CPU `Consumer` 需要帧时才走 PBO 读回。
-3. 规格变化重建 FBO 时 generation +1；旧 generation 的租约停止绘制，等待新帧。
-4. 纹理仍由 `CaptureHub` 拥有；租约 `release()` 只注销消费者，不 `glDeleteTextures`，不 `close()`。
-5. `needsGpuFrame` 全为 false 时不做捕获；与现有按需捕获语义一致。
-6. 现有 WebUI CPU 消费者路径不改变；GPU 路径不能把 CPU 读回当成回退。
-
-`EditorFrameSource` 在 14-03 实现为上述租约的适配；14-00 只确认 API 形状与所有权。
-
-### 3.4 附属模组前置
-
-14-01 才写 `mods.toml`，这里先冻结关系：
-
-- 主模组 `immersive_cinematics`：不声明 `apricityui`；不加载 AUI 类；提供 `api/editor` 和捕获/播放/飞控权威。
-- 附属模组 `immersive_cinematics_editor`：Forge 1.20.1；依赖 `immersive_cinematics [0.3.6,0.4)`、`apricityui [1.3.1,1.4)`（客户端必需）。
-- AUI 1.3.1 作为外部前置，不打包；缺 AUI 时由 Forge 依赖界面报缺前置，不类加载崩溃。
-- Fabric 模块保留骨架；不接 AUI；WebUI→Fabric 不受影响。
-
-## 4. 输入输出与约束
-
-### 4.1 输入
-
-- 01 落地后的 `api/editor` 类型与实现。
-- 当前 `CaptureHub` 源码与 GL 生命周期。
-- 当前主模组 `WebPreviewScreen`/`WebEditorApi`/`PreviewStreamer` 的播放、推送、飞控行为，作为语义对照，不作为 AUI 结构模板。
-- 附属模组 Forge 1.20.1 骨架与 AUI 1.3.1 jar。
-
-### 4.2 输出
-
-- 一份 01 合同差距表：每个接口“可用/缺什么/由谁补”。
-- `EditorCarrier`/`EditorEntry` 扩展合同与注册顺序。
-- `CaptureHub` GPU 租约接口、generation/所有权规则。
-- 14-01～14-09 的前置清单；缺一项就停，不带缺口进入 Screen。
-
-### 4.3 禁止
-
-- 不把 AUI 类放进 `api/editor`。
-- 不复制第二套消息名/字段/信封。
-- 不让 AUI 消费者调用 `CaptureHub.close()` 或删除共享纹理。
-- 不在 14-00 写“已实现”而没有代码/日志证据。
-- 不用 WebUI 已通过代替 14 进程内/GPU 验收。
-
-## 5. 验收
-
-### 5.1 正例
-
-**正例 A**：`api/editor` 的 7 个接口在主模组可编译、可被附属模组访问；`EditorEndpoint` 发送关键消息返回明确成功/失败，不静默丢。
-
-**正例 B**：主模组注册 `WEBUI`，AUI 注册 `INGAME`；`setActive("INGAME")` 后 `F6` 打开 AUI；AUI 不可用时回退 WebUI。
-
-**正例 C**：`CaptureHub` 的 FBO 纹理可被 GPU 消费者拿到；AUI 只读纹理，不读 PBO；关闭租约后纹理仍在，WebUI CPU 预览仍可用。
-
-**正例 D**：规格变化 generation +1；旧租约停止绘制；新帧到达后恢复；没有 `glDeleteTextures` 被消费者调用。
-
-**正例 E**：主模组不声明 `apricityui`；附属模组声明主模组 + AUI；缺 AUI 时 Forge 明确报缺前置。
-
-### 5.2 反例
-
-| 反例 | 判定 |
-|---|---|
-| AUI 直接 `new EditorAuiScreen()` 绕过 `EditorEntry` | 失败：双入口/双 Screen 风险 |
-| 主模组 `mods.toml` 声明 `apricityui` | 失败：主模组硬依赖 AUI |
-| AUI 调 `CaptureHub.close()` 释放画面 | 失败：关闭捕获中心 |
-| GPU 消费者偷偷 `glReadPixels`/截图轮询 | 失败：违背零拷贝 |
-| `EditorCarrier` 把 AUI `Screen` 类型暴露给主模组 | 失败：类型泄漏 |
-| 没有 01 实现却宣称合同可用 | 失败：伪造前置 |
-
-### 5.3 执行记录
-
-| 项 | 结果 | 证据 |
-|---|---|---|
-| 01 7 接口可用 | NOT RUN | 待执行 |
-| 载体指针/F6 | NOT RUN | 待执行 |
-| CaptureHub GPU 租约 | NOT RUN | 待执行 |
-| 附属模组依赖声明 | NOT RUN | 待执行 |
-
-未执行就是 `NOT RUN`，不写 `PASS`。
+- 七个接口在主模组可编译，附属模组能引用并调用；关键消息发送返回明确成功/失败。
+- `F6` 打开活动载体；把活动指针指向 `INGAME` 后打开 AUI；AUI 不可用时回退 `WEBUI` 并可见提示。
+- 只有 GPU 消费者时捕获不产生 CPU 读回；关闭租约后纹理仍在，WebUI 预览仍可用。
+- 规格变化后代数递增，旧租约停止绘制，新帧到达后恢复；消费者不调用删除纹理。
+- 主模组依赖声明中不出现 `apricityui`；附属模组声明主模组与 AUI；缺 AUI 时加载器给出缺前置提示而不是类加载崩溃。

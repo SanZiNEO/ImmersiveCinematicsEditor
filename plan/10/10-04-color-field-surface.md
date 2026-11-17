@@ -1,151 +1,125 @@
-# 10-04 调色字段面：CAMERA lane 与 ADJUST master
+# 10-04 · 调色字段面：CAMERA lane 与 ADJUST master
 
-## 目标
+> 状态：未实现
+> 范围：`CAMERA` 片段的 57 个 lane 调色通道 + 10 条曲线，`ADJUST` 轨的 59 个 master 调色通道 + 10 条曲线 + LUT 与层混合
+> 关联：10-05 窄组与控件、10-06 曲线、10-07 LUT 与层混合、10-09 媒体检查
 
-把当前代码里两条调色路径完整分开：
+## 一、摘要
 
-- `CAMERA` 片段自带的 lane 调色：57 个动画通道 + 10 条曲线；
-- `ADJUST` 轨的 master 调色：59 个动画通道 + 10 条曲线 + LUT + 层混合。
+把两条调色路径在编辑器里彻底分开。`CAMERA` 片段自带 lane 调色，作用于该相机画面；`ADJUST` 轨有 master 调色，作用于合成输出。前者是 57 个动画通道加 10 条曲线，后者是 59 个动画通道加 10 条曲线，再加 LUT 与层混合。两者不是同一层、不是同一组字段，也不能互相串。编辑器的职责是让 57/59 个通道一个不少地出现在正确的片段上，并且让作者一眼看出自己改的是相机还是全屏。
 
-两者不是同一层，不是同一组字段，不能互相串。编辑器不新增调色字段，不删减通道，不把 LUT 塞给 `CAMERA`。
+## 二、为什么做
 
-## 源码事实
+### 2.1 问题
 
-`TrackSchemas`：
+调色字段数量大、分布在两个不同对象上，最容易出的错不是「调得不好看」，而是「调错了层」：把全屏 LUT 挂到相机上、以为在相机上调的曝光会影响字幕、或者以为两条 `ADJUST` 轨会叠加。这些误解在界面上没有痕迹，只有在游戏里看到画面才发现。另一类问题是丢字段：通道太多，实现时容易为了界面好看而合并或省略，导致作者拿不到完整调色能力。
 
-- `CAMERA_COLOR_CHANNELS` 57 个：基础校色 6、HSL 4、白平衡 2、通道系数 3、通道混合 9、曲线强度 4、Lift/Gamma/Gain 9、Hue 曲线强度 6、六色带 12、风格化 2。
-- `ADJUST_CHANNELS` 59 个：以上 57 个 + `lut_strength` + `blend_amount`。
-- `CAMERA` 调色曲线 10 条：`rgb_curve`、`r_curve`、`g_curve`、`b_curve`、`hv_h_curve`、`hv_s_curve`、`hv_l_curve`、`lv_s_curve`、`sv_s_curve`、`sv_l_curve`。
-- `ADJUST` 同样有 10 条曲线，另有 `lut`（string）、`lut_input_gamma`（float，min 0）、`blend_mode`（enum）。
-- `CAMERA` 对象叶子：57 动画 + 10 曲线 = 67。
-- `ADJUST` 对象叶子：59 动画 + 10 曲线 + `lut` + `lut_input_gamma` + `blend_mode` = 72。
+### 2.2 目标
 
-`ColorAdjustSampler`：
+- 选中 `CAMERA` 片段时只出现 57 个通道 + 10 条曲线，不出现任何 LUT 或层混合字段。
+- 选中 `ADJUST` 片段时出现 59 个通道 + 10 条曲线 + LUT 定义 + 层混合。
+- 同一路径不会在属性面板与效果面板重复出现值控件。
+- 分组配置缺失时仍显示全部通道，不因配置问题丢字段。
+- 未知通道只读展示，不被当成新字段写入脚本。
 
-- CAMERA lane 调色按片段本地时间采样 57 通道 + 10 条曲线强度；
-- ADJUST master 调色按片段本地时间采样 59 通道 + 10 条曲线强度；
-- 曲线本身是 value-only `STRUCT`，不参与关键帧采样；只有 `*_strength` 可动画。
+### 2.3 非目标
 
-`AdjustTrackPlayer`：
+- 不新增调色字段，不改公式，不重排运行时的处理顺序。
+- 不把 57/59 个通道合成一个「总强度」或「风格」滑杆。
+- 不做像素级调色、不采样画面、不做编辑器内预览渲染。
+- 不把 LUT 塞给 `CAMERA`：`CAMERA` 没有 `lut`、`lut_input_gamma`、`lut_strength`、`blend_mode`、`blend_amount`。
 
-- 每帧取本轨第一个活跃片段；
-- 同实例多条 `ADJUST` 轨后发布者覆盖前发布者，不是叠加；
-- 不同 `ScriptPlayer` 实例各自占一层；
-- 无活跃片段时不发布，渲染侧拿不到参数就不调色。
+## 三、方案
 
-`CAMERA` lane 调色由相机 lane 的片段本地时间采样，属于该相机画面；`ADJUST` master 调色作用于合成输出，不作用于 HUD、字幕、黑边。
+选中片段后，属性面板按功能窄组展开调色：基础校色、HSL、白平衡、通道系数、通道混合、曲线强度、Lift/Gamma/Gain、Hue 曲线强度、六色带、风格化；`ADJUST` 额外多出 LUT 强度与层级混合两组。分组只影响显示顺序与折叠，不决定字段是否存在——字段是否存在由脚本结构决定。
 
-## 调色分组总表
+每个动画通道有两种状态：没有关键帧时在属性面板给静态值并带「开时钟」；有关键帧时属性面板只留一句「在效果面板编辑」的摘要，值控件移到效果面板。10 条曲线定义、`lut`、`lut_input_gamma`、`blend_mode` 属于 value-only，永远留在属性面板，不进效果面板。
 
-分组是编辑器显示层，不是脚本字段，也不是第二套 schema。分组表只把现有路径装进窄组，不改字段名、默认值、范围。
+`CAMERA` 与 `ADJUST` 的选择互不影响：切换选中片段时字段面整体替换，不残留上一片段的值，也不把上一个片段的调色带到新片段。
 
-| 组 | CAMERA 57 | ADJUST 59 | 控件 |
+## 四、技术细节
+
+### 4.1 核心模型
+
+调色字段分三类：可动画的数值通道、value-only 的曲线定义、value-only 的 LUT 与混合声明。可动画通道按片段本地时间采样；曲线定义是点数组，本身不参与关键帧采样，只有对应的 `*_strength` 通道可动画；LUT 路径、输入 gamma、混合模式是整段一个值。
+
+`CAMERA` 的调色按该相机 lane 的片段本地时间采样，属于这个相机画面。`ADJUST` 的调色作用于合成输出，不作用于 HUD、字幕、黑边。
+
+### 4.2 契约
+
+- `CAMERA` 对象叶子为 57 动画 + 10 曲线；`ADJUST` 为 59 动画 + 10 曲线 + `lut` + `lut_input_gamma` + `blend_mode`。
+- `ADJUST` 的 59 个通道 = `CAMERA` 的 57 个 + `lut_strength` + `blend_amount`。
+- 10 条曲线：`rgb_curve`、`r_curve`、`g_curve`、`b_curve`、`hv_h_curve`、`hv_s_curve`、`hv_l_curve`、`lv_s_curve`、`sv_s_curve`、`sv_l_curve`，两侧相同。
+- 每个 `ADJUST` 轨每帧只取本轨第一个活跃片段；同实例多条 `ADJUST` 轨后发布者覆盖前发布者，不是叠加；不同脚本实例各占一层。
+- 无活跃片段时不发布参数，渲染侧拿不到就不调色。
+- 范围：`exposure` 为 -5–5；普通调色通道为 -1–1；曲线强度、`lut_strength`、`blend_amount`、`grayscale`、`invert` 为 0–1；`lut_input_gamma` 必须 >0。默认值：普通通道 0，强度类 1，风格化为 0，gamma 为 1。
+- 越界与非有限值都拒绝提交，不静默夹取。
+
+### 4.3 数据形态
+
+窄组划分（显示层，不是第二套结构）：
+
+| 组 | 通道数 | `CAMERA` | `ADJUST` |
 |---|---|---|---|
-| 基础校色 6 | `exposure` / `contrast` / `highlights` / `shadows` / `whites` / `blacks` | 同左 | 数值滑杆 + 数字 |
-| HSL 4 | `hue` / `saturation` / `vibrance` / `lightness` | 同左 | 数值滑杆 + 数字 |
-| 白平衡 2 | `temperature` / `tint` | 同左 | 数值滑杆 + 数字 |
-| 通道系数 3 | `red` / `green` / `blue` | 同左 | RGB 三行 |
-| 通道混合 9 | `mix_rr` / `mix_rg` / `mix_rb` / `mix_gr` / `mix_gg` / `mix_gb` / `mix_br` / `mix_bg` / `mix_bb` | 同左 | 3×3 矩阵 |
-| 曲线强度 4 | `curve_strength` / `r_curve_strength` / `g_curve_strength` / `b_curve_strength` | 同左 | 0–1 滑杆 |
-| Lift/Gamma/Gain 9 | `lift_r/g/b` / `gamma_r/g/b` / `gain_r/g/b` | 同左 | 三组 RGB 三元组 |
-| LUT 强度 1 | 无 | `lut_strength` | 0–1 滑杆 |
-| Hue 曲线强度 6 | `hv_h_strength` / `hv_s_strength` / `hv_l_strength` / `lv_s_strength` / `sv_s_strength` / `sv_l_strength` | 同左 | 0–1 滑杆 |
-| 六色带 12 | `hue_red` / `sat_red` / `hue_yellow` / `sat_yellow` / `hue_green` / `sat_green` / `hue_cyan` / `sat_cyan` / `hue_blue` / `sat_blue` / `hue_magenta` / `sat_magenta` | 同左 | 六行色带，每行 Hue/Sat |
-| 风格化 2 | `grayscale` / `invert` | 同左 | 0–1 滑杆 |
-| 层级混合 1 | 无 | `blend_amount` | 0–1 滑杆 |
-| 曲线定义 | 10 条 `STRUCT` | 同左 | 曲线抽屉 |
-| LUT 定义 | 无 | `lut` / `lut_input_gamma` / `blend_mode` | LUT 组 |
+| 基础校色 | 6 | `exposure` `contrast` `highlights` `shadows` `whites` `blacks` | 同左 |
+| HSL | 4 | `hue` `saturation` `vibrance` `lightness` | 同左 |
+| 白平衡 | 2 | `temperature` `tint` | 同左 |
+| 通道系数 | 3 | `red` `green` `blue` | 同左 |
+| 通道混合 | 9 | `mix_rr` `mix_rg` `mix_rb` `mix_gr` `mix_gg` `mix_gb` `mix_br` `mix_bg` `mix_bb` | 同左 |
+| 曲线强度 | 4 | `curve_strength` `r_curve_strength` `g_curve_strength` `b_curve_strength` | 同左 |
+| Lift/Gamma/Gain | 9 | `lift_r/g/b` `gamma_r/g/b` `gain_r/g/b` | 同左 |
+| LUT 强度 | 1 | 无 | `lut_strength` |
+| Hue 曲线强度 | 6 | `hv_h_strength` `hv_s_strength` `hv_l_strength` `lv_s_strength` `sv_s_strength` `sv_l_strength` | 同左 |
+| 六色带 | 12 | `hue_red` `sat_red` … `hue_magenta` `sat_magenta` | 同左 |
+| 风格化 | 2 | `grayscale` `invert` | 同左 |
+| 层级混合 | 1 | 无 | `blend_amount` |
+| 曲线定义 | 10 | 10 条曲线 | 同左 |
+| LUT 定义 | 3 | 无 | `lut` `lut_input_gamma` `blend_mode` |
 
-## 范围与默认
+分组配置只决定分组与顺序；配置缺失时回退到脚本自带的分组信息，仍然把 57/59 个字段全部显示出来。未知通道进只读的「扩展」组，不猜控件、不新建字段。
 
-| 通道类 | 范围 | 默认 |
+### 4.4 边界
+
+- `CAMERA` 上不存在 LUT 与层混合字段，界面不显示，也不允许通过其它路径写入。
+- 曲线抽屉只显示曲线定义，不显示强度控件；强度仍在属性面板或效果面板。
+- LUT 定义只在属性面板的 LUT 组，不进曲线抽屉。
+- `ADJUST` 缺少 `blend_mode` 时按 `normal` 显示，不报错。
+- 编辑器不判断 LUT 是否能被游戏解析，只按扩展名与存在性说话。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 把 57/59 个通道铺成一个大组 | 一个「调色」组里全列 | 实现最省事 | 几十行连续滑杆无法浏览，作者找不到目标通道 |
+| 合并相似通道减少控件 | 例如把 `saturation`/`vibrance` 合成一个 | 面板更短 | 合并会丢字段，等于削减作者的调色能力 |
+| 让 `CAMERA` 也能用 LUT | 统一两条调色路径 | 心智模型更简单 | 脚本结构上 `CAMERA` 没有 LUT 字段，界面不能显示不存在的字段 |
+| 分组配置作为字段存在性的依据 | 没配到就不显示 | 配置即真相 | 配置是显示层，字段存在性由脚本结构决定；配置缺失不能导致丢字段 |
+
+**本方案的缺点**：
+
+- 12 个窄组仍有 59 个数值控件，作者需要按组查找。
+- `CAMERA` 与 `ADJUST` 字段面高度相似但不等价，切换选中时容易记错自己在哪一层。
+- 未知通道只能只读展示，作者看到但不明白为什么改不了。
+
+## 六、实现结果
+
+状态：未实现
+
+调色字段面与两层分离尚未落地。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `exposure` | -5–5 | 0 |
-| 普通调色通道（除强度/风格化/混合） | -1–1 | 0 |
-| 10 条曲线强度 | 0–1 | 1 |
-| `lut_strength` | 0–1 | 1 |
-| `blend_amount` | 0–1 | 1 |
-| `grayscale` / `invert` | 0–1 | 0 |
-| `lut_input_gamma` | >0 | 1 |
+| 57/59 通道 + 10 曲线 + LUT/混合的字段面 | 未实现 | — |
 
-- `0` 对普通调色通道表示无效果；`1` 是上界。
-- 强度类默认 1；0 表示该步关闭。
-- `lut_input_gamma` schema min 0，但运行时要求 >0；编辑器按 >0 校验，不写 0。
-- 不钳制作者输入；越界显示错误并拒绝提交。
+**验收要点**
 
-## 属性面板与效果面板
-
-### 属性面板
-
-`selection.properties` 对 `CAMERA` / `ADJUST` 片段显示：
-
-- 基础校色、HSL、白平衡、通道系数、通道混合、曲线强度、Lift/Gamma/Gain、Hue 曲线强度、六色带、风格化；
-- `ADJUST` 额外显示 LUT 强度、层级混合、LUT 定义、`blend_mode`；
-- `CAMERA` 不显示 LUT/层级混合；
-- 所有未设置、静态、value-only 字段按默认值显示；
-- `exposure` 显示 -5–5，其他按表；
-- 强度类显示 0–1 和“0 关闭”。
-
-规则：
-
-- 59/57 个动画通道中，`keyframes.length > 0` 的叶子不在属性面板显示值控件，只在效果面板出现；
-- 无关键帧的动画通道显示静态值，并带“开时钟”；
-- 10 条曲线、`lut`、`lut_input_gamma`、`blend_mode` 永远不进效果面板；
-- 不提供“添加属性”或字段选择器；字段面固定为 57/59 + 曲线 + 值字段。
-
-### 效果面板
-
-`clip.effects` 只显示 `keyframes.length > 0` 的调色叶子：
-
-- 槽位命名与属性面板一致；
-- 曲线强度叶子（如 `curve_strength`）进效果面板；曲线定义不进去；
-- `lut_strength` / `blend_amount` 有帧时进效果面板；
-- `blend_mode` / `lut` / `lut_input_gamma` 不进效果面板。
-
-### 不重复显示
-
-- 同一路径有帧时，只在效果面板出现；
-- 同一路径无帧时，只在属性面板出现；
-- 曲线抽屉只显示曲线定义，不显示曲线强度值控件；强度仍在属性/效果面板；
-- LUT 定义只在属性面板的 LUT 组，不在曲线抽屉。
-
-## 窄组与配置
-
-12 个功能组由编辑器侧 `color-groups.json` 提供：
-
-```json
-{
-  "camera": ["basic", "hsl", "white_balance", "channel", "mixer", "curve_strength", "lift_gamma_gain", "hue_curve_strength", "bands", "style"],
-  "adjust": ["basic", "hsl", "white_balance", "channel", "mixer", "curve_strength", "lift_gamma_gain", "lut_strength", "hue_curve_strength", "bands", "style", "blend"]
-}
-```
-
-- 配置只决定显示分组和顺序，不决定字段是否存在；字段是否存在仍由 schema 决定。
-- 默认窄组：12 个组，不把 59 个通道铺成一个“调色”大组。
-- 组内字段顺序与 `TrackSchemas` 通道顺序一致；组间顺序按上表。
-- 未知通道进入“扩展”组，只读，不猜测控件；不新建字段。
-- 配置缺失时回退为 schema `section`，但 CAMERA/ADJUST 仍按 57/59 字段面显示，不丢字段。
-
-## 本地校验
-
-| 检查 | 级别 | 处理 |
-|---|---|---|
-| 通道值超出范围 | block | 行红框，拒绝提交 |
-| 通道值非有限 | block | 拒绝提交 |
-| `lut_input_gamma=0` | block | 按 >0 校验 |
-| `CAMERA` 出现 LUT 字段 | block | 不允许写入；不属于 CAMERA 字段面 |
-| `ADJUST` 缺 `blend_mode` | info | 默认 `normal`，不报错 |
-| 未知调色通道 | info | 扩展组只读，不删除 |
-
-## 验收标准
-
-1. 选中 `CAMERA` 片段：只出现 57 个调色通道 + 10 条曲线，不出现 `lut` / `blend_mode` / `blend_amount`。
-2. 选中 `ADJUST` 片段：出现 59 个调色通道 + 10 条曲线 + `lut` / `lut_input_gamma` / `blend_mode`。
-3. `exposure` 范围 -5–5；`contrast` 范围 -1–1；`curve_strength` 范围 0–1；默认值分别为 0/0/1。
-4. `exposure` 开时钟：属性面板值控件消失，效果面板出现 `exposure` 行；删最后一帧回流。
-5. `lut_strength` 有帧：效果面板出现；`lut` 本身仍只在属性面板 LUT 组。
-6. 曲线强度有帧、曲线定义为空：效果面板显示强度行，曲线抽屉显示“未定义曲线”。
-7. `CAMERA` 和 `ADJUST` 各选一个：两组字段互不串，切换选择不保留上一片段的字段值。
-8. `color-groups.json` 缺失：仍显示全部 57/59 字段，不因为分组配置缺失丢字段。
-9. 未知通道 `foo`：进入扩展组只读；不生成 `foo` 字段，不写入脚本。
-10. 保存重开：57/59 通道、10 条曲线、LUT/混合值原样恢复。
+- 选中 `CAMERA` 只出现 57 通道 + 10 曲线，不出现 `lut`、`lut_input_gamma`、`blend_mode`、`blend_amount`。
+- 选中 `ADJUST` 出现 59 通道 + 10 曲线 + LUT 定义 + 层混合。
+- 范围与默认值符合契约：`exposure` -5–5、普通通道 -1–1、强度类 0–1、gamma >0。
+- 开时钟后属性面板值控件消失、效果面板出现该行，删最后一帧回流。
+- `lut_strength` 有帧时进效果面板，`lut` 仍只在属性面板。
+- 曲线强度有帧但曲线定义为空时，效果面板显示强度行，曲线抽屉显示「未定义」。
+- `CAMERA` 与 `ADJUST` 各选一次，字段互不串，切换选择不残留上一片段的值。
+- 分组配置缺失时仍显示全部 57/59 字段。
+- 未知通道进只读扩展组，不写入脚本。
+- 保存重开后通道、曲线、LUT 与混合值原样恢复。

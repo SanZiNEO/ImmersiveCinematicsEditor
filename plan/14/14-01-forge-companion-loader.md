@@ -1,194 +1,102 @@
-# 14-01 Forge 1.20.1 附属模组与 AUI 前置
+# Forge 附属模组与 AUI 前置
 
-> 前置：14-00 合同审计通过；13 全部出口 PASS
-> 后续：14-02 Screen
-> 状态：设计合同；构建/启动未执行时不填 PASS
+> 状态：未实现
+> 范围：Forge 1.20.1 附属模组的加载关系、依赖声明、客户端边界与载体注册
+> 关联：14-00 合同与载体指针、14-02 宿主 Screen
 
-## 1. 职责
+## 一、摘要
 
-把 `ImmersiveCinematicsEditor` 固定为 **Forge 1.20.1 的附属模组**：
+编辑器最终以 Forge 1.20.1 附属模组的形式进入游戏：它依赖主模组与外部 UI 前置 ApricityUI，自己不打包 UI 前置，也不让主模组反过来依赖它。本文定的是这个加载关系的边界——谁依赖谁、缺依赖时用户看到什么、专用服务端上哪些类不许出现、Fabric 侧怎么保留骨架。
 
-- 依赖主模组 `immersive_cinematics` 与外部 UI 前置 `apricityui 1.3.1`；
-- 不把 AUI 变成主模组的硬依赖；
-- 不打包 AUI；
-- Fabric 模块保留骨架，不接 AUI；
-- 构建产物可在 Forge 1.20.1 客户端与主模组一起启动，并由 `EditorEntry` 注册 `INGAME` 载体。
+## 二、为什么做
 
-本文件不写 Screen/页面/帧源/端点；只写加载器、依赖、入口、客户端边界。
+### 2.1 问题
 
-## 2. 当前事实
+如果把 AUI 塞进主模组，主模组就从"能被任何人单独安装的运行时"变成"必须带一个 UI 框架才能启动"。专用服务端、只想用 WebUI 的用户、以及 Fabric 用户都会被这条依赖连坐。反过来，如果附属模组只在开发环境能编译、发布时缺前置，用户拿到的是一个启动即崩的 jar，崩溃点在类加载期，日志里只有 `NoClassDefFoundError`，看不出缺了什么。
 
-### 2.1 仓库与分支
+入口的归属同样会出事。主模组已经在用旧键位打开 WebUI；如果附属模组为了自己方便再注册一个键，用户就会面对两个键、两个界面，而两者都不认为自己该负责互斥。
 
-- 编辑器仓库：`E:\Documents\GitHub\ImmersiveCinematicsEditor`。
-- `1.20.1` 分支当前只有骨架：
-  - `common/.../EditorCommon.java`
-  - `common/.../Constants.java`
-  - `common/.../platform/Services.java`
-  - `common/.../platform/services/IPlatformHelper.java`
-  - `forge/.../EditorMod.java`
-  - `forge/.../platform/ForgePlatformHelper.java`
-  - `fabric/.../EditorMod.java`
-  - `fabric/.../platform/FabricPlatformHelper.java`
-  - `forge/src/main/resources/META-INF/mods.toml`
-- 当前工作树在 `webui` 分支；14 必须从 `1.20.1` 分支读写，不能拿 `webui/src` 当目标结构。
+### 2.2 目标
 
-### 2.2 构建与依赖
+- 附属模组能在 Forge 1.20.1 客户端与主模组一起加载，并注册 `INGAME` 载体。
+- 主模组的依赖声明里不出现 UI 前置；只装主模组时一切照旧。
+- 缺 UI 前置时，用户在加载器层面看到明确的"缺少前置"，而不是类加载崩溃。
+- 专用服务端不加载 AUI 与编辑器界面相关的类。
+- 发布产物不包含 UI 前置的类。
 
-`1.20.1:forge/build.gradle` 当前事实：
+### 2.3 非目标
 
-- Forge `47.4.16`，Minecraft `1.20.1`，Java 17；
-- `implementation fg.deobf("com.sighs:ApricityUI-forge-1.20.1:1.3.1")` 已存在；
-- AUI 是开发期依赖，不打包；
-- `mods.toml` 当前只声明 `forge`、`minecraft`，**没有** `apricityui` 依赖；
-- 生产环境缺 AUI 时，加载器不会提前给出“缺前置”的明确提示，可能在类加载期失败。
+- 不接 Fabric 的 AUI：本轮保留骨架，WebUI→Fabric 通路按 13 的基线回归。
+- 不在加载阶段打开界面、挂载端点或订阅帧源。
+- 不改 WebUI 的功能与其版本显示。
+- 不重命名主模组、不改主模组的 modId 或版本号。
 
-`1.20.1:fabric/build.gradle` 当前事实：
+## 三、方案
 
-- AUI 依赖被注释：“Fabric 包当前无法启动，暂不接入”；
-- `fabric.mod.json` 存在，入口 `EditorMod`；
-- 14 不改 Fabric 的 AUI 接入；保留骨架，WebUI→Fabric 仍按 13 基线。
+安装形态只有一种组合是"完整体验"：主模组 + 附属模组 + UI 前置。其余组合都必须能优雅退化。
 
-### 2.3 AUI 1.3.1 事实
+只装主模组时，游戏正常启动，编辑器仍然可用，只是入口落在 WebUI 载体上；用户看不到任何与 AUI 有关的报错，因为主模组根本不引用它。装了附属模组但没装 UI 前置时，加载器在依赖校验阶段就拦住，并指出缺 `apricityui`；用户据此去补前置即可，不必读崩溃日志。三者齐备时，附属模组在客户端初始化阶段注册 `INGAME` 载体并把活动指针指向自己，此时按入口键打开的是游戏内界面。
 
-- 文件：`E:\Documents\GitHub\ImmersiveCinematicsEditor\example\[晴雪UI] ApricityUI-forge-1.20.1-1.3.1.jar`。
-- `mods.toml`：`modId=apricityui`、`version=1.3.1`、`clientRequired=true`；依赖 `forge [47,)`、`minecraft [1.20.1,1.21)`。
-- 关键类：`com.sighs.apricityui.screen.ApricityScreen`、`init.Document`、`init.Element`、`render.Base`、`render.Operation`、`client.Client`。
-- `ApricityScreen` 构造只收 `templatePath`；`setPauseGame(boolean)`、`setShowDefaultBackground(boolean)`、`getLinkedDocument()`、`handleViewportZoom(boolean)`、`resetViewportZoom()` 可调用。
-- 当前 Forge dev 环境没有 KubeJS/Rhino；页面脚本会被跳过，页面仍渲染。14 的交互不能依赖页面 JS。
+入口键只有一个，归属主模组。附属模组只提供载体，不注册第二个键，也不抢键位——这样 UI 前置不存在时，同一个键仍然能打开 WebUI。
 
-## 3. 方案
+版本展示沿用 AUI 的写法：附属模组对外显示成带加载器与主模组版本的组合串（`0.1.0-forge-for IC-0.3.6`），而依赖匹配用的版本号仍是裸版本。两者不混用：展示串给人看，版本号给加载器看。
 
-### 3.1 模组关系
+## 四、技术细节
 
-```text
-ImmersiveCinematics（主模组）
-  └─ 不依赖 AUI；提供 api/editor、运行时、捕获、播放、飞控
+### 4.1 核心模型
 
-ImmersiveCinematicsEditor（附属模组）
-  ├─ 依赖 immersive_cinematics
-  ├─ 依赖 apricityui（客户端必需）
-  ├─ 注册 INGAME 载体 / 设置 EditorEntry 指针
-  └─ 提供 EditorAuiScreen、AUI 页面、进程内适配
+附属模组只承担四件事：声明依赖、在客户端注册载体、把活动指针指向自己、声明自己是客户端模组。它不拥有入口键，不拥有主模组的服务，也不拥有 UI 前置的生命周期。加载器负责依赖校验，UI 前置负责自己的初始化，两者都与附属模组解耦。
 
-ApricityUI（外部前置）
-  └─ 不打包；缺失时 Forge 依赖界面提示
-```
+### 4.2 契约
 
-### 3.2 `mods.toml` 目标
+- 附属模组声明主模组与 UI 前置为必需依赖，版本区间分别是主模组 `[0.3.6,0.4)`、UI 前置 `[1.3.1,1.4)`；两者都只对客户端必需。
+- 主模组必须先于附属模组完成初始化，附属模组注册载体时要能拿到主模组的接口。
+- 注册只发生在客户端初始化阶段，且只做注册与指针设置；打开界面、挂载端点、订阅帧源都不在这里。
+- UI 前置不可用时注册仍可完成，但载体自报不可用，入口据此回退。
+- 主模组的依赖声明中不得出现 `apricityui`；附属模组的发布 jar 中不得内嵌 UI 前置的类。
 
-附属模组 `forge/src/main/resources/META-INF/mods.toml` 需要补齐：
+### 4.3 数据形态
 
-| 依赖 | mandatory | versionRange | ordering | side |
-|---|---|---|---|---|
-| `forge` | true | `[47,)` | NONE | BOTH |
-| `minecraft` | true | `[1.20.1,1.21)` | NONE | BOTH |
-| `immersive_cinematics` | true | `[0.3.6,0.4)` | AFTER | CLIENT |
-| `apricityui` | true | `[1.3.1,1.4)` | AFTER | CLIENT |
+附属模组自身不保存数据，只有加载期的静态关系：modId、版本区间、侧别、加载顺序。版本号是裸版本，展示串只出现在面向人的名称与描述里，不参与任何版本匹配。
 
-约束：
+### 4.4 边界
 
-- `apricityui` 只在客户端必需；专用服务端不加载本附属模组。
-- `immersive_cinematics` 是主模组，必须先于本模组完成初始化；`ordering="AFTER"`。
-- 不把 AUI jar 塞进本模组 jar；`implementation` 只用于编译，发布不含 AUI。
-- 不把 `apricityui` 写进主模组 `mods.toml`。
-- 缺 AUI 时由 Forge 依赖校验给出明确缺失，不允许“类加载崩溃但无提示”。
+- 专用服务端不加载界面类与 UI 前置的注入代码；服务端日志里不应出现它们。
+- 主模组不引用 AUI 任何类型；附属模组内部可以自由引用。
+- Fabric 模块保留模块与元数据，Gradle 仍能识别，但不接 UI 前置，也不参与本轮验收。
+- 构建成功不算通过：只有真实客户端启动、日志与界面证据才算。
 
-### 3.3 版本与显示名
+## 五、为什么不选别的
 
-- `gradle.properties.version` 保持 `0.1.0`；不把展示串塞进 `version`。
-- Forge 模组显示名/描述使用 AUI 格式：
-  - `ImmersiveCinematicsEditor 0.1.0-forge-for IC-0.3.6`
-  - `IC` 是 `ImmersiveCinematics` 的缩写；版本名过长时用缩写，不长可全写。
-- WebUI 仍使用 `ImmersiveCinematicsEditor 0.1.0 for IC 0.3.6`；14 不改变 WebUI 版本名。
-- `mods.toml` 的 `version` 仍填 `${version}`（`0.1.0`）；展示串只用于 `displayName`/描述/关于页，不参与依赖版本匹配。
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| AUI 进主模组 | 主模组直接依赖并加载 UI 前置 | 服务端、纯 WebUI 用户、Fabric 全被连坐 | 依赖方向反了，主模组应保持可选性 |
+| 附属模组打包 UI 前置 | 把前置 jar 内嵌进发布产物 | 重复类、许可风险、体积膨胀 | 前置应由用户安装，缺了就明确报缺 |
+| 附属模组注册自己的入口键 | 主模组留旧键，附属模组加新键 | 双入口、双界面、互斥无人负责 | 入口必须唯一，键位归主模组 |
+| 加载期就打开界面 | 初始化时直接建 Screen | 未进世界就建 UI，资源生命周期混乱 | 注册与打开必须分离 |
+| 缺前置时靠运行时兜底 | 捕获 `NoClassDefFoundError` 再提示 | 错误位置随机，用户无法自救 | 加载器校验能给出准确信息 |
 
-### 3.4 入口与注册
+**本方案的缺点**：
 
-`forge/.../EditorMod.java` 负责：
+- 三方安装组合多，每种组合都要单独验一遍，回归成本高。
+- 附属模组对主模组有严格版本区间，主模组一升级附属模组就得跟着发版。
+- 客户端与服务端的加载差异靠约定维持，一旦有人把界面类引用写进公共代码，问题只在专用服务端才暴露。
 
-1. 构造时检查客户端分布；专用服务端不加载 AUI/Screen 类。
-2. 调用 `EditorCommon.init()`；平台 helper 仍由 `Services` 选择。
-3. 在客户端初始化阶段：
-   - 注册 `INGAME` 载体到 `EditorEntry`；
-   - 将 `EditorEntry.activeCarrier` 指向 `INGAME`（AUI 附属模组可改的入口指针）；
-   - 注册 `F6` 的 `EDITOR_OPEN` 键（若主模组已注册统一键，则不再重复注册）；
-   - 不在此阶段打开 Screen、不 attach 端点、不订阅帧源。
-4. 若 AUI 类不可用/页面缺失，注册仍可完成，但 `isAvailable()` 返回 false；`F6` 回退 WebUI 或提示，不崩溃。
+## 六、实现结果
 
-**键位归属**：14 起 `F6` 是主模组统一入口键，不是附属模组另注册的第二键。附属模组只提供载体，不抢全局键位；这样 AUI 不存在时 WebUI 仍能用同一个 `F6`。
+状态：未实现
 
-### 3.5 客户端边界
+依赖关系与加载边界已定，构建与真实启动尚无证据。
 
-- 附属模组只声明客户端入口；`clientRequired=true` 由 AUI 自身声明。
-- 专用服务端不加载 `EditorAuiScreen`、不加载 `Document`/`Element`、不加载 AUI mixin。
-- 主模组 `api/editor` 不引用任何 AUI 类型；附属模组内部可以引用。
-- 构建检查：主模组 jar 的常量池/依赖中不出现 `com.sighs.apricityui`；附属模组 jar 不内嵌 AUI 类。
-
-### 3.6 Fabric 骨架
-
-- 保留 `fabric` 模块与 `fabric.mod.json`；Gradle 能识别，不构建/不运行 AUI。
-- 不把 Forge 的 AUI 依赖复制到 Fabric；Fabric AUI 恢复时另立轮次。
-- WebUI→Fabric 回归仍走 13；14 不改 Fabric 主模组/WebUI 通路。
-
-## 4. 输入输出
-
-### 4.1 输入
-
-- `1.20.1` 分支骨架、`forge/build.gradle`、`mods.toml`。
-- AUI 1.3.1 jar 的 `mods.toml` 与类签名。
-- 主模组 `gradle.properties`：`mod_id=immersive_cinematics`、`version=0.3.6`、`minecraft_version=1.20.1`、`forge_version=47.4.16`。
-
-### 4.2 输出
-
-- 可构建的 Forge 1.20.1 附属模组 jar。
-- `mods.toml` 含主模组 + AUI 的前置声明。
-- `INGAME` 载体注册与 `EditorEntry` 指针设置。
-- 客户端/服务端边界检查记录。
-- Fabric 骨架保留记录。
-
-### 4.3 禁止
-
-- 主模组硬依赖 AUI。
-- 把 AUI 打进发布 jar。
-- 用 `F8`/`F9` 作为第二个编辑器入口。
-- 在 `EditorMod` 构造里打开 Screen 或 attach 资源。
-- 用“构建成功”代替 Forge 客户端真实启动。
-
-## 5. 验收
-
-### 5.1 正例
-
-**正例 A**：`gradlew :forge:build` 通过；jar 的 `mods.toml` 含 `immersive_cinematics` 与 `apricityui` 依赖；`META-INF/services` 指向 `ForgePlatformHelper`。
-
-**正例 B**：Forge 1.20.1 客户端同时装主模组 + 附属模组 + AUI 1.3.1；启动日志出现主模组、编辑器、AUI 初始化；无类加载异常。
-
-**正例 C**：只装主模组、不装附属模组/AUI；主模组正常；`F6` 打开 WebUI（或明确无 ingame 载体），不报缺类。
-
-**正例 D**：装附属模组但不装 AUI；Forge 在依赖校验阶段提示缺 `apricityui`，不进入类加载崩溃。
-
-**正例 E**：专用服务端启动不加载 `EditorAuiScreen`/AUI；客户端才注册 `INGAME`。
-
-**正例 F**：Fabric 模块仍可被 Gradle 识别；`fabric.mod.json` 未被改动；WebUI→Fabric 通路不受 14 影响。
-
-### 5.2 反例
-
-| 反例 | 判定 |
-|---|---|
-| 主模组 `mods.toml` 写 `apricityui` | 失败：依赖方向错误 |
-| 附属模组把 AUI 类打进 jar | 失败：重复类/许可/体积问题 |
-| AUI 缺失时直接 `NoClassDefFoundError` | 失败：缺前置应可诊断 |
-| 附属模组注册第二个 F6 键 | 失败：双入口冲突 |
-| `EditorMod` 构造时 `new EditorAuiScreen()` | 失败：未进世界就建 UI |
-| Fabric 也被强行接 AUI | 失败：超出 14 范围 |
-
-### 5.3 执行记录
-
-| 项 | 结果 | 证据 |
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `:forge:build` | NOT RUN | 待执行 |
-| `mods.toml` 依赖 | NOT RUN | 待执行 |
-| 客户端启动 | NOT RUN | 待执行 |
-| 缺 AUI 负例 | NOT RUN | 待执行 |
-| 服务端不加载 AUI | NOT RUN | 待执行 |
-| Fabric 骨架保留 | NOT RUN | 待执行 |
+| — | — | — |
+
+### 验收要点
+
+- 附属模组可构建；产物内声明了主模组与 UI 前置依赖，且不含 UI 前置的类。
+- 三者齐备时启动无类加载异常，日志能看到主模组、附属模组与 UI 前置的初始化。
+- 只装主模组时游戏正常，入口落在 WebUI，无缺类报错。
+- 装附属模组但不装 UI 前置时，加载器提示缺 `apricityui`。
+- 专用服务端启动不加载界面类与 UI 前置。
+- Fabric 模块仍可被 Gradle 识别，其元数据未被改动。

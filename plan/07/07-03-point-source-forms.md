@@ -1,171 +1,133 @@
-# 07-03 点源五形态
+# 点源五形态
 
-## 目标
+> 状态：未实现
+> 范围：以 `ref` 字符串表达的点源字段的受约束表单
+> 关联：02 字段目录、03 文档模型、07-02 位置组、07-04 朝向组
 
-把 schema 里以 `ref` 字符串表达的点源字段做成受约束表单，覆盖：
+## 一、摘要
 
-- `position_origin`
-- `facing_target`
-- `facing_entity`
-- `yaw_base_from` / `yaw_base_to`
-- `look_at_selector`
-- `look_at` 的枚举分支与载荷
+schema 里有一批字段用单个字符串表达「一个世界点从哪来」：`position_origin`、`facing_target`、`facing_entity`、`yaw_base_from/to`、`look_at_selector`。同一个字符串字段能装五种形态——玩家激活位置、固定坐标、就近方块、实体选择器、结构中心——靠前缀和精确匹配区分。点源表单要做的，是让作者从下拉里选形态、填该形态的载荷，而不必记住字符串规则，同时保证写出的字符串能被 `PointKinds.kindOf` 还原成同一种形态。当前状态：未实现。
 
-表单保证写出的字符串能被 `PointKinds.kindOf` 还原成同一种形态，作者不需要记前缀。
+## 二、为什么做
 
-## 形态与字符串
+### 2.1 问题
 
-| 形态 | 写入字符串 | 载荷 | 说明 |
-|---|---|---|---|
-| 无 | `""` | — | 位置原点：`world` = 玩家激活位置；`base` = 隐式 `@p` |
-| `player` | `"player"` | — | 玩家激活位置，整场不变 |
-| `coordinate` | `"coordinate"` | `*_x` / `*_y` / `*_z` | 固定世界坐标 |
-| `block` | `"block:<id>[:radius]"` | id + 可选半径 | 就近搜索的方块中心；半径缺省 16 |
-| `selector` | `"@…"` 或 `"uuid:…"` | — | 实体选择器 |
-| `structure` | 结构 id | — | 结构 bounding box 中心 |
+- 这些字段在 schema 里只是 `ref` 字符串，没有任何结构约束。作者直接填 `@p`、填 `village_plains`、填 `block:minecraft:stone:8`，全靠自己记语法；填错了运行期解析成别的形态，位置就跑到意想不到的地方。
+- 形态不同，需要的载荷也不同：`coordinate` 要三个坐标分量，`block` 要一个 id 加可选半径，`selector` 只要一串选择器，`structure` 要一个结构 id。纯文本框无法表达这些差异，也无法在填错时立刻拦下。
+- `look_at` 看着像同一类字段，实际是枚举而不是五形态 ref。如果复用同一个下拉，作者会以为 `look_at=block` 和 `position_origin=block` 填法一致，实际上载荷字段完全不同。
+- 结构 id 与保留字有冲突：结构 id 不能叫 `player`、不能叫 `coordinate`、不能以 `@`、`uuid:`、`block:` 开头。文本框里直接输错，运行期就归到别的形态去了。
 
-判据顺序：
+### 2.2 目标
 
-1. `@` 或 `uuid:` → selector
-2. `block:` → block
-3. `player` 精确 → player
-4. `coordinate` 精确 → coordinate
-5. 其他非空 → structure
+- 作者从下拉选形态，表单只显示该形态需要的载荷字段。
+- 写出的字符串与读回时的形态判定一一对应，往返不变。
+- 非法输入（结构 id 撞保留字、block 半径非法、`look_at_part` 越界）在本地拒绝，不写出去让运行时兜底。
+- 所有字段仍是字符串；不新增 schema 类型、不改模组解析。
 
-结构 id 不能是 `player` / `coordinate`，不能以 `@` / `uuid:` / `block:` 开头。编辑器在结构 id 输入框里直接拒绝这三类。
+### 2.3 非目标
 
-## 字段映射
+- 不把 `ref` 字段升级成结构化对象。
+- 不给 `facing_entity` 提供 player/coordinate/block/structure 的下拉——它只接受实体选择器。
+- 不改变五种形态的判定顺序，也不扩展第六种形态。
+- 不替作者猜「他大概想填哪个结构」。
 
-| 字段 | 形态来源 | 载荷 | 取点 | 偏移 | 冻结 |
-|---|---|---|---|---|---|
-| `position_origin` | 本字段五形态 | `position_origin_x/y/z` | 固定 `FOOT` = (50,0,50) | 无；位置偏移由 `position.x/y/z` 承担 | `position_origin_freeze` |
-| `facing_target` | 本字段五形态 | `facing_target_x/y/z` | 固定 `CENTER` = (50,50,50) | `facing_target_offset.x/y/z` + `.space` | `facing_target_freeze` |
-| `facing_entity` | 只允许 selector | — | 身体朝向 | — | 无 |
-| `yaw_base_from` / `yaw_base_to` | 本字段五形态 | `*_x/y/z` | 固定 `FOOT` | `*_offset.x/y/z` + `.space` | `*_freeze` |
-| `look_at` | 枚举五值，不是五形态 ref | 分支载荷 | `look_at_part.x/y/z`（entity） | `look_at_offset.x/y/z` + `.space` | `look_at_freeze` |
+## 三、方案
 
-`facing_entity` 只写选择器字符串；不提供 player/coordinate/block/structure 下拉。
+五个形态与写出的字符串：
 
-## `look_at` 分支
-
-`look_at` 是 `enum(none/player/coordinate/entity/block)`，不是 `ref` 五形态。编辑器按枚举显示载荷：
-
-| `look_at` | 载荷 | 规则 |
+| 形态 | 写出 | 载荷 |
 |---|---|---|
-| `none` | 无 | 其余载荷隐藏；已有值显示“不读取” |
-| `player` | 无 | `look_at_selector` 运行时不参与 |
-| `coordinate` | `look_at_target_x/y/z` 或 `look_at_target_structure` | 二选一；structure 非空时优先，坐标字段禁用 |
-| `entity` | `look_at_selector` + `look_at_part.x/y/z` | part 0~100，默认 50/50/50 |
-| `block` | `look_at_target_block` | 写 `block:<id>[:radius]` |
+| 无 | `""` | 位置原点下，`world` 空间表示玩家激活位置，`base` 空间表示隐式 `@p` |
+| 玩家 | `"player"` | 玩家激活位置，整场不变 |
+| 坐标 | `"coordinate"` | 配套的 `*_x` / `*_y` / `*_z` 字段 |
+| 方块 | `"block:<id>[:radius]"` | 方块 id + 可选半径，半径缺省 16 |
+| 选择器 | `"@…"` 或 `"uuid:…"` | 原串 |
+| 结构 | 结构 id | 结构 bounding box 中心 |
 
-`look_at_target_x/y/z` 默认 `null`，运行期按 0 读；UI 显示“未写 = 0”。`look_at_part` 输入越界直接拒绝，不写出去让运行时钳制。
+判定顺序固定：`@` 或 `uuid:` 先归选择器，`block:` 归方块，精确等于 `player` 归玩家，精确等于 `coordinate` 归坐标，其余非空归结构。表单的形态下拉就是按这个顺序给出的选项，作者选什么，写出的字符串就必须落回同一形态。
 
-## 实体取点
+不同字段的取点与可用能力不一样，这是表单必须表达的第二层差异：
 
-| 用途 | 取点 | 可编辑 |
-|---|---|---|
-| 位置原点 | `FOOT` (50,0,50) | 否 |
-| 方向目标 | `CENTER` (50,50,50) | 否 |
-| Yaw 基准端点 | `FOOT` | 否 |
-| 注视点 | `look_at_part.x/y/z` | 是，0~100 |
+- 位置原点取实体脚底，不带偏移——位置偏移由 `position.x/y/z` 承担。
+- 方向目标取实体中心，带三轴偏移和偏移空间。
+- Yaw 基准端点取脚底，带偏移和冻结。
+- 注视点用 `look_at_part` 三轴（0~100），提供脚底/中心/头顶快捷值，也允许逐项输入。
+- `facing_entity` 只写选择器字符串，不带坐标、不带偏移、不带冻结。
 
-`look_at_part` 提供“脚底 / 中心 / 头顶”快捷值（0/50/100），也允许三轴逐项输入。
+偏移组的三个分量默认 0；`space=base` 但当前没有 `base` 参考系时显示「没有参考系，偏移不生效」，值保留。冻结字段各有可用条件，条件不满足时控件禁用并标注「不读取」，已有值保留原文。
 
-## 偏移
+`look_at` 单独一套枚举分支：`none` 时其余载荷隐藏；`player` 不需要载荷，`look_at_selector` 不参与；`coordinate` 是坐标与结构二选一，结构非空时坐标字段禁用；`entity` 用选择器加 `look_at_part`；`block` 写方块字符串。`look_at_freeze` 只在 `entity` 分支可用。
 
-| 偏移组 | 分量 | 空间字段 | 提示 |
-|---|---|---|---|
-| `facing_target_offset` | x/y/z | `facing_target_offset.space` | `base` 时沿本帧 `fwd/up/right` |
-| `yaw_base_from_offset` | x/y/z | `.space` | 同上 |
-| `yaw_base_to_offset` | x/y/z | `.space` | 同上 |
-| `look_at_offset` | x/y/z | `.space` | 同上 |
+## 四、技术细节
 
-- 三分量默认 0。
-- `space=base` 且当前 `position_space != base`：显示 `warn`“没有参考系，偏移不生效”；已有值保留。
-- `space=base` 且参考系解析失败：显示 `warn`；不把偏移当成世界偏移。
+### 4.1 核心模型
 
-## 冻结
+一个点源 = 形态 + 该形态的载荷 + 该字段固定的取点方式。形态由字符串本身决定，载荷落在同名的兄弟字段里（`*_x/y/z`、`*_offset.*`、`*_freeze`）。这种「一个字符串 + 一组兄弟字段」的结构是模组既有约定，编辑器只是给它套一层受约束的界面。
 
-| 字段 | 可用条件 | 语义 |
-|---|---|---|
-| `position_origin_freeze` | 原点是实体选择器，或原点为空且 `position_space=base` | 固定含偏移后的世界点 |
-| `facing_target_freeze` | `position_space=base` 且 `facing_source=line`，或 `auto` 且有 `facing_target` | 固定连线端点 |
-| `look_at_freeze` | `look_at=entity` | 固定注视实体上的取点 |
-| `yaw_base_from_freeze` | `yaw_base_from` 是实体选择器 | 固定起点 |
-| `yaw_base_to_freeze` | `yaw_base_to` 是实体选择器 | 固定终点 |
+### 4.2 契约
 
-- 条件不满足时控件禁用；已有值显示 `warn`“不读取”，保留原文。
-- `look_at_freeze` 不再对 `look_at != none` 全开；只在 `entity` 生效。
-- `facing_source=entity` 需要 `facing_entity` 或选择器原点；玩家激活位置不是实体选择器，不作为 entity 基准。
+核心不变式是往返：把形态和载荷拼成字符串，再解析回来，形态必须相同。覆盖的场景包括空串、`player`、`coordinate` + 坐标、带与不带半径的 `block`、选择器、`uuid:` 前缀、结构 id。
 
-## 自动方向源
+结构 id 的反例必须全部拒绝：`player`、`coordinate`、`@p`、`uuid:abc`、`block:foo`。这些不是「格式错误」，而是会被解析成别的形态，所以必须在输入阶段拦下而不是提交后才报。
 
-`facing_source=auto` 时显示实际回落：
+`look_at_part` 的越界值直接拒绝，不写出去等运行时钳制；`look_at_target_x/y/z` 默认 `null`，界面显示「未写 = 0」。
 
-| 原点/载荷 | 回落 |
-|---|---|
-| 有 `facing_target`，无 `facing_entity` | `line` |
-| 无 target，有 `facing_entity` | `entity` |
-| 都没有，原点是选择器/玩家激活 | `entity` |
-| 都没有，原点是坐标/方块/结构 | `world` |
-| target 与 entity 同时非空 | block，禁止提交 |
+### 4.3 数据形态
 
-UI 在 `auto` 行右侧显示“当前将按 line/entity/world 解析”，target/entity 同时非空时立即红框。
+写盘仍然只是字符串与数值字段，没有任何嵌套结构：
 
-## 控件
-
-```text
-src/components/point/
-  PointSourceField.vue       五形态下拉 + 载荷
-  PointSelectorField.vue     选择器文本 + 注册表补全
-  PointBlockField.vue        block id + 可选半径
-  PointCoordinateField.vue   x/y/z
-  LookAtField.vue            look_at 枚举 + 分支载荷
-  EntityPointField.vue       0~100 三轴 + 快捷值
-  PointOffsetField.vue       x/y/z + space
-  FreezeToggle.vue           条件 + 禁用原因
-src/model/point/
-  pointRef.ts                parsePointRef / buildPointRef / validateStructureId
-  pointPayload.ts            字段 → 载荷映射
-  pointFreeze.ts             冻结可用条件
+```json
+{
+  "position_origin": "block:minecraft:stone:8",
+  "position_origin_x": null,
+  "position_origin_freeze": false
+}
 ```
 
-- `PointSourceField` 不把结构 id 当自由文本；结构输入有独立校验。
-- `PointBlockField` 写字符串，不写独立 `radius` 字段。
-- `LookAtField` 不复用五形态下拉；单独枚举分支。
-- 所有字段的 `ref` 仍是字符串；不新增 schema 类型。
+方块半径写进字符串本身，不产生独立的 `radius` 字段。坐标载荷写在同名字段的 `*_x/y/z` 上，不塞进 ref 字符串。
 
-## 往返不变式
+### 4.4 边界
 
-```ts
-parsePointRef(buildPointRef(kind, payload)).kind === kind
-```
+- `facing_source=auto` 时，target 与 entity 同时非空是冲突，界面立刻红框、不能提交。
+- `facing_source=entity` 需要 `facing_entity` 或选择器原点；玩家激活位置不是实体选择器，不能当 entity 基准。
+- 冻结的条件不满足时不读取，但值保留；不静默清空。
+- 结构 id 输入框是独立校验，不复用普通文本框的自由输入。
+- 所有 `ref` 字段在数据层仍是字符串，schema 不变。
 
-必须覆盖：
+## 五、为什么不选别的
 
-- `player`
-- `coordinate` + 坐标
-- `block:minecraft:stone`、`block:minecraft:stone:8`
-- `@e[type=pig,limit=1]`
-- `uuid:abc`
-- `village_plains`
-- `""`
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 单个自由文本框 | 作者直接写完整字符串 | 零实现成本 | 五形态语法要背；填错会被解析成别的形态，错误发生在运行时而不是输入时 |
+| 把 `ref` 改成结构化对象 | 脚本里存 `{kind, payload}` | 改脚本格式、改模组解析、旧脚本要迁移 | 07 的边界是只写现有字段，模组零改动 |
+| 让 `look_at` 复用五形态下拉 | 一套控件走两个字段 | 少写一套控件 | `look_at` 是枚举且载荷字段完全不同，复用会让作者以为填法一致 |
+| 五种形态各做一个独立字段 | 拆成 `origin_player`、`origin_coord` 等 | 语义清晰 | schema 里只有一个字符串字段，拆开等于新增字段 |
+| 结构 id 与普通文本共用输入框 | 提交时再校验 | 少一层校验 | 结构 id 撞保留字会被解析成别的形态，必须在输入阶段就拒绝 |
 
-结构 id 反例：`player`、`coordinate`、`@p`、`uuid:abc`、`block:foo` 全部拒绝。
+**本方案的缺点**：
 
-## 验收
+- 一个字符串字段背后藏着五种形态，作者需要理解「形态决定载荷」这层关系，概念上不轻。
+- 切换形态时旧载荷字段的残留值不会自动清空，界面要额外标注「不读取」。
+- `block` 半径写在字符串里，编辑时要在「id」和「半径」两个输入框之间来回拼装，实现上比独立字段麻烦。
+- `look_at` 与五形态的差异需要靠文案持续解释，容易记混。
 
-1. `position_origin=player` → 写 `"player"`；`kindOf` 返回 PLAYER。
-2. `position_origin=coordinate` + `(10,64,-5)` → 写 `"coordinate"` + 三轴；保存通过。
-3. `position_origin=block` + `minecraft:stone` + 半径 8 → 写 `"block:minecraft:stone:8"`；留空半径写 `"block:minecraft:stone"`。
-4. `position_origin=selector` + `@e[type=pig,limit=1]` → 原串写入；选择器补全可用。
-5. `position_origin=structure` + `village_plains` → 原串写入；填 `player` 被拒。
-6. `facing_source=line` + `facing_target=@p` + offset `(0,1,0)` + space `world` → 保存通过；运行时端点抬高 1。
-7. `facing_source=auto` 且 target/entity 同时非空 → 红框阻止；清空一个后可提交。
-8. `position_space=base`、`position_origin` 空、`position_origin_freeze=true` → 可用；切 `world` 后禁用并显示 `warn`。
-9. `look_at=entity` + selector + part `(50,90,50)` → 头部取点；`look_at_freeze` 可用。
-10. `look_at=coordinate` + structure `village_plains` → 坐标字段禁用；清空 structure 后坐标字段恢复。
-11. `look_at=block` + `block:minecraft:stone:8` → 保存通过；block id 非法时本地拒绝。
-12. `look_at=none` 但文档已有 `look_at_target_x` → 显示“不读取”，不删；保存校验给出对应 issue。
-13. `yaw_base_from=@p`、`yaw_base_to=coordinate`：from 的 freeze 可用，to 的 freeze 禁用；两个端点各自显示。
-14. 以上所有写入保存重开后字符串与载荷不变；没有把 `block` 半径写成独立字段。
+## 六、实现结果
+
+状态：未实现
+
+按本方案实现五形态下拉、载荷表单、结构 id 校验、`look_at` 枚举分支、偏移与冻结条件；字段集合与模组解析逻辑不变。
+
+| 原设计 | 实际实现 | 偏离原因 |
+|---|---|---|
+| — | — | 尚未实现 |
+
+验收要点：
+
+- 五种形态各自写入正确字符串：`player`、`coordinate` 加三轴、`block:<id>` 与 `block:<id>:<radius>`、选择器原串、结构 id 原串。
+- 结构 id 输入框拒绝 `player`、`coordinate`、`@p`、`uuid:abc`、`block:foo`。
+- 五种形态加空串的往返解析结果与写入形态一致。
+- 方向目标配偏移与偏移空间后保存通过，运行时端点位置符合偏移。
+- `facing_source=auto` 且 target 与 entity 同时非空时立刻阻止提交；清空一个后可提交。
+- 冻结条件不满足时控件禁用并显示「不读取」，值保留；条件满足后恢复可用。
+- `look_at` 五个枚举分支各自只显示对应载荷：`coordinate` 下结构非空时坐标禁用、`entity` 下 `look_at_part` 越界被拒、`block` 下非法 id 被拒、`none` 下已有值标注不读取。
+- 保存重开后所有字符串与载荷不变，方块半径没有变成独立字段。

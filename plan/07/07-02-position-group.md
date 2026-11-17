@@ -1,183 +1,129 @@
-# 07-02 位置组
+# 位置组
 
-## 目标
+> 状态：未实现
+> 范围：CAMERA 片段位置字段的编辑、校验、可见性与切换对齐
+> 关联：02 字段目录、03 文档模型、06 双面板归属、07-01 编辑组合、07-03 点源五形态
 
-把 CAMERA 片段的位置字段做成一组可编辑、可校验、可组合打帧的属性：
+## 一、摘要
 
-- `position.x` / `position.y` / `position.z`
-- `position_mode` / `position_space`
-- `position_origin` / `position_origin_x/y/z` / `position_origin_freeze`
-- `facing_source` / `facing_target` / `facing_target_x/y/z` / `facing_target_offset.x/y/z` / `facing_target_offset.space` / `facing_target_freeze` / `facing_entity`
+位置组把 CAMERA 片段的位置相关字段——三轴坐标、模式与空间、原点、以及 `facing_*` 这一批方向源载荷——当成一组可编辑、可校验、可组合打帧的属性来呈现。核心难点不是画输入框，而是让作者看清「当前这组字段组合起来，运行时会怎么算这个位置」，并在改开关时不被静默产生的坏数据坑到。当前状态：未实现。
 
-位置组按 06 双面板归属：没有关键帧的叶子在属性面板；已有关键帧的叶子在效果面板；`position.x/y/z` 的批量操作走 07-01 的 `position.xyz` 组合。
+## 二、为什么做
 
-## 字段表
+### 2.1 问题
 
-| 字段 | 形态 | 类型 | 插值 | 默认 | 组 |
-|---|---|---|---|---|---|
-| `position.x` | animated | float | linear | `0` | position |
-| `position.y` | animated | float | linear | `0` | position |
-| `position.z` | animated | float | linear | `0` | position |
-| `position_mode` | animated | enum `relative/absolute` | step | `relative` | position |
-| `position_space` | animated | enum `world/base` | step | `world` | position |
-| `position_origin` | animated | ref | step | `""` | position |
-| `position_origin_x` | animated | float | linear | `null`（运行期 0） | position |
-| `position_origin_y` | animated | float | linear | `null`（运行期 0） | position |
-| `position_origin_z` | animated | float | linear | `null`（运行期 0） | position |
-| `position_origin_freeze` | animated | bool | step | `false` | position |
-| `facing_source` | animated | enum `auto/world/entity/line` | step | `auto` | position |
-| `facing_target` | animated | ref | step | `""` | position |
-| `facing_target_x` | animated | float | linear | `null` | position |
-| `facing_target_y` | animated | float | linear | `null` | position |
-| `facing_target_z` | animated | float | linear | `null` | position |
-| `facing_target_offset.x` | animated | float | linear | `0` | position |
-| `facing_target_offset.y` | animated | float | linear | `0` | position |
-| `facing_target_offset.z` | animated | float | linear | `0` | position |
-| `facing_target_offset.space` | animated | enum `world/base` | step | `world` | position |
-| `facing_target_freeze` | animated | bool | step | `false` | position |
-| `facing_entity` | animated | ref | step | `""` | position |
+- 位置相关字段有二十多个，散在 schema 的 `position` 组里。作者很难从字段名判断哪些现在生效、哪些写了也不读。比如 `position_mode=absolute` 时原点字段根本不用，但界面上照样能填；填了不报错，运行时也不读，出问题只能靠猜。
+- `relative + base` 下 `(x, y, z)` 读作 `(fwd, up, right)`，不是世界三轴。如果界面只写「x / y / z」，作者会按世界坐标填，位置整体偏掉。
+- 切 `position_space` 这类开关时，如果同刻没有三轴关键帧，位置会在一帧内跳变。现在没有拦截，坏数据照样提交。
+- 属性面板和效果面板都可能显示位置字段，两边如果各自列一套，同一个值会出现两份编辑入口。
 
-字段来自 `TrackSchemas.cameraObjects()`；`group` 是 schema 分组标签，不是嵌套对象。
+### 2.2 目标
 
-## 位置表达式
+- 作者只看当前生效支路需要的控件；被压住的字段保留数据但明确标注「不读取」，不静默删除。
+- `base` 空间下轴标签变成 `fwd/up/right`，让轴语义在界面上就能读出来。
+- 在 `t > 0` 改空间/模式/原点这类 step 字段时，缺三轴帧就拦住提交，并给出「补齐三轴」的选项。
+- 位置字段按 06 的归属规则落在属性面板或效果面板，不重复显示。
 
-### `absolute`
+### 2.3 非目标
 
-```text
-world = (position.x, position.y, position.z)
-```
+- 不改模组的求值逻辑，不新增字段，不改任何 `.java`。
+- 不在主时间轴上画位置行、三轴节点或路径端点。
+- 不为位置字段单独造一套关键帧控件；复用 06 的效果行和值控件。
+- 不自动删除「不读取」的既有字段值。
 
-- `position_space` 必须 `world`。
-- `position_origin` 必须为空；`position_origin_x/y/z`、`position_origin_freeze` 不参与。
-- `facing_*` 不参与；`position_space=world` 时写这些字段，校验会报“不读取（已忽略）”。
-- UI：`position_space` 锁定 `world`；原点控件禁用并显示“absolute 不使用原点”；已有原点/方向源时显示“将被忽略”，提供显式“清除”命令，不自动删。
+## 三、方案
 
-### `relative + world`
+位置组头在属性面板显示「位置」，列出当前片段适用的全部叶子。每个叶子按是否有帧分流：没有帧的在属性面板，显示静态值和「添加首帧」时钟；已有关键帧的叶子进效果面板，组头只显示「N 项在效果面板」。
 
-```text
-world = origin + (position.x, position.y, position.z)
-```
+可见性跟着字段组合走，一张表能说清：
 
-- 原点是点源，五形态见 07-03。
-- 空 `position_origin` = 玩家激活位置（整场不变）。
-- `position_origin=coordinate` 时才有 `position_origin_x/y/z`；schema 默认 `null`，运行期读作 `0`。UI 显示“未写 = 0”，作者输入后写数值。
-- `position_origin_freeze` 只在原点是实体选择器，或原点为空且 `position_space=base` 时被读取；`relative + world` 下空原点不读取。
-- `facing_*` 不参与；UI 隐藏；已有字段显示“world 空间不读取”。
-
-### `relative + base`
-
-```text
-world = origin + fwd * position.x + up * position.y + right * position.z
-```
-
-- `(x, y, z)` 读作 `(fwd, up, right)`，不是世界三轴。
-- 空原点 = 隐式 `@p`；实体选择器原点可用 `position_origin_freeze`。
-- `up` 固定世界竖直；`fwd/right` 来自 `facing_source` 的参考系。
-- `facing_source=auto` 的回落：
-  - 有 `facing_target` 且无 `facing_entity` → `line`
-  - 无 target 有 `facing_entity` → `entity`
-  - 都没有：原点是选择器/玩家激活 → `entity`；原点是坐标/方块/结构 → `world`
-  - target 与 entity 同时非空 → block，不能提交。
-- `facing_source=world`：参考系固定世界轴；target/entity 不读取。
-- 参考系不可解析（实体不存在、line 水平退化、原点解析失败）时，该帧不产生位置结果；编辑器显示 `warn`，不用假的替代值预览。
-
-## 组合规则
-
-| 条件 | UI 行为 |
+| 条件 | 界面行为 |
 |---|---|
 | `position_mode=absolute` | `position_space` 锁 `world`；原点、原点坐标、冻结、`facing_*` 禁用或隐藏 |
-| `relative + world` | 原点可选；原点坐标仅 coordinate；冻结仅实体选择器；`facing_*` 隐藏 |
-| `relative + base` | 原点、冻结、`facing_source`、按来源显示载荷 |
-| `position_origin=coordinate` | 显示 `position_origin_x/y/z`；空值占位 0 |
-| `position_origin` 其他形态 | 隐藏原点坐标；已写值显示“运行时不读取” |
-| `position_origin_freeze=true` 且原点不是实体选择器/空+base | 行显示 `warn`；控件禁用；已有值保留 |
-| `facing_source=auto` | target/entity 互斥；显示“自动将选择 line/entity/world” |
-| `facing_source=entity` | 显示 `facing_entity`；原点是选择器时可留空回落原点；玩家激活位置不作为实体基准 |
-| `facing_source=line` | 显示 `facing_target` + 坐标/偏移/冻结 |
-| `facing_source=world` | target/entity 隐藏；已有值显示“不读取” |
-| `facing_target_offset.space=base` 且当前不是 base | 显示 `warn`“无参考系，偏移不生效”；已有值保留 |
+| `relative + world` | 原点可选；原点坐标仅 `coordinate` 时显示；冻结仅实体选择器可用；`facing_*` 隐藏 |
+| `relative + base` | 原点、冻结、`facing_source` 及按来源显示的载荷 |
+| `position_origin=coordinate` | 显示原点三轴；空值占位 0，标注「未写 = 0」 |
+| 原点其他形态 | 隐藏原点坐标；已写值标注「运行时不读取」 |
+| `facing_source=auto` | target 与 entity 互斥，显示「将按 line/entity/world 解析」 |
+| `facing_source=entity` | 显示 `facing_entity`；原点是选择器时可留空回落 |
+| `facing_source=line` | 显示 `facing_target` 与坐标/偏移/冻结 |
+| `facing_source=world` | target/entity 隐藏；已写值标注「不读取」 |
 
-## 双面板归属
+切到 `absolute` 时，如果文档里已有原点或方向源，界面显示「将被忽略」并提供显式「清除」命令——不自动删，因为作者可能只是临时切模式看看效果。
 
-### 属性面板 `selection.properties`
+效果面板只列已有关键帧的叶子，不出现「位置全字段组」，不画三轴合并帧；`position.x/y/z` 三行各自有值控件、节点和帧数。`position.xyz` 的批量操作走 07-01 的组合入口。
 
-- 位置组头显示“位置”，列出全部适用叶子。
-- 静态字段：`position_mode`、`position_space`、`position_origin`、原点坐标、冻结、`facing_*`。
-- `position.x/y/z` 无帧时显示值 + 时钟“添加首帧”。
-- 已有关键帧的叶子不在属性面板重复显示；组头显示“N 项在效果面板”。
-- 组头右侧“组合编辑”入口，默认组合 `position.xyz`。
+## 四、技术细节
 
-### 效果面板 `clip.effects`
+### 4.1 核心模型
 
-- 只列已有关键帧的叶子：`position.x/y/z`、有帧的 step 字段、有帧的 `facing_*`。
-- 不显示“位置全字段组”；没有帧的 `position_mode`、`position_space`、`position_origin` 不进来。
-- 每个叶子自己的关键帧组，共用效果面板局部标尺。
-- `position.x/y/z` 三行各自有值控件、节点、帧数；不画三轴合并帧。
+位置的求值分三种形态，这是所有可见性规则和轴标签的来源：
 
-## 切换对齐
+- `absolute`：世界坐标就是 `(x, y, z)`；空间必须是 `world`，原点与方向源都不参与。
+- `relative + world`：世界坐标 = 原点 + `(x, y, z)`。空原点是玩家激活位置，整场不变；原点为 `coordinate` 时才读原点三轴，schema 默认 `null`，运行期按 0 读。
+- `relative + base`：世界坐标 = 原点 + `fwd * x + up * y + right * z`。`up` 固定世界竖直，`fwd/right` 来自 `facing_source` 指定的参考系。
 
-`ObjectValidator.checkSwitches()` 收集这些 step 字段的变化点：
+`facing_source=auto` 的回落顺序：有 target 无 entity 走 `line`；无 target 有 entity 走 `entity`；都没有时看原点形态——选择器或玩家激活走 `entity`，坐标/方块/结构走 `world`；target 与 entity 同时非空是冲突状态，不能提交。
 
-```text
-SPACE_SWITCH_FIELDS:
-  position_mode
-  position_space
-  position_origin
-  position_origin_freeze
-  facing_source
+参考系解析失败（实体不存在、line 水平退化、原点解析失败）时该帧不产生位置结果；界面给 `warn`，不用假值凑一个预览。
 
-BASE_SWITCH_FIELDS（只在 position_space=base 时）:
-  facing_target
-  facing_target_freeze
-  facing_entity
-  look_at_freeze
-  yaw_base_from_freeze
-  yaw_base_to_freeze
-```
+### 4.2 契约
 
-规则：
+切换对齐由 `ObjectValidator.checkSwitches()` 收集 step 字段的变化点。参与检查的是 `position_mode`、`position_space`、`position_origin`、`position_origin_freeze`、`facing_source`，以及只在 `position_space=base` 时才检查的 `facing_target`、`facing_target_freeze`、`facing_entity`、`look_at_freeze`、`yaw_base_from_freeze`、`yaw_base_to_freeze`。
 
-- `time <= 0` 的初始值不算变化，不要求三轴帧。
-- `time > 0` 的 step 变化点要求 `position.x`、`position.y`、`position.z` 都有一条 `time` 完全相等（`==`，无容差）的关键帧。
-- 缺帧时阻止提交；弹窗列出缺失轴，提供“补齐三轴并提交 / 取消”。
-- “补齐三轴并提交”用当前有效值各建一帧，和 step 值在同一个 `commit`；一次撤销全回退。
-- `BASE_SWITCH_FIELDS` 只在变化点 `position_space=base` 时检查；`position_space=world` 时即使字段变化也不要求三轴帧。
-- `position.x/y/z` 的普通插帧不触发 step 对齐；但如果新帧落在某条 `paths[]` 的端点之间，07-05 的引用完整性会阻止或要求重绑。
+规则是：`time <= 0` 的初始值不算变化；`time > 0` 的变化点要求 `position.x`、`position.y`、`position.z` 都有一条时间完全相等（`==`，无容差）的关键帧。缺帧阻止提交，弹窗列出缺哪些轴，提供「补齐三轴并提交 / 取消」。补齐用当前有效值各建一帧，和 step 值写在同一个 `commit`，一次撤销全回退。
 
-## 组件
+`base` 专属那批字段只在变化点的 `position_space=base` 时检查；`world` 下即使这些字段变化也不要求三轴帧。
 
-```text
-src/plugins/core.selection-properties/...   属性面板接入
-src/plugins/core.clip-effects/...           效果面板接入
-src/components/position/
-  PositionGroupHeader.vue
-  PositionModeFields.vue
-  PositionOriginFields.vue
-  PositionAxesRows.vue
-  PositionFacingFields.vue
-  PositionSwitchDialog.vue
-src/model/position/
-  positionCombination.ts     组合可见性/禁用/警告
-  switchImpact.ts            变化点/缺帧/补齐命令
-  positionExpression.ts      表达式空间标签/轴语义
-```
+普通插帧不触发对齐；但新帧如果落在某条 `paths[]` 的端点之间，07-05 的引用完整性会接管，阻止插入或要求先处理路径。
 
-- `PositionGroupHeader` 同时被属性面板和效果面板使用；通过 `panelMembership` 决定显示哪些行。
-- `PositionAxesRows` 不自己建节点组；复用 06 效果行和值控件。
-- `PositionSwitchDialog` 只从 `switchImpact` 取缺失列表；不自己扫描帧。
-- 配置扩展组来自 07-01；本模块不硬编码第二份组表。
+### 4.3 数据形态
 
-## 验收
+位置字段全部是 `clips[].objects[path]` 下的 `AnimObject`，形态 `{ value?, keyframes? }`。`position.x/y/z` 与三轴原点、`facing_target` 坐标、偏移分量是连续值，线性插值；模式、空间、原点引用、冻结、`facing_source`、`facing_entity` 是 step，不插值。`position_origin_x/y/z` 与 `facing_target_x/y/z` 的 schema 默认是 `null`，运行期读作 0，写盘时不主动补 0。
 
-1. `relative + world + 原点空`：三轴可见；`facing_*` 隐藏；保存 `script.validate` 通过。
-2. 切 `absolute`：`position_space` 锁 `world`，原点禁用；原点已有 `@p` 时显示“将被忽略”，点清除后才保存通过。
-3. `relative + base + 原点 @p + facing_source=entity`：显示 `facing_entity`；填 `@e[type=pig,limit=1]` 保存通过。
-4. `position_origin=coordinate`：显示 origin x/y/z；留空显示 0 占位；填 `(10,64,-5)` 保存后运行时位置正确。
-5. `position_space` 在 `t=3` 从 `world` 切 `base`，三轴 `t=3` 已各有帧：直接提交。
-6. 同一操作缺 `position.z@3`：弹窗列出 z；补齐后三轴都有帧；一次撤销回到切换前。
-7. `t=0` 把 `position_mode` 改 `absolute`：不要求三轴帧；保存通过。
-8. `relative + world` 文档里已有 `facing_source=entity`：显示“world 不读取”，保存校验报“已忽略”；不静默删字段。
-9. 属性面板给 `position.y` 开时钟：y 进效果面板；x/z 无帧仍留属性面板；位置组头“1 项在效果面板”。
-10. 效果面板关闭 `position.x` 动画：x 回属性面板；组头计数减一；一次撤销恢复。
-11. `position.xyz` 组合在 `t=2.35` 建帧：三条独立帧，`time` 完全一致；不是组帧。
-12. 主时间轴：仍只有片段/轨道/标记；没有位置行、三轴节点或路径端点。
+### 4.4 边界
+
+- 组头在两侧面板都可能出现，计数按 `panelMembership` 各自算；同一个叶子不会同时在两处出现。
+- 原点坐标只在原点是 `coordinate` 时可编辑，其他形态下已写值保留但不读。
+- `position_origin_freeze` 只在原点是实体选择器、或原点为空且 `position_space=base` 时被读取。
+- 方向源偏移的 `space=base` 在没有 `base` 参考系时给出「偏移不生效」警告，但不改值。
+- 主时间轴不参与：位置行、三轴节点、路径端点都不进 `timeline.main`。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 全部字段常显，靠校验报错 | 一次列出二十多个字段 | 作者要自己判断哪些生效；误填的字段不报错，运行时静默忽略 | 位置是最容易填错的组，必须在界面层就收敛可见性 |
+| 按模式拆成三套独立表单 | `absolute` / `relative+world` / `relative+base` 各一套 | 切换模式时控件整块替换，值绑定和焦点状态都要重建 | 三套表单共享大部分字段，拆开后维护三份，且切换会丢编辑上下文 |
+| 用容差匹配三轴帧 | `1e-4` 容差找同刻帧 | 建帧时可能改写时间，撤销后与写盘值不一致 | 运行时按精确时间比较，编辑器同口径才不产生「看起来对齐」的假帧 |
+| 切模式时自动删掉不读取的字段 | 减少脏数据 | 作者切回去后原值丢了，且无法撤销到「只是想看看」 | 值保留 + 显式清除命令，把决定权留给作者 |
+| 位置批量操作单独做一套控件 | 不走 07-01 的组合层 | 与朝向组的批量行为分裂成两套语义 | 组合层就是为这类跨字段批量操作设计的，复用即可 |
+
+**本方案的缺点**：
+
+- 可见性规则本身是一张复杂的条件表，作者需要一点时间建立「哪些字段现在生效」的心智模型。
+- `base` 空间的轴标签换成 `fwd/up/right` 后，与 schema 字段名 `position.x/y/z` 的对应关系需要靠提示文案维持。
+- 「值保留但标注不读取」会让界面出现一些灰掉的控件，视觉上不算干净。
+- 切换对齐的弹窗在批量操作时会打断节奏，尤其在连续改多个 step 字段时。
+
+## 六、实现结果
+
+状态：未实现
+
+按本方案实现位置组的可见性矩阵、轴语义标签、切换对齐拦截和双面板分流；字段集合与模组求值逻辑不变。
+
+| 原设计 | 实际实现 | 偏离原因 |
+|---|---|---|
+| — | — | 尚未实现 |
+
+验收要点：
+
+- `relative + world` 且原点为空：三轴可见、方向源隐藏、保存通过。
+- 切 `absolute`：空间锁 `world`、原点禁用；已有原点标注「将被忽略」，显式清除后校验才通过。
+- `relative + base` 且原点是选择器：方向源按来源显示载荷，填实体选择器后保存通过。
+- 原点是 `coordinate`：原点三轴可编辑、空值占位 0；运行期位置与填写一致。
+- 在 `t > 0` 把空间从 `world` 切 `base` 且三轴都有帧：直接提交；缺一轴时弹窗列出缺失轴，补齐后一次撤销可全回退。
+- `t = 0` 改 `position_mode`：不要求三轴帧，保存通过。
+- `relative + world` 下已有 `facing_source=entity`：显示「world 不读取」，校验报已忽略，字段不被静默删除。
+- 属性面板给 `position.y` 开时钟后 y 进效果面板、x/z 留在属性面板，组头计数随之变化；关闭动画后回退且可撤销。
+- 主时间轴仍只有轨道、片段、标记，没有位置行、三轴节点或路径端点。

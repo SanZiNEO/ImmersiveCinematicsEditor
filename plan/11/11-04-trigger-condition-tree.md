@@ -1,237 +1,120 @@
-# 11-04 触发器条件树与 27 种条件
+# 触发器条件树与 27 种条件
 
-## 目标
+> 状态：未实现
+> 范围：`meta.triggers[].conditions` 的递归结构、27 种类型的字段面、区域与物品模式、组合器与摘要格式
+> 关联：11-02 声明与悬停摘要、11-05 前置、11-15 校验
 
-把 `meta.triggers[].conditions` 做成可递归编辑的条件树，覆盖当前 27 种触发器类型，并把同一套摘要格式提供给行为页和脚本图悬停。
+## 一、摘要
 
-条件树不是普通字段表单：`all_of` / `any` 是组合器，子节点可以是触发器条件，也可以是脚本前置条件；编辑器必须递归，不能只按 `conditions` 的普通键值渲染。
+`meta.triggers[].conditions` 不是普通键值表：`all_of` 与 `any` 是组合器，子项可以是触发器条件，也可以是脚本前置条件。本文定义这棵树的递归结构、27 种类型的字段面与约束、以及同一套中文摘要格式如何同时供行为页列表、详情折叠与脚本图悬停使用。
 
-## 顶层结构
+## 二、为什么做
 
-```text
-trigger:
-  type: <27 种之一>
-  conditions: <object>
-```
+### 2.1 问题
 
-- 叶子类型的 `conditions` 是字段对象；
-- `all_of` / `any` 的 `conditions` 是 `{ "list": [ { "type", "conditions" }, ... ] }`；
-- 组合器 `list` 必须非空，元素必须是对象且带非空字符串 `type`；
-- 组合器最大嵌套 8 层（顶层组合器算第 1 层）；
-- 组合器子项可以是：
-  - 27 种触发器类型中的轮询类；
-  - 27 种触发器类型中的事件类，但仅当该触发器声明了 `continuity.window > 0`；
-  - 三种脚本前置条件：`script_played` / `script_started` / `script_completed`；
-  - 另一个 `all_of` / `any`。
+按普通字段表单渲染条件对象，作者只能编辑第一层叶子；一旦遇到 `all_of`，`list` 会被当成一个不认识的数组键显示成只读原文，整棵子树无法编辑。反过来，若把组合器当成"额外字段"，作者容易把触发器级 `requires` 和条件树里的脚本前置混为一谈——前者是整条触发器的 AND 门，后者是可以放进 `any` 里的普通子条件。
 
-## 组合器子项与触发器 requires 的区别
+还有一批容易写错又不会立刻报错的细节：区域坐标缺一个分量（条件永不满足）、`inventory` 用空 `change` 加多个物品冒充"任意一件"（实际要求全部）、`facing` 起止 yaw 相同（其实是整圈）、`structure` 的半径语义是"附近有该结构"而非"在结构内部"。
 
-- 触发器级 `requires` 是整条触发器之前的 AND 门；任一不满足，整条触发器不求值。
-- 组合器里的 `script_played` 等是条件树内部的一个子条件，可以放进 `any` 表达“前置脚本满足 **或** 位置满足”。
-- 两者字段形态不同：
-  - `requires` 字符串 `"chapter1"` 等价 `script_played`；
-  - 组合器子项必须写成 `{ "type": "script_played", "conditions": { "script": "chapter1" } }`。
-- 编辑器不把组合器子项自动搬到 `requires`，也不把 `requires` 自动搬进条件树。
+### 2.2 目标
 
-## 27 种类型
+- 27 种类型都能建，下拉顺序与代码一致，不按中文分组重排。
+- 组合器可递归编辑到 8 层，子项能在触发器条件与脚本前置之间选择。
+- 每个叶子的必填、范围、互斥关系在字段旁说清，写错立刻可见。
+- 行为页、详情摘要、脚本图悬停对同一棵树给出完全一致的文字。
 
-顺序与代码一致，下拉不重排：
+### 2.3 非目标
 
-| # | type | conditions 字段 | 摘要格式 |
+- 不新增条件类型，不引入 `not`、`xor` 或权重语义。
+- 不把 `requires` 自动搬进条件树，也不把组合器子项自动搬到 `requires`。
+- 不做实时求值预览，不显示条件当前真假。
+- 不把区域编辑做成三维可视化编辑器。
+
+## 三、方案
+
+树的根是触发器的类型加条件对象。叶子类型的条件对象就是它的字段集合；组合器的条件对象只有一个 `list`，元素是带 `type` 与 `conditions` 的对象。组合器 `list` 必须非空，元素必须是对象且带非空字符串类型，最大嵌套 8 层（顶层算第 1 层）。
+
+27 种类型按代码顺序是：`login`、`location`、`advancement`、`biome`、`entity_kill`、`death`、`entity_interact`、`block_interact`、`item_on_interact`、`dimension_change`、`item_craft`、`item_use`、`item_consume`、`item_release`、`item_instant_use`、`item_use_interrupt`、`item_pickup`、`item_drop`、`xp`、`dimension`、`observation`、`inventory`、`structure`、`gamestage`、`facing`、`all_of`、`any`。前 25 种是叶子，后两种是组合器；顺序即下拉顺序，不按中文分组重排。
+
+组合器子项可以是三类：轮询类触发器条件、事件类触发器条件（仅当该触发器声明了 `continuity.window > 0`）、三种脚本前置条件（`script_played`、`script_started`、`script_completed`），也可以再嵌一层组合器。子项类型选择器因此分两组：触发器条件与脚本前置；事件类子条件在窗口为 0 时禁用并提示原因。
+
+组合器子项里的脚本前置与触发器级 `requires` 形态不同：`requires` 允许字符串简写（等价 `script_played`），组合器子项必须写成带 `conditions.script` 的对象。两处不自动互转。
+
+区域编辑器供 `location`、`entity_kill`、`death` 共用，支持三种形态：只写场景字段（维度、群系）、球形（位置加半径）、方体（两个角点）。也可以两种区域同时写，运行时按"方体命中或球形命中"，界面明确显示 OR。角点各轴自动取 min/max，不要求作者按顺序填；坐标必须三个分量齐全，缺一个就标"条件永不满足"而不是默默当 0。`structure` 不用区域编辑器，只写结构 id 加半径。
+
+物品类字段支持 id 通配：`*` 全匹配、`ns:*` 命名空间前缀、不含冒号按子串包含、其余全等。界面给"支持通配"提示，不把通配符判成非法。
+
+几个容易误读的叶子有专门说明：
+
+- `inventory` 的 `items` 是非空数组，`change` 为空表示"同时拥有全部"，`increase` / `decrease` 表示"任一模式数量发生对应变化"。想要"拥有其中任意一件"必须用 `any` 包多个单值子条件，不能用空 `change` 加多值冒充。
+- `xp` 的等级与总经验至少写一个，两个都空表示永不满足；界面不自动补 0。
+- `facing` 四个角度全必填，pitch 端点限制在正负 90 度，越界显示永不满足；起止 yaw 相同表示整圈，不限制朝向。
+- `observation` 的 `target_type` 为空表示方块和实体都查，`reach` 是距离上限、有缺省值，负数报错。
+- `structure` 的语义是"玩家所在位置附近有该结构"，摘要据此措辞。
+
+组合器交互：节点显示"全部满足 / 任一满足"，子项按列表顺序排列，可新增、复制、删除、上下移动；移动只改顺序不改字段；到达第 8 层后"新增子项"禁用。空 `list`、未知类型、缺 `conditions` 都显示错误，不静默当 false。
+
+摘要格式统一由一处生成，行为页列表、详情折叠、脚本图悬停共用。规则包括：长 id 不截断，摘要换行、卡片滚动；空字段不编默认值；未知类型显示"未知条件 + 原始键值"只读；未登记字段标"未登记字段，只读"，不删除。
+
+## 四、技术细节
+
+### 4.1 核心模型
+
+一棵条件树由节点构成，节点有类型与数据两部分。叶子节点的数据是字段对象；组合器节点的数据是一个子项列表。类型决定字段的合法集合与必填项，也决定该节点能否作为组合器子项（事件类需要窗口）。
+
+### 4.2 契约
+
+- 字段目录提供类型清单、顺序、字段约束；界面不另存一份。
+- 摘要生成是纯函数：同一棵树在三个位置产出相同文本。
+- 深度限制按"顶层算第一层"计，超过即拒绝新增，不静默截断旧数据。
+
+### 4.3 数据形态
+
+叶子字段直接写在节点上；组合器子项统一包装成类型加条件对象两层。区域字段用"位置 + 半径"或"两个角点"表达，两者共存时是 OR 关系。物品字段是字符串数组，通配语义由消费方解释，编辑器只保证形态合法。
+
+### 4.4 边界
+
+- 编辑器不判断条件在某玩家身上是否成立。
+- 不解释每个类型的判定实现，只保证字段合法与摘要可读。
+- 组合器不提供"全部取反"或"排除"语义——当前格式没有。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
 |---|---|---|---|
-| 1 | `login` | 无 | 玩家登录 |
-| 2 | `location` | `dimension`、`position`+`radius`、`corner1`+`corner2` | 位于 `<dimension>` · 球形/方体 |
-| 3 | `advancement` | `advancement` 必填 | 进度 = `id` |
-| 4 | `biome` | `biome` 必填 | 生物群系 = `id` |
-| 5 | `entity_kill` | `entity` 必填，`dimension`/`biome`/区域可选 | 击杀 `entity`，场景 … |
-| 6 | `death` | `dimension`/`biome`/区域全可选 | 玩家死亡，场景 … |
-| 7 | `entity_interact` | `target` 必填 | 与实体 `target` 交互 |
-| 8 | `block_interact` | `target` 必填 | 与方块 `target` 交互 |
-| 9 | `item_on_interact` | `item` 必填，`target` 必填，`target_type` 可省 | 手持 `item` 与 `target` 交互 |
-| 10 | `dimension_change` | `dimension` 必填，`from_dimension` 可省 | 从 `from` 进入 `dimension` |
-| 11 | `item_craft` | `item` 必填 | 合成 `item` |
-| 12 | `item_use` | `item` 必填 | 使用 `item` |
-| 13 | `item_consume` | `item` 必填 | 消耗 `item` |
-| 14 | `item_release` | `item` 必填 | 松开 `item` |
-| 15 | `item_instant_use` | `item` 必填 | 瞬间使用 `item` |
-| 16 | `item_use_interrupt` | `item` 必填 | 中断使用 `item` |
-| 17 | `item_pickup` | `item` 必填 | 捡起 `item` |
-| 18 | `item_drop` | `item` 必填 | 丢弃 `item` |
-| 19 | `xp` | `level` / `total` 至少一个 | 等级 ≥ `level` / 总经验 ≥ `total` |
-| 20 | `dimension` | `dimension` 必填 | 当前维度 = `id` |
-| 21 | `observation` | `target` 必填，`target_type` 可省，`reach` 缺省 4.5 | 注视 `target`，距离 ≤ `reach` |
-| 22 | `inventory` | `items` 必填非空，`change` 可省 | 背包拥有全部/任一变化 |
-| 23 | `structure` | `structure` 必填，`radius` 缺省 0 | 位于结构 `id`，半径 `r` |
-| 24 | `gamestage` | `stage` 必填 | 阶段 = `stage` |
-| 25 | `facing` | `yaw1`/`pitch1`/`yaw2`/`pitch2` 全必填 | yaw/pitch 区间 |
-| 26 | `all_of` | `list` 必填非空 | 全部满足 |
-| 27 | `any` | `list` 必填非空 | 任一满足 |
+| 只编辑第一层 | 组合器 `list` 显示为只读原文 | 组合器等于不可用，而它是最常用的结构 | 递归编辑是条件树的基本要求 |
+| 组合器子项只能放触发器条件 | 不允许脚本前置进树 | 无法表达"前置满足或位置满足" | 格式支持，编辑器不该阉割 |
+| `inventory` 多值当 OR | 空 `change` 加多值表示任意一件 | 与运行时语义相反，条件永不成立 | 必须用 `any` 显式表达 |
+| 自动补默认值 | 缺坐标补 0、缺半径补默认 | 条件变成永不满足且作者看不出 | 缺什么报什么 |
 
-## 叶子字段控件
+**本方案的缺点**：
 
-### 区域编辑器
+- 27 种类型字段差异极大，详情区只能按类型切换字段组，难以做成统一表格。
+- 组合器嵌套深时缩进占宽，窄面板里需要横向滚动。
+- 区域编辑器不做三维预览，坐标错误只能靠文字提示发现。
 
-`location`、`entity_kill`、`death` 共用区域编辑器；`structure` 只用结构 id + 半径，不用区域编辑器。
+## 六、实现结果
 
-区域编辑器支持：
+状态：未实现
 
-- 无区域：只写 `dimension` / `biome` 等场景字段；
-- 球形：`position` 的 x/y/z + `radius`；
-- 方体：`corner1` / `corner2` 的 x/y/z；
-- 可选“再加一种区域”：同时写球形和方体，运行时按“方体命中或球形命中”，界面明确显示 OR。
+类型清单、递归结构与摘要规则已定，代码尚未落地。
 
-约束：
-
-- `position` / `corner1` / `corner2` 必须是完整 x/y/z；缺分量显示“条件永不满足”。
-- `radius` 数值，球形缺省 0；负数/非有限报错。
-- `corner1` / `corner2` 各轴自动 min/max 归一，不要求作者按顺序填。
-- 已有两种区域同时存在时不静默删，显示“方体或球形”双区域。
-
-### 物品模式
-
-`entity_kill.entity`、`entity_interact.target`、`block_interact.target`、`item_on_interact.item/target`、`observation.target`、`inventory.items` 支持 id 通配：
-
-- `*` = 全匹配；
-- `ns:*` = 命名空间前缀；
-- 不含 `:` = 子串包含；
-- 其余 = 全等。
-
-界面给“支持通配”提示，不把通配符判为非法。
-
-### `inventory`
-
-- `items` 是非空字符串数组；每行一个物品模式。
-- `change` 为空：presence 语义，要求背包同时拥有 `items` 里**全部**模式。
-- `change=increase` / `decrease`：净变化语义，任一模式数量发生对应变化即为真。
-- “拥有其中任意一件”必须用 `any` + 多个单值子条件，不能用空 `change` 的 `items` 列表冒充 OR。
-- 变化判定有采样基线；编辑器只写字段，不显示“上次采样”。
-
-### `xp`
-
-- `level` / `total` 都可省，但至少写一个；两个都空表示永不满足。
-- 数值为整数；界面不自动补 0。
-- 摘要：两个都有时显示“等级 ≥ x 且总经验 ≥ y”。
-
-### `facing`
-
-- 四个角度全部必填。
-- `pitch` 端点限制 -90~90；超出显示“永不满足”。
-- `yaw` 起止相同表示整圈，不限制朝向；界面给提示。
-- 摘要用“yaw a→b，pitch c→d”，不画 3D 朝向。
-
-### `observation`
-
-- `target` 必填；`target_type` 空 = 方块和实体都查，`block` / `entity` 限定。
-- `reach` 缺省 4.5；负数/非有限报错。
-- 摘要显示“注视 target，距离 ≤ reach”。
-
-### `structure`
-
-- `structure` 必填；`radius` 整数，缺省 0。
-- 语义是“玩家所在位置附近有该结构”，不是“玩家在结构内部”。
-- 摘要显示“结构 id，半径 r”。
-
-## 组合器编辑器
-
-### 结构
-
-```text
-all_of
-  list:
-    1. { type: "location", conditions: { ... } }
-    2. { type: "script_played", conditions: { script: "chapter1" } }
-    3. any
-         list:
-           1. { type: "biome", conditions: { biome: "minecraft:taiga" } }
-           2. { type: "gamestage", conditions: { stage: "chapter2" } }
-```
-
-### 交互
-
-- 根节点是当前触发器的 `type` + `conditions`。
-- 组合器节点显示“全部满足 / 任一满足”，子项按列表顺序排列。
-- 子项可新增、复制、删除、上下移动；移动只改 `list` 顺序，不改字段。
-- 子项是组合器时可继续展开；到第 8 层后“新增子项”禁用。
-- 子项类型选择器分两组：
-  - 触发器条件（27 种，事件类受 `window` 限制）；
-  - 脚本前置（三种，字段只有 `script`）。
-- 组合器内事件类子条件：只有当前触发器 `continuity.window > 0` 才允许；否则禁用并提示“事件类子条件需要事件窗口”。
-- 空 `list`、未知 type、缺少 `conditions` 对象都显示错误，不静默改成 false。
-- 组合器不提供“全部取反”或“排除”语义；当前格式没有 not。
-
-## 摘要格式
-
-行为页列表、详情折叠摘要、脚本图悬停共用同一套摘要：
-
-- `login`：玩家登录
-- `location`：位于 `<dimension>` · 球形 `(x,y,z) r=r` / 方体 `(x1,y1,z1)–(x2,y2,z2)`
-- `advancement`：进度 = `id`
-- `biome`：生物群系 = `id`
-- `entity_kill`：击杀 `entity`，场景：`dimension / biome / 区域`
-- `death`：玩家死亡，场景：`dimension / biome / 区域`
-- `entity_interact`：与实体 `target` 交互
-- `block_interact`：与方块 `target` 交互
-- `item_on_interact`：手持 `item` 与 `target` 交互（`block/entity/两者`）
-- `dimension_change`：从 `from` 进入 `dimension`
-- `item_craft`：合成 `item`
-- `item_use`：使用 `item`
-- `item_consume`：消耗 `item`
-- `item_release`：松开 `item`
-- `item_instant_use`：瞬间使用 `item`
-- `item_use_interrupt`：中断使用 `item`
-- `item_pickup`：捡起 `item`
-- `item_drop`：丢弃 `item`
-- `xp`：等级 ≥ `level` / 总经验 ≥ `total`
-- `dimension`：当前维度 = `id`
-- `observation`：注视 `target`，距离 ≤ `reach`
-- `inventory`：拥有全部 `items` / 任一数量 `increase/decrease`
-- `structure`：结构 `id`，半径 `r`
-- `gamestage`：阶段 = `stage`
-- `facing`：yaw `a→b`，pitch `c→d`
-- `all_of`：全部满足 + 子项缩进
-- `any`：任一满足 + 子项缩进
-
-格式化规则：
-
-- 长 id 不截断；摘要换行，悬停卡滚动。
-- 空字段不编默认值；该字段省略。
-- 未知 type 显示 `未知条件 type` + 原始键值，只读。
-- 未登记字段显示“未登记字段，只读”，不删除。
-
-## 校验
-
-| 检查 | 级别 | 处理 |
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `type` 缺失/未知 | block | 节点红框 |
-| 必填字段缺失 | block | 字段行红框 |
-| 字段类型错误 | block | 不写非法值 |
-| `position`/角点缺 x/y/z | error | “条件永不满足” |
-| 区域半径负数/非有限 | block | 拒绝提交 |
-| `inventory.items` 空数组 | block | 拒绝提交 |
-| `inventory.items` 非字符串 | block | 行红框 |
-| `xp` 两个都空 | block | “永不满足” |
-| `facing` 缺角度 / pitch 越界 | block/error | 行红框；越界提示永不满足 |
-| `observation.reach<0` | block | 拒绝提交 |
-| 组合器 `list` 缺失/非数组/空 | block | 节点红框 |
-| 组合器子项缺 type/conditions | block | 子项红框 |
-| 组合器超过 8 层 | block | 第 8 层禁用新增 |
-| 事件类子条件 + `window=0` | block | 禁止添加；已有红框 |
-| 未登记字段 | info | 只读块，不删除 |
+| — | — | — |
 
-## 验收标准
+### 验收要点
 
-1. 27 种类型都能建；下拉顺序与代码一致。
-2. `login` 条件为空也能保存；详情显示“无场景条件”。
-3. `location` 球形、方体、仅维度三种形态都能编辑；同时两种区域显示 OR。
-4. `location` 区域缺 y 分量：显示“永不满足”，不保存为合法。
-5. `entity_kill` 场景字段：dimension/biome/区域可组合，摘要完整。
-6. `item_on_interact` 的 `target_type` 空/block/entity 三态正确。
-7. `inventory` 空 `change` 显示“拥有全部”；`increase/decrease` 显示“任一变化”。
-8. `xp` 只填 level 或只填 total 都能保存；两个都空报错。
-9. `facing` 起止 yaw 相同显示“整圈”；pitch 越界报“永不满足”。
-10. `all_of` 嵌套 `any` 三层：缩进、摘要、求值顺序正确。
-11. 组合器子项添加 `script_played`：写入 `{type, conditions:{script}}`，不写成字符串。
-12. 组合器第 8 层：新增禁用；第 9 层旧数据报错。
-13. 事件类子条件在 `window=0`：禁用添加；强行写入显示红框。
-14. 未知 type / 未登记字段：显示原文只读，不静默删。
-15. 脚本图悬停与行为页对同一条件树生成同一摘要。
+- 27 种类型都能建，下拉顺序与代码一致。
+- `login` 条件为空也能保存，详情显示"无场景条件"。
+- `location` 的球形、方体、仅维度三种形态都能编辑；两种区域共存时摘要显示 OR。
+- 区域缺一个坐标分量：显示"永不满足"，不保存成合法。
+- `inventory` 空 `change` 显示"拥有全部"，`increase` / `decrease` 显示"任一变化"。
+- `xp` 只填一项可保存，两项都空报错。
+- `facing` 起止 yaw 相同显示"整圈"，pitch 越界报"永不满足"。
+- `all_of` 嵌套 `any` 三层：缩进、摘要、顺序都正确。
+- 组合器子项添加脚本前置：写成类型加 `conditions.script`，不是字符串。
+- 第 8 层禁用新增组合器；第 9 层旧数据报错。
+- 事件类子条件在窗口为 0 时禁用添加，强行写入显示红框。
+- 未知类型与未登记字段显示原文只读，不静默删除。
+- 行为页与脚本图悬停对同一棵树生成相同摘要。

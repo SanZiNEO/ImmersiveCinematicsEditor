@@ -1,252 +1,102 @@
-# 12-03 片段级模板
+# 片段级模板
 
-## 目标
+> 状态：未实现
+> 范围：`clip.fade` / `clip.static_breath` / `clip.dolly` / `clip.orbit_arc` 四个内置片段模板的能力与边界
+> 关联：12-01 模型与装配、12-07 快捷效果、12-09 几何、12-10 曲线、09 覆盖层字段、08 相机字段、07 路径
 
-实现四个片段级模板：`fade`、`static_breath`、`dolly`、`orbit_arc`。每个模板生成一个片段的标准 `objects`，`orbit_arc` 另生成一条标准 `paths[]` 条目。
+## 一、摘要
 
-四个模板都是纯函数：参数进，JSON 片段出。不读文档、不读全局状态、不写文件、不执行规则、不创建运行时对象。
+四个片段模板覆盖最常见的四种起手式：全屏淡入淡出、固定机位（可带呼吸）、两点推拉、环绕弧线。每个模板生成一个片段的标准对象字段，环绕弧另生成一条标准路径条目。四个都是纯函数：参数进，JSON 片段出，不读文档、不写文件、不创建运行时对象。
 
-## 共同规则
+## 二、为什么做
 
-- 产物只写目标轨道 schema 中存在的字段；值用 `{value}` 或 `{keyframes}`。
-- value-only 字段不带 `keyframes`；animated 字段才可带。
-- 片段 `start_time` 由装配器给；模板内关键帧时间从 0 开始，相对片段起点。
-- 片段 id 由装配器分配；需要被 `paths[]` 引用时必须有 id。
-- 模板不写片段级 `transition`、`transition_duration`、`transition_curve`、`transition_params`、`transition_interrupt`。
-- 模板不写 `keyframes`/`curve` 这类旧片段级字段；所有动画都在 `objects` 的叶子路径里。
-- 模板不写 `meta.version`、`timeline.total_duration`、空 `triggers` 数组。
-- 模板不写默认值填充；只有参数明确给出或效果需要的字段才写；schema 默认值由运行时按缺省处理。
+### 2.1 问题
 
-## 1. `clip.fade`
+这四类镜头在手工编辑里出错率最高，但错误点都不是"创意"，而是字段层面的机械细节：淡入淡出的透明度曲线要两端对齐且时间严格递增；固定机位一旦误给呼吸字段打上关键帧，游戏里会变成抖动的动画而不是常量呼吸；推近要求位置和视场角各两端节点同步，漏一端就变成瞬移；环绕弧要求路径控制点系数与扫角匹配、端点命中位置节点时间，算错就得到一条穿出画面的曲线。
 
-### 用途
+### 2.2 目标
 
-新建一个全屏淡入/淡出/淡入淡出的 `OVERLAY` 片段。它是“新片段生成”模板；09-08 的 `fade.in/out/flash` 仍是“应用到现有片段”的便利预设。两者共用同一套字段写法，不注册第二份默认值。
+- 作者填几个业务参数（时长、颜色、姿态、半径、扫角）就得到一段能过校验、能在游戏里正确播放的片段。
+- 每个模板产出的字段都落在目标轨道 schema 的既有字段上，不引入新字段。
+- 产物里不出现转场字段：淡入淡出是单个片段内部的透明度曲线，不是 A→B 叠化。
+- 参数非法时明确报错并拒绝生成，不产生"看起来差不多"的片段。
 
-### 参数
+### 2.3 非目标
 
-| 参数 | 类型 | 默认 | 范围 | 说明 |
-|---|---|---|---|---|
-| `color` | string | `#000000` | `^#[0-9a-fA-F]{6}$` | 覆盖颜色；必须是六位十六进制 |
-| `duration` | float | 1.0 | 0.1–600 | 片段时长 |
-| `mode` | enum | `in` | `in` / `out` / `both` | 淡入 / 淡出 / 淡入淡出 |
-| `z_index` | int | 100 | 覆盖层层级；只写本片段，不建全局 z 表 |
+- 不写片段级 `transition`、`transition_duration`、`transition_curve`、`transition_params`、`transition_interrupt`。
+- 不写旧片段级字段 `keyframes` / `curve`：所有动画都在对象的叶子路径里。
+- 不写 `meta.version`、`timeline.total_duration`、空 `triggers` 数组。
+- 不做默认值填充：只有参数明确给出或效果必需的字段才写，其余交给 schema 缺省。
+- 不替作者补渐变、遮罩、混合、LUT 或调色。
+- 环绕弧不做整圈：单段扫角有上限，整圈由轨道模板组合。
 
-### 展开
+## 三、方案
 
-```text
-layer_type = { value: "fade" }
-color      = { value: "#RRGGBB" }
-z_index    = { value: 100 }
-opacity    = { keyframes: ... }
-```
+四个模板共用一个前提：片段 id 与起点由装配器给，模板内关键帧时间从 0 起、相对片段起点。模板只写目标轨道 schema 里存在的字段，值用单值或关键帧形态；value-only 字段永远不带关键帧。
 
-- `mode=in`：`opacity` 在 `t=0` 为 0，`t=duration` 为 1。
-- `mode=out`：`t=0` 为 1，`t=duration` 为 0。
-- `mode=both`：`t=0` 为 0，`t=duration/2` 为 1，`t=duration` 为 0。
-- `color` 只写字符串；不写 `color.r/g/b`，不写 `gradient`、`gradient_angle`、`gradient_center`、`gradient_radius`、`mask_shape`、`mask_*`、`blend_mode`。
-- 需要渐变、遮罩、混合时，生成后由作者在 09 的覆盖层字段里继续编辑；模板不复制 09 的合成逻辑。
-- `opacity` 关键帧时间严格递增；`duration` 必须大于 0。
-- 不生成 `x/y`/`anchor`/`scale`，使用 schema 默认值。
-- 不生成片段级转场；淡入淡出是单个片段内部的 `opacity` 曲线。
+`clip.fade` 生成一个全屏覆盖层片段，用透明度曲线表达画面到黑或黑到画面。它和覆盖层便利预设的分工是"新建"与"应用到现有片段"：字段写法同源，不注册第二份默认值。颜色只写字符串，渐变、遮罩、混合留给作者生成后到覆盖层字段里继续编辑。
 
-### 校验
+`clip.static_breath` 生成一个固定机位片段，可选手持呼吸。呼吸是 value-only 字段，不能打关键帧；关掉呼吸时其余呼吸字段一并省略，不留"关着但参数还在"的半开状态。它不移动位置、不生成路径。
 
-- 颜色不是六位十六进制 → 参数错误。
-- `duration<=0` 或非有限 → 参数错误。
-- `mode` 不在枚举 → 参数错误。
-- `z_index` 非整数 → 参数错误。
-- 产物出现 `color.r/g/b`/`gradient`/遮罩字段 → 生成错误；这些不是本模板职责。
+`clip.dolly` 生成一段从一点到另一点的推近或拉远：位置与视场角各两端关键帧。两端视场角不同就是希区柯克变焦，不为它单独立模板。直线用位置关键帧就够，需要弧线时由作者显式用曲线工具加路径。注视方式二选一：给朝向角，或给一个注视点由运行时求朝向，两者不混写。
 
-## 2. `clip.static_breath`
+`clip.orbit_arc` 生成一段环绕弧：一个相机片段，位置两端节点，外加一条贝塞尔路径条目。控制点按扫角换算成相对段起点的偏移量，端点必须命中本片段位置节点时间。扫角超过单段上限时拒绝，并提示整圈用轨道模板。看向中心与沿切线两种朝向模式互斥。
 
-### 用途
+## 四、技术细节
 
-生成一个固定机位片段，可选手持呼吸。它是“固定 + 呼吸”的起手式；不移动位置，不生成路径。
+### 4.1 核心模型
 
-### 参数
+四个模板共同遵守"模板只负责片段内部"：不写绝对开始时间，不碰其他轨道，不定义曲线类型或路径端点语义。路径条目里的曲线类型必须来自当前 schema 已注册的类型，端点绑定规则沿用 07。
 
-| 参数 | 类型 | 默认 | 说明 |
+### 4.2 契约
+
+`fade` 的契约是：模式决定透明度曲线的形状（单向或往返），关键帧时间严格递增，时长必须为正；颜色必须是六位十六进制，不写分量字段，不写渐变与遮罩。
+
+`static_breath` 的契约是：位置模式为绝对，位置、朝向角、视场角、缩放各写单值；呼吸类型决定后续字段集合，创伤类呼吸才写创伤与衰减，其他类型不写；呼吸字段全部是单值。
+
+`dolly` 的契约是：位置三轴各两端节点、视场角两端节点，时间点对齐；起点与终点不能相同；注视方式为坐标时必须给出注视点，此时不写朝向角；注视方式为无时不写注视目标。
+
+`orbit_arc` 的契约是：由中心、半径、高度、起始角、扫角算出两端点；位置三轴各两端节点；看向中心时写坐标注视与中心目标，沿切线时写切线朝向与偏移角；路径条目带 `clip` 指向本片段、`from`/`to` 命中位置节点时间、`axes` 只含水平两轴、`geometry` 为贝塞尔且控制点是完整的相对偏移对象、`timing` 为线性。
+
+### 4.3 数据形态
+
+产物是片段对象加可选路径条目。片段对象里 `objects` 的每个键都来自目标轨道 schema；关键帧形态是时间与值的有序数组，时间从 0 起、单位秒、严格递增、不出现同一时间重复节点。路径条目的控制点只写相对段起点的三分量对象，不写数组形态，也不与绝对坐标形态混用。
+
+### 4.4 边界
+
+`fade` 只管覆盖层的层级与透明度，不改层级顺序规则、不建全局 z 表；需要渐变或遮罩时走覆盖层字段编辑。`static_breath`、`dolly`、`orbit_arc` 只写 08 已定义的相机字段，不写任何转场字段。`orbit_arc` 的路径合法性归 07，模板只保证生成一条合法条目；弧长重采样不预生成，由曲线工具显式处理。镜头呼吸是常量字段，任何模板都不给它打关键帧。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
 |---|---|---|---|
-| `pose` | pose | 位置 + yaw/pitch/roll + fov/zoom | 机位姿态；位置可来自九槽 |
-| `duration` | float | 8 | 片段时长，0.1–600 |
-| `breath` | enum | `perlin` | `none` / `perlin` / `perlin_axis` / `sine` / `trauma` |
-| `breath_intensity` | float | 0.05 | 0–1 |
-| `breath_speed` | float | 1.0 | 0.01–20 |
-| `breath_seed` | int | 0 | 可选；同 seed 同抖动 |
-| `breath_trauma` | float | 1.0 | 仅 `trauma`；0–1 |
-| `breath_decay` | float | 0.5 | 仅 `trauma`；0–1 |
+| 淡入淡出做成两片段叠化 | 生成 A、B 两段并在交界做叠化 | 需要片段级转场语义，与 08 的边界冲突 | 单片段透明度曲线已能表达，且不引入转场字段 |
+| 呼吸用关键帧表达 | 给呼吸参数打帧做"抖动动画" | 字段是 value-only，运行时按常量读取 | 打了帧也不生效，只会让脚本自相矛盾 |
+| 环绕单段做整圈 | 一段 360° 贝塞尔 | 单段扫角大时控制点系数失真，曲线明显外凸 | 整圈应由多段轨道模板拼接 |
+| 推近顺带生成路径 | 直线也写一条路径条目 | 增加无意义路径，端点约束反而容易错 | 位置关键帧已足够表达直线位移 |
+| 希区柯克变焦单独立模板 | 单独一个"变焦推近"模板 | 与推近只差两端视场角取值 | 参数已能表达，不必多一个入口 |
 
-`pose` 内部：
+**本方案的缺点**：
 
-- `position`：三维点。
-- `yaw` / `pitch` / `roll`：度。
-- `fov`：1–179；默认 70。
-- `zoom`：>0；默认 1。
+- 四个模板覆盖的是常见起手式，稍有不同的结构仍需作者手改产物。
+- 环绕弧的扫角上限意味着"想要一整圈"必须理解轨道模板，单片段入口做不了。
+- 淡入淡出只写颜色字符串，想要渐变就得离开模板去覆盖层字段里补。
 
-### 展开
+## 六、实现结果
 
-- `position_mode = { value: "absolute" }`。
-- `position.x/y/z`：`{ value: x/y/z }`。
-- `yaw` / `pitch` / `roll`：`{ value: ... }`；等于默认 0 时可省略。
-- `fov`：`{ value: ... }`；等于默认 70 时可省略。
-- `zoom`：`{ value: ... }`；等于默认 1 时可省略。
-- `cam_breath_enabled`：`{ value: true }`；`breath=none` 时写 `false`，并省略其余呼吸字段。
-- `cam_breath_type`：`{ value: "perlin" | "perlin_axis" | "sine" | "trauma" }`。
-- `cam_breath_intensity` / `cam_breath_speed` / `cam_breath_seed`：`{ value: ... }`。
-- `trauma` 时另写 `cam_breath_trauma` / `cam_breath_decay`；其他类型不写。
-- 呼吸字段是 value-only，不生成 `keyframes`。
-- 不写 `look_at`、`orient`、路径、转场。
+状态：未实现
 
-### 校验
+四个片段模板的参数口径与产物契约已定，代码尚未落地。
 
-- `pose` 缺位置/非有限 → 参数错误。
-- `fov` 超出 1–179 → 参数错误。
-- `zoom<=0` → 参数错误。
-- `breath_intensity` 超出 0–1、`breath_speed` 越界 → 参数错误。
-- 呼吸字段带 `keyframes` → 生成错误。
-- `breath=none` 但仍写 `cam_breath_type`/intensity/speed → 生成错误（应省略）。
+| 原设计 | 实际实现 | 偏离原因 |
+|---|---|---|
+| — | — | — |
 
-## 3. `clip.dolly`
+### 验收要点
 
-### 用途
-
-生成一段从 A 点到 B 点的推近/拉远。位置和 `fov` 各两端关键帧；`fov_from` 与 `fov_to` 不同就是希区柯克变焦，不另立模板。
-
-### 参数
-
-| 参数 | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `from` | position | 必填 | 起点世界坐标；可从九槽取 |
-| `to` | position | 必填 | 终点世界坐标；可从九槽取 |
-| `duration` | float | 6 | 0.1–600 |
-| `fov_from` | float | 70 | 1–179 |
-| `fov_to` | float | 70 | 1–179 |
-| `look_at` | enum | `none` | `none` / `coordinate` |
-| `target` | position | 可选 | `look_at=coordinate` 时的注视点；可从九槽取 |
-| `yaw` / `pitch` / `roll` | float | 0 | `look_at=none` 时的朝向；度 |
-
-### 展开
-
-- `position_mode = { value: "absolute" }`。
-- `position.x/y/z` 各两个关键帧：`t=0` 为 `from`，`t=duration` 为 `to`。
-- `fov` 两个关键帧：`t=0` 为 `fov_from`，`t=duration` 为 `fov_to`。
-- `look_at=none` 时写 `yaw/pitch/roll` 常量（等于 0 可省略）。
-- `look_at=coordinate` 时写：
-  - `look_at = { value: "coordinate" }`
-  - `look_at_target_x/y/z` = `{ value: target.x/y/z }`
-  - 不写 `yaw/pitch/roll`；由运行时按 look_at 求朝向。
-- 不生成 `paths[]`；直线段用位置关键帧即可。需要弧线时由作者用 12-10 的曲线工具显式添加。
-- 不生成 `zoom` 关键帧；推近由位置 + fov 表达，需要 zoom 时作者另行添加。
-- 不生成转场。
-
-### 校验
-
-- `from` 与 `to` 相同 → 参数错误；不生成零长度位移。
-- `duration<=0` → 参数错误。
-- `fov` 越界 → 参数错误。
-- `look_at=coordinate` 但无 `target` → 参数错误。
-- 位置关键帧时间重复/非递增 → 生成错误。
-- 产物含 `paths[]`、`transition*` → 生成错误（本模板不写）。
-
-## 4. `clip.orbit_arc`
-
-### 用途
-
-生成一段环绕弧线：一个 CAMERA 片段，位置两端节点 + 一条 `paths[]` 贝塞尔弧。单段扫角 ≤120°；整圈由 `track.orbit_full` 组合，不在这里生成 360°。
-
-### 参数
-
-| 参数 | 类型 | 默认 | 范围 | 说明 |
-|---|---|---|---|---|
-| `center` | position | 必填 | — | 环绕中心；可从九槽取 |
-| `radius` | float | 8 | 0.5–512 | 半径 |
-| `height` | float | 2 | -512–512 | 相对中心的高度 |
-| `start_angle` | float | 0 | -3600–3600 | 起始角，度，绕 +Y |
-| `sweep` | float | 120 | 1–120 | 扫过角度；>120 拒绝 |
-| `duration` | float | 6 | 0.1–600 | 片段时长 |
-| `look_at_center` | bool | true | — | 是否始终看向中心 |
-| `fov` | float | 70 | 1–179 | 视场角 |
-
-### 展开
-
-角度与点：
-
-```text
-a0 = start_angle
-a1 = start_angle + sweep
-P0 = (cx + R·cos(a0), cy + h, cz + R·sin(a0))
-P1 = (cx + R·cos(a1), cy + h, cz + R·sin(a1))
-```
-
-字段：
-
-- `position_mode = { value: "absolute" }`。
-- `position.x/y/z` 各两个关键帧：`t=0` 为 `P0`，`t=duration` 为 `P1`。
-- `fov`：`{ value: fov }`。
-- `look_at_center=true`：
-  - `look_at = { value: "coordinate" }`
-  - `look_at_target_x/y/z` = `{ value: center.x/y/z }`
-- `look_at_center=false`：
-  - `orient = { value: "tangent" }`
-  - `yaw_offset` / `pitch_offset` = `{ value: 0 }`（等于默认可省略）
-  - 不写 `look_at`。
-- 一条 `paths[]` 条目：
-
-```text
-{
-  id: <装配器分配>,
-  clip: <本片段 id>,
-  from: 0,
-  to: duration,
-  axes: ["x", "z"],
-  geometry: {
-    type: "bezier",
-    control_points: [
-      { dx: -K·R·sin(a0), dy: 0, dz:  K·R·cos(a0) },
-      { dx:  K·R·sin(a1), dy: 0, dz: -K·R·cos(a1) }
-    ]
-  },
-  timing: { type: "linear" }
-}
-```
-
-其中 `K = (4/3)·tan(sweep/4)`，角度用弧度计算。`control_points` 是相对段起点 `P0` 的 `{dx,dy,dz}`，三个键齐全；不写数组形态。
-
-路径约束：
-
-- `from` / `to` 必须命中片段 `position.x/y/z` 的节点时间并集，且相邻；本模板只有 0 与 `duration` 两个节点，天然满足。
-- `axes` 只含 `x` / `z`；本模板不生成 y 方向弧线。
-- `control_points` 只写 `{dx,dy,dz}`；不写 `{x,y,z}` 混合。
-- `timing` 默认 `linear`；需要弧长重采样时由 12-10 显式改 `timing.keyframes`，模板不预生成。
-- 路径 id 与片段 id 分离；都由装配器分配，模板只保留占位关系。
-
-### 校验
-
-- `radius<=0` 或非有限 → 参数错误。
-- `sweep<=0` 或 `>120` → 参数错误；提示“整圈请用轨道模板”。
-- `height` 越界 → 参数错误。
-- `start_angle` 越界 → 参数错误。
-- `duration<=0` → 参数错误。
-- `fov` 越界 → 参数错误。
-- 生成 360° 单段 → 生成错误。
-- 控制点写成数组/缺键 → 生成错误。
-- 路径端点不匹配位置节点 → 生成错误。
-- 产物带 `transition*` → 生成错误。
-
-## 与其他轮次的边界
-
-- `fade` 的字段写法与 09-08 的覆盖层预设同源；09-08 继续负责“应用到现有片段”，本模板负责“新建片段”。不重复注册默认值。
-- `static_breath` / `dolly` / `orbit_arc` 只写 08 已定义的相机字段；`transition*` 不写。
-- `orbit_arc` 的弧线用 07 的路径契约；07 负责路径条目/端点绑定，模板只生成一条合法条目。
-- 镜头呼吸是 value-only，不能打关键帧；模板不生成 `cam_breath_*` 的 `keyframes`。
-- 不生成 `curve`、`keyframes`、`rules` 等旧片段级字段。
-
-## 验收出口
-
-1. 四个模板各生成一次，保存重开，标准脚本能过现有校验器。
-2. `fade` 的 `opacity` 单段曲线正确；`color` 是字符串；没有遮罩/渐变字段。
-3. `static_breath` 的 `cam_breath_*` 全部是 value；`breath=none` 时其余呼吸字段省略。
-4. `dolly` 位置与 `fov` 各两端节点；`fov_from≠fov_to` 时游戏内可见希区柯克变焦。
-5. `orbit_arc` 默认生成 1 片段 + 2 位置节点 + 1 条路径；`sweep=130` 被拒绝；游戏内是 120° 弧且看向中心。
-6. 生成后到游戏里播放，确认没有片段级转场、没有运行时模板字段。
+- 四个模板各生成一次，保存重开后能过现有校验器，游戏内表现与参数一致。
+- 淡入淡出的透明度曲线正确，颜色是字符串，产物里没有渐变、遮罩、混合字段。
+- 呼吸字段全部是单值；关闭呼吸时其余呼吸字段确实省略。
+- 推近的位置与视场角各有两端节点，两端视场角不同时游戏内可见变焦推近。
+- 环绕弧默认生成一个片段、两个位置节点、一条路径；扫角超上限被拒绝并提示改用轨道模板。
+- 四个产物都不含片段级转场字段，也没有运行时模板字段。

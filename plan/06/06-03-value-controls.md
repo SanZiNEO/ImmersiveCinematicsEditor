@@ -1,170 +1,112 @@
-# 06-03 参数与值控件
+# 值控件与提交目标
 
-## 目标
+> 状态：未实现
+> 范围：属性面板静态值、效果面板节点值共用的一套值控件；提交目标解析；九种值类型；step 与 STRUCT 的特殊约束
+> 关联：06-02 行、06-04 关键帧组、06-05 编辑操作、06-07 事件记录
 
-用一套 `PropertyValueForm` 同时服务属性面板的静态值和效果面板的节点值。控件按 02-04 的九种值类型穷举映射，不出现“未知类型落到文本框”的兜底。每个提交必须解析成明确目标：静态 `value`、指定节点、或显式新增节点；面板归属由 `panelMembership` 决定，不由控件猜。
+## 一、摘要
 
-## 组件
+属性面板和效果面板都要改值，但改的是不同的东西：前者改静态值，后者改某个时间点上的节点值。本文定义一套两边共用的值控件，并规定每次提交必须落到一个明确目标——静态值、指定节点、或显式新增节点。控件不猜目标，归属由面板策略决定，控件只负责把作者输入变成合法值或一条可读的拒绝理由。
 
-```text
-src/components/effects/PropertyValueForm.vue
-src/components/effects/fields/
-  CommitNumberField.vue
-  BoolField.vue
-  CommitTextField.vue
-  EnumField.vue
-  RefField.vue
-  NullableNumberField.vue
-  StructField.vue
-src/effects/valueTarget.ts
-src/effects/refBindings.ts
-src/effects/stepFields.ts
-```
+## 二、为什么做
 
-```ts
-interface PropertyValueFormProps {
-  row: PropertyRow
-  panel: 'properties' | 'effects'
-  target: PropertyEditTarget
-  readonly?: boolean
-  density: 'normal' | 'compact'
-}
-```
+### 2.1 问题
 
-事件：`commit(draft)`、`cancel()`、`requestAddKeyframe(time)`、`requestEnableAnimation(time)`。
+如果两个面板各写一套输入控件，同一字段在两个地方表现不同：一边接受越界值并自动夹取，另一边直接拒绝；一边把空值当零，另一边显示破折号。更隐蔽的问题是提交目标含糊——作者在播放头没有节点时输入一个值，系统可能悄悄建了一帧，也可能写了一个永远不会被采样的静态值，作者事后无法判断数据去了哪。
 
-## 类型映射
+### 2.2 目标
 
-| `PropertyType` | 控件 | schema 字段 | 提交 |
+- 同一字段在两个面板的输入规则、校验、错误文案完全一致。
+- 每次提交都能被指认：改的是静态值、某个时刻的节点、还是新增了一帧。
+- 非法输入不写文档、不增加撤销项，草稿留在原处，作者改一下就能重提。
+- 九种值类型各有明确控件，不存在"不认识的类型退化成文本框"。
+
+### 2.3 非目标
+
+- 不做"输入即创建动画"：没有显式动作就不建帧。
+- 不在值控件里做缓动、事件记录或结构专用编辑器的内容。
+- 不改 schema，也不为缺失的 schema 字段编造默认值。
+- 不做跨字段联动校验（依赖未满足只提示，不代填）。
+
+## 三、方案
+
+值控件是一个按类型分派的输入面，不出现兜底输入框。数字（含整数）走带范围与单位的数字输入，单位是角度时显示度符号但不改写数值；布尔是开关；字符串是文本；枚举是下拉；引用是带候选的输入，未配置候选时允许自由文本并明确标注"未约束形态"；可空数字有一个显式的"不设值"状态，关闭后写空而不是零；结构是树编辑加原文编辑两种入口；事件记录不进入这套控件，由记录编辑器接管。
+
+提交时机按控件性质分：数字与文本在失焦或回车时提交，转义恢复原值；开关与下拉立即提交；可空数字的开关立即生效、数字部分同数字控件；结构的原文编辑需要显式应用，树编辑每次叶子提交即可。失败时错误显示在控件下方，草稿保留，焦点不跳走，文档与撤销栈都不动。
+
+提交目标只有三种：静态值、某个已存在的节点、某个待新增的节点。解析规则由"哪个面板、行处于什么状态、播放头有没有节点"三件事决定，不由控件自己判断。
+
+- 属性面板里，未设置的叶子提交即创建对象并写入值；已设置但未动画的叶子改静态值；动画轨道为空帧的叶子改静态值，时钟是另一条独立动作。
+- 属性面板里已有帧的叶子不显示值控件，只给一个"在效果面板"的定位入口，避免同一属性两个值控件。
+- 效果面板里，播放头精确命中节点就改该节点；没有节点时输入只作为草稿，必须点"添加帧"才落地。
+- 事件行走记录编辑器，未知路径只读。
+
+开启动画是一次独立命令：在播放头建首帧，初值依次取同属性已有节点、当前静态值、schema 默认值，三者都没有则拒绝并提示先输入静态值。已动画的属性不允许在属性面板改一个不参与采样的静态值冒充动画；要改静态值必须先关闭动画。
+
+step 插值的属性用离散控件，不显示连续缓动入口。参考系类开关字段（`position_mode`、`position_space`、`position_origin`、`position_origin_freeze`、`facing_source`）在非零时刻切换时，若 `position.x/y/z` 缺任一帧，必须弹出"参考系切换需要三轴位置帧"，提供"补齐三轴"（值取切换前采样近似并标注近似）与"取消"；补齐是一次命令写三帧，取消不改文档。基础系类开关（`facing_target`、`facing_target_freeze`、`facing_entity`、`look_at_freeze`、`yaw_base_from_freeze`、`yaw_base_to_freeze`）只在当前参考系为基础系时做同样检查。零时刻的初始值不算切换。
+
+结构类型的规则是原样透传：不重排键、不补默认、不删空数组、不把数字转字符串。有专用编辑器的路径挂专用组件，其余走通用树或原文编辑，原文解析失败不写。结构不允许关键帧，因此默认策略下它永远在属性面板，组级策略下只能作为无节点组的静态伴随行。
+
+## 四、技术细节
+
+### 4.1 核心模型
+
+三个对象：值控件（按类型分派的输入面）、提交目标（静态值 / 节点 / 新增节点）、目标解析器（把面板、行状态、播放头、选择、文档修订号映射成提交目标）。控件本身不持有文档数据，草稿只是本地输入缓冲。
+
+### 4.2 契约
+
+- 控件输入是行、所属面板、提交目标、是否只读、密度。
+- 控件输出四类事件：提交草稿、取消、请求在指定时间加帧、请求在指定时间开启动画。
+- 提交成功由命令层写入并回滚失败；控件不直接改文档对象。
+- 目标解析对两个面板使用同一套规则，不允许各写一份。
+
+### 4.3 数据形态
+
+草稿是控件内部的临时值，取消或失焦恢复后丢弃。数值统一为有限数，整数另加整数约束；可空数值用"有值/不设值"两种形态区分，不设值不等于零。结构值保持原始 JSON 形态，未知键原样保留。
+
+拒绝理由是可枚举的稳定代码：`type_mismatch`、`out_of_range`、`not_finite`、`int_required`、`enum_invalid`、`ref_empty`、`struct_invalid_json`、`default_missing`、`requires_unmet`、`readonly_unknown`、`row_in_other_panel`。文案本地化，代码稳定，便于诊断条聚合。
+
+### 4.4 边界
+
+- 控件不决定面板归属，也不判断行该不该显示。
+- 控件不创建节点：加帧是显式动作，走关键帧命令。
+- 控件不解释 schema 的语义，只消费 schema 视图给出的范围、单位、枚举、候选。
+- 事件记录不进入这套控件，避免把"记录列表"当成"一个值"。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
 |---|---|---|---|
-| `FLOAT` | `CommitNumberField` | `min/max/unit/step` | 有限 number |
-| `INT` | `CommitNumberField` | `min/max`，`step=1` | 整数 |
-| `BOOL` | `BoolField` | — | boolean |
-| `STRING` | `CommitTextField` | `required` | string |
-| `ENUM` | `EnumField` | `enumValues` | 枚举值 |
-| `REF` | `RefField` | `refBindings` | 非空形态串 |
-| `NULLABLE_FLOAT` | `NullableNumberField` | `min/max/unit` | number 或 `null` |
-| `STRUCT` | `StructField` | — | 原样 JSON 对象/数组 |
-| `EVENT_RECORD` | 不进入本表单 | — | 由 06-07 编辑 |
+| 两个面板各写一套控件 | 属性面板与效果面板分别实现输入 | 同一字段行为漂移；校验与文案双份维护 | 共用一套控件加目标解析，差异只在目标 |
+| 输入即建帧 | 效果面板无节点时输入直接写新节点 | 作者失去"先看草稿再决定"的机会；误输入变成数据 | 草稿 + 显式加帧更可控 |
+| 越界自动夹取 | 超出范围时静默改成边界值 | 作者以为写入了自己的数；错误被掩盖 | 越界一律拒绝，由作者改 |
+| 未知类型退化成文本框 | 兜底让作者随便写 | 写入非法数据，校验期才炸 | 类型穷举，缺失 schema 时禁用并提示 |
 
-- `unit==='degree'` 显示 `°`，输入不归一化。
-- `min/max` 越界拒绝，不自动夹取。
-- `INT` 非整数拒绝；`FLOAT` 非有限数拒绝。
-- `ENUM` 的 `enumValues` 为空时控件禁用并显示“schema 缺少枚举值”。
-- `REF` 的补全来自 `refBindings`：`{ pathPrefix, registryKind, freeText }`；未配置的 ref 允许自由文本，但显示“未约束形态”。
+**本方案的缺点**：
 
-## 目标解析
+- 九种类型各有交互细节，作者需要一点学习成本。
+- 效果面板无节点时"草稿 + 添加帧"两步操作，比直接输入慢一拍。
+- 参考系切换的三轴补齐弹窗打断编辑流，但取消路径清晰。
 
-```ts
-type PropertyEditTarget =
-  | { kind:'value'; clipKey:string; path:string }
-  | { kind:'keyframe'; clipKey:string; path:string; time:number }
-  | { kind:'addKeyframe'; clipKey:string; path:string; time:number }
-```
+## 六、实现结果
 
-`resolveTarget({ row, panel, playheadLocal, selection, docRevision })`：
+状态：未实现
 
-| 面板/row 状态 | 播放头状态 | 目标 |
+值控件与目标解析规则已定，尚未实现。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| 属性面板，`present=false` | — | `value`；提交时 `object.add` 创建对象 |
-| 属性面板，`mode=value` | — | `value` |
-| 属性面板，`mode=animated`、`keyframes=[]` | — | `value`；时钟按钮走 `object.enableAnimation` |
-| 属性面板，`mode=animated`、有帧 | — | 该属性已在效果面板；属性面板不显示重复行，显示“在效果面板”定位入口 |
-| 效果面板，动画行、播放头有节点 | `abs(time-playhead)<=1e-4` | `keyframe` |
-| 效果面板，动画行、播放头无节点 | — | `addKeyframe`；输入草稿保留，点“添加帧”才提交 |
-| 效果面板，`mode=event` | — | 不进入值控件；转 06-07 |
-| 未知路径 | — | 只读 |
+| — | — | — |
 
-规则：
+### 验收要点
 
-- 属性面板的未设置行：值控件显示“未设置”占位；提交时 `object.add` + `setValue` 一次完成。
-- 属性面板的时钟：`object.enableAnimation` 在播放头建首帧，初值顺序为同属性已有节点 → 当前 `value` → schema `default`；没有合法初值则拒绝。
-- 效果面板只显示已有关键帧的属性；目标只能是 `keyframe` 或 `addKeyframe`。
-- 已动画属性不允许在属性面板里改一个“不参与采样”的 `value` 冒充动画；要改静态值，先在效果面板关闭动画。
-- 同一个值控件在两个面板使用同一 `resolveTarget` 和同一命令，不缓存第二份值。
-
-## 提交语义
-
-| 控件 | 提交时机 | 取消 |
-|---|---|---|
-| 数字/文本 | 失焦或 `Enter` | `Esc` 恢复原值 |
-| 开关/下拉 | 立即 | 无草稿 |
-| 可空数字 | 开关立即；数字同数字控件 | `Esc` |
-| STRUCT 原文 | `Ctrl+Enter` 或“应用” | “取消” |
-| STRUCT 树编辑 | 每次叶子提交 | 叶子级 `Esc` |
-
-提交失败：
-
-- 内联错误显示在控件下方；草稿保留，焦点不跳走。
-- `dirty` 不变；撤销栈不增加。
-- 错误码：`type_mismatch`、`out_of_range`、`not_finite`、`int_required`、`enum_invalid`、`ref_empty`、`struct_invalid_json`、`default_missing`、`requires_unmet`、`readonly_unknown`、`row_in_other_panel`。
-
-## 属性面板的静态值
-
-- 属性面板列出全部未在效果面板的适用叶子；未设置也显示；已有关键帧的叶子只在效果面板。
-- `VALUE`：直接编辑静态值；没有时钟。
-- `ANIMATED` 且 `keyframes=[]`：编辑静态值；时钟可用；显示“动画轨道无帧”。
-- `ANIMATED` 且 `keyframes.length>0`：该行已移入效果面板；属性面板显示“在效果面板”入口，不重复值控件。
-- `EVENT`：显示“记录”入口；完整记录编辑在效果面板。
-- `STRUCT`：只允许 `value` 形态；没有时钟。
-
-## 效果面板的节点值
-
-- 动画行：播放头精确命中节点时编辑节点值；无节点时只保留草稿，点“添加帧”才提交。
-- 事件行：不进入通用值控件；打开 06-07 记录编辑器。
-- 组内静态伴随行（`group` 策略）：显示静态值；没有节点组；编辑走 `object.setValue`。
-
-## 未设置与初始化
-
-- 属性面板未设置叶子：输入 → `object.add` + `setValue`；初始值来自输入，不用默认值冒充作者输入。
-- 点时钟 → `object.enableAnimation`：
-  - 若 `default`/`value` 存在，首帧取该值；
-  - 若同属性播放头已有节点，取该节点值；
-  - 都没有 → `default_missing`，要求先输入静态值。
-- `ANIMATED` 初始 `keyframes=[]` 是合法静态形态；不自动补帧。
-- 属性面板不提供“添加属性”弹层；未在效果面板的适用叶子已经在列表里。
-
-## step 与切换字段
-
-`stepFields.ts`：
-
-```ts
-const SPACE_SWITCH_FIELDS = [
-  'position_mode', 'position_space', 'position_origin',
-  'position_origin_freeze', 'facing_source'
-]
-const BASE_SWITCH_FIELDS = [
-  'facing_target', 'facing_target_freeze', 'facing_entity',
-  'look_at_freeze', 'yaw_base_from_freeze', 'yaw_base_to_freeze'
-]
-```
-
-- `interp==='step'` 行显示台阶图标 `⌐`；节点用枚举/开关/离散值控件；不显示连续缓动入口。
-- 改 `SPACE_SWITCH_FIELDS`（`t>0`）时，调用 `switchImpact(doc, clipKey, path, time)`：
-  - 若 `position.x/y/z` 缺任一帧，弹出“参考系切换需要三轴位置帧”，提供“补齐三轴（值取切换前采样近似，标记近似）”和“取消”。
-  - 选择补齐时一次命令写入三帧；取消不改文档。
-- `BASE_SWITCH_FIELDS` 只在 `position_space==='base'` 时检查同样三轴。
-- `t=0` 的初始值不算切换。
-
-## STRUCT
-
-- 有专用编辑器的路径（`modifier`、`transition_params`、`motion_*`、调色曲线、`gradient`）挂载专用组件；本表单只给挂载点。
-- 其余路径用 `StructField`：
-  - 树编辑：键值树，支持嵌套对象/数组/布尔/数字/null。
-  - 原文编辑：JSON 文本域；提交时 `JSON.parse`，失败不写。
-- 原样透传：不重排键、不补默认、不删空数组、不把数字转字符串。
-- `STRUCT` 不允许关键帧；默认 `leaf` 模式下属性面板不显示时钟、效果面板不出现该行；`group` 模式下只作为静态伴随行，无时钟、无节点组。
-
-## 验收
-
-1. `yaw` 输入 `90`：显示 `90°`；提交后文档 `yaw.value=90`；其他叶子不变。
-2. `yaw` 输入 `abc`：拒绝，草稿保留，错误 `type_mismatch`；文档和撤销栈不变。
-3. `opacity` 输入 `1.5`（max=1）：拒绝 `out_of_range`，不夹到 1。
-4. `yaw_lock` 关闭开关：写 `value:null`；再打开输入 45：写 `value:45`；显示 `—（不锁）`，不显示 0。
-5. `position_mode` 下拉只出现 `relative/absolute`；直接输入非法值被拒。
-6. `modifier` 用专用编辑器；`data` 用原文 JSON；语法错误不写文档。
-7. 属性面板未设置 `position.y` 输入 2：创建对象并写值；行变已设置；一次撤销恢复“未设置”。
-8. 属性面板点 `position.x` 时钟：首帧在播放头创建；效果面板出现 x 行；属性面板 x 行变“在效果面板”。
-9. 效果面板 `yaw` 播放头无节点：输入值只保留草稿；点“添加帧”才建帧；取消不写。
-10. 效果面板关闭 `yaw` 动画：删帧保留值；属性面板出现 yaw 静态值；一次撤销恢复。
-11. `position_space` 在 `t=2` 切换且缺 `position.y/z`：弹出补齐对话框；取消不改文档；补齐后三轴帧同刻存在。
+- 角度字段输入 90 显示为 90 度；提交后只改该叶子，其他叶子不变。
+- 输入非数字文本被拒绝，草稿保留，文档与撤销栈不变。
+- 超出 schema 范围的值被拒绝，不被夹到边界。
+- 可空字段关闭后写空值，显示"不锁"而不是零；再打开可输入具体值。
+- 枚举字段只出现 schema 声明的选项，手输非法值被拒。
+- 结构字段用专用编辑器或原文 JSON；语法错误不写文档；未知键保留。
+- 未设置叶子输入值后创建对象并写入，一次撤销回到未设置。
+- 属性面板点时钟后首帧在播放头创建，效果面板出现该行，属性面板该行变为定位入口。
+- 效果面板播放头无节点时输入只留草稿，点添加帧才建帧，取消不写。
+- 参考系开关在非零时刻切换且三轴缺帧时弹补齐对话框；取消不改文档，补齐后三轴同刻存在。

@@ -1,179 +1,107 @@
-# 14-04 进程内端点、推送与会话
+# 进程内端点、推送与会话
 
-> 前置：14-01/02 可开 Screen；14-00 01 合同审计通过
-> 后续：14-06 飞控、14-08 垂直切片
-> 状态：设计合同；消息往返未执行时不填 PASS
+> 状态：未实现
+> 范围：游戏内界面与编辑器服务之间的同进程消息通路、会话挂载、推送节流、回执与能力宣告
+> 关联：14-00 合同、14-02 宿主界面、14-06 飞控
 
-## 1. 职责
+## 一、摘要
 
-把 WebUI 的 WebSocket 信号换成同进程内的端点/推送，但保持同一套消息名、字段、信封与回执语义：
+WebUI 的编辑器通过本机 WebSocket 与主模组对话。游戏内编辑器不需要网络：它在同一个进程里，可以直接把请求交给同一套服务。本文定这条进程内通路——端点是什么、会话怎么挂、哪些消息能丢、哪些必须回执、能力怎么宣告。消息名、字段与信封沿用 WebUI，不新增第二套。
 
-- `EditorEndpoint`：AUI 端点的身份与发送；
-- `EditorPush`：向端点定向/广播状态；
-- `EditorSessionApi`：attach/detach/handle；
-- `EditorCommandAck`：关键命令的成功/失败回执；
-- 能力位/schemaHash：附着时直接读宿主，不模拟 socket 握手。
+## 二、为什么做
 
-不新增消息类型，不新增第二套字段，不把 AUI 做成另一个“服务端”。
+### 2.1 问题
 
-## 2. 当前事实
+如果游戏内界面为了"复用现有代码"而起一个本地服务再连回自己，等于在同一个进程里绕一圈网络栈：多一份端口占用、多一层序列化、多一套鉴权，还要处理端口冲突与防火墙。用户遇到的表现是"打开编辑器失败，因为 8765 被占用"，而这在进程内根本不该发生。
 
-### 2.1 现有 WebUI 通路
+即使不绕网络，直接调用服务也有坑。编辑器里有一类消息是状态更新（播放头、姿态、预览统计），高频、可丢、可合并；另一类是关键命令（保存、校验、seek、飞控进出），失败必须让用户知道。当前 WebUI 通路里这两类没有区分，关键命令失败的表现可能是超时或者静默，界面上却显示成功。这种"假成功"在编辑器里代价很高：用户以为存了，其实没存。
 
-- `WebEditorApi.handle` 绑定 `WebSocketSession`；`WebSocketSession` 包私有。
-- 推送分散在 `WebEditorApi`/`PreviewStreamer`/`WebPreviewScreen`，没有统一的 `EditorPush`。
-- `hello_ack` 当前没有 schemaHash/能力位。
-- `editor.*` 没有统一 ack；关键命令失败可能是超时/静默。
-- `script.validate`/`schema.get`/`editor.pushScript`/`editor.seek`/`editor.play`/飞控等由同一路由处理（`script.list/load/save` 是编辑器直读工作区，不经该路由）。
-- 节流：`playback.state` 50ms、`flight.state` 100ms、`preview.stats` 1000ms（以现有实现为准）。
+### 2.2 目标
 
-### 2.2 AUI 侧
+- 游戏内界面不启动端口、不连本机回环，消息在同一进程内往返。
+- 与 WebUI 使用同一套消息名、字段、信封与路由；界面上看到的 schema 与桌面端一致。
+- 关键命令返回明确的成功或失败；失败时界面能显示原因，而不是假装成功。
+- 高频状态推送有节流，界面不因推送堆积而卡死。
+- 关闭界面只摘掉自己的端点，不影响其它端点、WebUI 服务与捕获中心。
 
-- AUI Screen 打开后可以拿到 `Document`/元素，但没有进程内端点。
-- AUI 页面不跑 Vue/JS；控制器通过 Java 侧事件与消息桥交互。
-- 当前没有 `EditorEndpoint` 实现；没有 `EditorPush`；没有 `EditorSessionApi`。
-- `WebEditorServer`/8765 在 ingame 模式不应启动。
+### 2.3 非目标
 
-## 3. 方案
+- 不改 WebUI 的 WebSocket 语义，也不重写其消息路由。
+- 不新增游戏内专用的消息名或字段变体。
+- 不让游戏内界面变成一个"服务端"对外提供能力。
+- 不把文件读写搬进渲染线程。
 
-### 3.1 端点模型
+## 三、方案
 
-```text
-AuiEndpoint implements EditorEndpoint
-  endpointId            // Screen 会话唯一 id
-  sendState(json)       // 状态/非关键消息，可丢/可合并
-  sendCritical(json)    // 关键消息，返回 false 即明确失败
-  isOpen()              // Screen/端点存活
+使用者视角上，游戏内编辑器与桌面编辑器是同一个编辑器：字段名一样、校验结果一样、保存后的文件一样。差异只在传输：桌面走网络，游戏内走函数调用。
 
-AuiPush implements EditorPush
-  broadcast(json)
-  send(endpointId, json)
-  endpoints()           // 当前端点快照
-```
+端点代表"一个打开着的编辑器界面"。它有两类发送：状态类可以丢、可以合并，队列满了就丢并计数；关键类必须回答成功或失败，失败时界面要显示原因。一个界面一个端点，关闭只摘自己。
 
-- 一个 AUI Screen 一个端点；关闭只 detach 本端点。
-- 端点不持有服务、不持有 `CaptureHub`、不持有 Document 生命周期。
-- `sendState` 不阻塞渲染线程；队列满/端点关闭时丢弃并计数，不静默成功。
-- `sendCritical` 必须返回布尔；失败时 AUI 显示错误/重试提示，不假装成功。
-- `endpointId` 不暴露给用户界面；日志中可脱敏。
+会话负责挂载与路由。挂载是幂等的，重复挂载不会产生第二份状态；摘除也是幂等的，重复摘除不报错也不影响别人。挂载时返回能力与 schema 摘要，界面据此决定哪些功能显示。能力只宣告真实可用的东西——画面走 GPU 租约这条能力只有在帧源真的接通后才宣告，不能提前写在列表里。
 
-### 3.2 会话
+推送分三类节奏：播放状态较密、飞控姿态中等、预览统计很稀。飞控退出是事件而不是状态，只发给持有者，绝不广播——广播会让另一个界面误以为自己该写回姿态。
 
-```text
-EditorSessionApi.attach(endpoint) -> hello/能力/schema
-EditorSessionApi.handle(endpoint, requestJson) -> 路由到现有服务
-EditorSessionApi.detach(endpoint, reason) -> 只清本端点
-```
+## 四、技术细节
 
-约束：
+### 4.1 核心模型
 
-- `attach` 幂等：重复 attach 同一端点不创建第二份状态。
-- `detach` 幂等：重复 detach 不抛错、不影响其他端点。
-- `handle` 在同一主线程/服务线程执行；不得在渲染线程做文件 IO。
-- 请求/响应信封保持 `{type,data,id?}`；`id` 原样回传。
-- `hello`/`hello_ack` 在进程内可以走同一信封；`hello_ack` 带 `schemaHash`、`capabilities`；传输类型用 capability `editor.transport.inprocess` 表达，不新增 `transport` 字段。
-- `script.*`/`editor.*`/`flight.*` 沿用现有名称与字段；不新增“AUI 专用”变体。
-- 未知消息返回明确错误；不静默忽略。
+三个角色：端点（`EditorEndpoint`）代表一次界面会话，负责收发与存活判断；推送（`EditorPush`）代表"往谁那里送状态"，支持定向与广播；会话（`EditorSessionApi`）代表路由，负责挂载、分发请求、摘除。三者都不拥有服务本身，也不拥有捕获中心或文档生命周期。关键命令的回执形态沿用 01 已冻结的 `EditorCommandAck`。
 
-### 3.3 推送
+### 4.2 契约
 
-| 消息 | 节流 | 说明 |
+- 挂载与摘除都幂等；重复操作不产生副作用。
+- 请求与响应沿用现有信封，请求标识原样回传，不重写字段名。
+- 挂载的响应携带 schema 摘要与能力列表；传输类型用能力位表达，不新增传输字段。
+- 未知消息类型返回明确错误，不静默忽略。
+- 关键发送在端点已关闭时直接返回失败，不排进无界队列。
+- 请求处理异常时返回失败回执并限频记日志；同一请求标识重复到达时不产生两次写入。
+- 端点关闭不停止 WebUI 服务、不关闭捕获中心、不影响其它端点。
+
+### 4.3 数据形态
+
+消息体是 JSON，信封由类型、数据与可选请求标识组成。节流节奏按消息类别固定：`playback.state` 50ms、`flight.state` 100ms、`preview.stats` 1000ms，关键回执每请求一条。挂载走 `hello`/`hello_ack`，`hello_ack` 携带 schema 摘要与能力位。请求侧沿用 `schema.get`、`script.validate`、`editor.seek`/`editor.play`/`editor.pause`/`editor.stop`、`editor.pushScript` 与飞控相关消息，`flight.exit` 只定向发给持有者。端点标识只用于内部路由与脱敏日志，不展示给用户。端点关闭后到达的推送被丢弃并计数，不写入已关闭端点。
+
+### 4.4 边界
+
+- 游戏内模式不启动 8765、不创建 WebUI 传输服务；打开与关闭界面都不碰它。
+- 脚本文件由编辑器直接读写工作区，不经过这条消息通路；通路上只走 schema、校验、播放、飞控与文档命令。
+- 推送不在渲染线程里做大型序列化。
+- 关闭 WebUI 不影响游戏内端点，关闭游戏内端点也不影响 WebUI。
+- 宿主总开关关闭时两种模式都不可挂载，已挂载的端点被摘除。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 进程内也起本地服务 | 界面连 `127.0.0.1:8765` | 端口冲突、多余序列化与鉴权、失败原因误导 | 同进程内没有任何收益 |
+| 直接调用服务对象 | 界面绕过消息层直调内部方法 | 两条语义分叉，WebUI 与游戏内行为不一致 | 必须共用同一套路由 |
+| 新增游戏内专用消息名 | 为方便另起一套字段 | 服务端要维护两套语义，字段漂移 | 消息名是共享契约 |
+| 状态与关键命令同一策略 | 全丢或全等 | 要么卡顿，要么假成功 | 两类消息的可靠性要求不同 |
+| 飞控退出走广播 | 所有端点都收到退出事件 | 非持有者误写回姿态 | 退出必须定向 |
+
+**本方案的缺点**：
+
+- 同一套消息在两套传输上跑，任何字段改动都要同时验两条路径，回归面翻倍。
+- 端点关闭后的丢弃与计数需要在界面上有可见反馈，否则用户仍然不知道消息没送到。
+- 能力位是手工维护的，容易与实际实现脱节，需要验收时逐条核对。
+
+## 六、实现结果
+
+状态：未实现
+
+端点、会话与推送的语义已定，消息往返尚无证据。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `playback.state` | 50ms | 播放头/播放状态；AUI 状态栏与时间轴 |
-| `flight.state` | 100ms | 飞控姿态；只发 owner 或订阅端点 |
-| `preview.stats` | 1000ms | 捕获 fps/丢帧/格式；AUI 不伪造 |
-| `editor.ack` | 每请求 | 关键命令回执 |
-| `flight.exit` | 事件 | 只发 owner；不广播 |
+| — | — | — |
 
-- `EditorPush.broadcast` 用于非定向状态（如全局 schema 变化）；飞控退出必须 `send(owner)`。
-- 推送不得在渲染线程做 JSON 大对象序列化；可预序列化/队列。
-- 端点关闭后推送丢弃并计数；不向已关闭端点写。
-- 能力位只报告真实可用能力：`editor.transport.inprocess`、`preview.gpu`（14-03 通过后）等；未通过不宣告。
+### 验收要点
 
-### 3.4 与 WebUI 的关系
-
-- WebUI 仍使用 WebSocket；14 不改其消息语义。
-- AUI 与 WebUI 共用同一 `EditorSessionApi` 路由与同一套服务；差异只在端点实现。
-- ingame 模式不启动 8765、不创建 `WebEditorServer`；`F6` 打开 AUI 时也不启动。
-- 关闭 AUI 不 stop WebUI 服务；关闭 WebUI 不影响 AUI 端点。
-- 总开关关闭：两模式都不可 attach；已有端点 detach。
-
-### 3.5 错误与回执
-
-| 场景 | 行为 |
-|---|---|
-| 端点已关闭 | `sendCritical=false`；不排入无限队列 |
-| 请求处理异常 | `editor.ack{ok:false,reason}`；日志限频 |
-| 未知 type | `editor.ack{ok:false,reason:"unknown-type"}` |
-| schema 不匹配 | `hello_ack` 带 hash；AUI 提示重新加载 |
-| 关键消息队列满 | 失败并关闭端点/提示；不静默丢 |
-| 重复请求 id | 返回同一结果或明确 duplicate；不产生两次写 |
-
-## 4. 输入输出
-
-### 4.1 输入
-
-- 01 `api/editor` 7 接口与 `EditorCommandAck`。
-- 现有 `WebEditorApi` 消息路由与服务实现（作为语义对照）。
-- AUI Screen 的端点生命周期。
-- schemaHash/能力位。
-
-### 4.2 输出
-
-- `AuiEndpoint`/`AuiPush`/`AuiSession` 可用。
-- 同一套消息往返：`schema.get`、`script.validate`、`editor.seek/play/pause/stop`、飞控。脚本文件由编辑器直接读写工作区，两条通路都不经过它。
-- 关键命令 ack 可区分成功/失败。
-- 能力位/schemaHash 真实可用。
-- 无 8765、无 WebSocket、无本地回环。
-
-### 4.3 禁止
-
-- 新增第二套消息名/字段/信封。
-- 为了让 AUI 跑起来而启动 `WebEditorServer` 或连接 localhost。
-- `EditorPush.broadcast` 发 `flight.exit`。
-- `sendCritical` 失败被吞。
-- 端点关闭时停止共享服务/关闭 `CaptureHub`。
-- 用 WebUI 的 WebSocket 测试代替进程内测试。
-
-## 5. 验收
-
-### 5.1 正例
-
-**正例 A**：AUI 打开 → `attach` → `hello_ack` 带 schemaHash/capabilities；无 8765 监听。
-
-**正例 B**：`schema.get` 返回与 WebUI 相同的字段/结构；AUI 不额外转换字段名。脚本文件由编辑器直接读工作区，不经端点。
-
-**正例 C**：`editor.seek`/`play`/`pause`/`stop` 返回 ack；失败有 reason；AUI 状态栏显示。
-
-**正例 D**：编辑器直写工作区文件成功；磁盘文件可见；重开 AUI 再读一致。
-
-**正例 E**：`flight.state` 100ms 节流；`playback.state` 50ms；AUI 不因高频推送卡死。
-
-**正例 F**：关闭 AUI → 端点 detach；其他端点/服务不受影响；重复 detach 无异常。
-
-**正例 G**：重复 attach 同一端点不产生第二份状态；未知 type 有明确错误。
-
-**正例 H**：`sendCritical` 在端点关闭后返回 false；AUI 显示失败，不假装保存成功。
-
-### 5.2 反例
-
-| 反例 | 判定 |
-|---|---|
-| AUI 启 8765 再连自己 | 失败：不是进程内 |
-| AUI 新造 `aui.script.save` 等消息名 | 失败：语义分叉 |
-| `flight.exit` 广播 | 失败：非 owner 误写回 |
-| 保存失败无 ack、UI 显示成功 | 失败：伪造结果 |
-| 关闭端点调 `WebEditorServer.stop` | 失败：影响 WebUI |
-| 关闭端点调 `CaptureHub.close` | 失败：关闭捕获中心 |
-| 每帧全量广播文档 | 失败：性能/语义错误 |
-
-### 5.3 执行记录
-
-| 项 | 结果 | 证据 |
-|---|---|---|
-| attach/hello | NOT RUN | 待执行 |
-| schema/script 往返 | NOT RUN | 待执行 |
-| playback ack | NOT RUN | 待执行 |
-| save/validate ack | NOT RUN | 待执行 |
-| 推送节流 | NOT RUN | 待执行 |
-| detach/多端点 | NOT RUN | 待执行 |
+- 打开界面后挂载成功，返回的 schema 摘要与能力列表与 WebUI 一致；系统里没有新增监听端口。
+- 同一份 schema 请求在两端返回相同结构与字段名，界面不做字段名转换。
+- 播放类命令返回成功或失败回执；失败时界面状态栏显示原因。
+- 编辑器直写工作区文件成功，磁盘可见，重开界面后读回一致。
+- 播放状态、飞控姿态、预览统计按各自节奏推送，界面不卡死。
+- 关闭界面只摘除自己的端点，其它端点与服务不受影响；重复摘除不报错。
+- 重复挂载不产生第二份状态；未知消息类型有明确错误。
+- 端点关闭后关键发送返回失败，界面显示失败而非成功。

@@ -1,35 +1,65 @@
-# 07-09 数学模型编辑器
+# 数学模型编辑器
 
-## 目标
+> 状态：未实现
+> 范围：6 个 `motion_*` 值字段的模型编辑、递归限制与回落语义
+> 关联：02 字段目录、03 文档模型、06 双面板归属
 
-给 CAMERA 片段的 6 个 `motion_*` 值字段编辑数学模型：
+## 一、摘要
 
-- `motion_position`（vector）
-- `motion_yaw`（angle）
-- `motion_pitch`（angle）
-- `motion_roll`（angle）
-- `motion_fov`（scalar）
-- `motion_zoom`（scalar）
+CAMERA 片段有六个 `motion_*` 字段——位置、yaw、pitch、roll、fov、zoom——它们的值是「一个数学模型」而不是关键帧。模型可以简单到 `linear`，也可以是由弹簧、指数平滑、贝塞尔曲线组合而成的树。这些字段没有时钟、没有关键帧，永远只出现在属性面板；模型编辑用侧滑面板，不占效果面板。当前状态：未实现。
 
-这些是 `VALUE` + `STRUCT`，没有关键帧、没有时钟，永远只出现在属性面板；模型编辑用侧编辑面板，不占效果面板。
+## 二、为什么做
 
-## 数据模型
+### 2.1 问题
 
-```ts
-type MathModelDoc =
-  | { type: 'linear' }
-  | { type: 'smoothstep' }
-  | { type: 'ease_in' }
-  | { type: 'ease_out' }
-  | { type: 'ease_in_out' }
-  | { type: 'cubic_bezier'; x1: number; y1: number; x2: number; y2: number }
-  | { type: 'exponential_smooth'; tau: number }
-  | { type: 'spring' | 'inertia'; stiffness: number; damping: number; initial_velocity: number }
-  | { type: 'chain'; models: MathModelDoc[] }
-  | { type: 'blend'; a: MathModelDoc; b: MathModelDoc; weight: number }
-```
+- `motion_*` 的值是一个嵌套 JSON 对象，手写要记十一种类型的参数名和默认值，`chain` 与 `blend` 还能递归嵌套，写错一层就整棵树不可用。
+- 参数有约束但不写在字段名里：`tau` 必须为正，`stiffness` 必须为正，`damping` 不能为负，`weight` 在 0~1。填错时运行期回落，作者看不到。
+- 递归没有节制会做出几十层的树，运行时既慢又难解释。现在没有深度与节点数限制。
+- 未知类型与未知参数的处理规则不同：未知类型运行期回落 `linear`，未知参数被忽略。编辑器如果一律删掉，会丢掉作者可能想保留的数据。
+- 六个字段在概念上像可动画字段，容易被误当成关键帧字段放进效果面板。
 
-`motion_*` 的挂法：
+### 2.2 目标
+
+- 六行摘要直接显示类型与关键参数，点击进入侧面板编辑整棵树。
+- 参数约束在输入时校验，错误定位到具体字段。
+- 递归深度与节点总数有明确上限，超限时阻止应用并显示超限路径。
+- 未知类型与未知参数给警告但保留数据，由作者显式转换或清理。
+- `motion_*` 永不进入效果面板，也不出现在主时间轴。
+
+### 2.3 非目标
+
+- 不新增模型类型，不改 `MathModelRegistry` 或模组的模型求值。
+- 不给 `motion_*` 加关键帧、加时钟、加时间轴入口。
+- 不自动把未知类型改写成 `linear`，也不自动删除未知参数。
+- 不承诺响应预览等于游戏内实际运动。
+
+## 三、方案
+
+属性面板有一个 `motion` 组，六行分别对应六个通道。每行只显示类型加关键参数摘要（例如 `chain(spring → linear)`、`spring(k=8, d=0.75)`）、值域徽标、回落警告和节点数；不展开整棵树。行上没有时钟图标，没有「添加首帧」。
+
+点行或「编辑模型」打开右侧滑出的编辑面板。面板标题显示当前通道与值域，顶部显示「深度 d/8、节点 n/32」，主体是递归的模型编辑器：选类型、填该类型参数，`chain` 显示子模型列表可增删上下移，`blend` 显示 `a`/`b` 两个子块加权重。关闭面板不丢草稿，草稿按「片段 + 字段路径」保存；「应用」一次提交、一次撤销；「重置为 linear」确认后把值写成 `{type:'linear'}`，同样可撤销。
+
+参数控件按类型分化：`cubic_bezier` 四个 0~1 数值加一张小曲线预览；`exponential_smooth` 的 `tau` 为正；`spring`/`inertia` 的 `stiffness` 为正、`damping` 非负、`initial_velocity` 为有限数；`blend` 的 `weight` 在 0~1 且两个分支都不能缺；`chain` 至少一个子模型。无参类型只显示一句说明。参数输入即时校验，类型错就拦下不写盘。
+
+递归限制是硬边界：深度超过 8 层或节点总数超过 32 个即超限，本地拦下、应用按钮禁用，并显示是哪条路径超的。超限不自动截断、不静默改结构。`chain.models` 为空、`blend` 缺分支同样拦下。
+
+响应预览按当前模型画一条 0→1 的标量响应曲线，vector 通道画三轴分量或模长。它只是示意：状态型模型（spring/inertia）用零初值、单位阶跃，不承诺运行时的状态初值与历史。超限时不画。
+
+## 四、技术细节
+
+### 4.1 核心模型
+
+模型树由十一种节点组成：五种无参形状（`linear`、`smoothstep`、`ease_in`、`ease_out`、`ease_in_out`）、`cubic_bezier`（四参数）、`exponential_smooth`（`tau`）、`spring` 与 `inertia`（`stiffness`/`damping`/`initial_velocity`）、以及两个组合子：`chain`（有序子模型数组）与 `blend`（两个子模型加权重）。
+
+字段缺失表示该通道没有模型，这与显式写 `linear` 不是一回事——前者是「不干预」，后者是「按线性模型处理」。这个区别在摘要上要能看出来（「未设置」对 `linear`）。
+
+### 4.2 契约
+
+值域分三种：vector（`motion_position`）、angle（yaw/pitch/roll）、scalar（fov/zoom）。模型与值域不匹配时运行期回落 `linear`，编辑器给警告但不拦下——这是既有行为，编辑器不该比运行时更严格。
+
+参数表从模型注册表与字段目录派生，编辑器不手写第二份。模型对象只写 `type` 与该类型参数，不写 `authoring`、不写 UI 状态、不补默认值。
+
+### 4.3 数据形态
 
 ```json
 {
@@ -45,164 +75,55 @@ type MathModelDoc =
 }
 ```
 
-- `value` 是模型对象；没有 `keyframes`。
-- 模型对象只写 `type` + 该类型参数；不写 `authoring`、不写 UI 状态。
-- `chain.models` 递归；`blend.a/b` 递归。
-- 字段缺失 = 该通道无模型；不是 `linear` 的显式值。
+`value` 是模型对象，没有 `keyframes`；`chain.models` 与 `blend.a/b` 递归同构。
 
-## 通道
+### 4.4 边界
 
-| 字段 | 值域 | UI 摘要 |
+- 未知类型：运行期回落 `linear`，编辑器给警告、行显示「未知类型，实际 linear」，不自动改写；作者可点「转为 linear」显式替换。
+- 未知参数：运行期忽略，编辑器保留原字段并给警告，不自动删除；作者可点「清理未知参数」显式移除。
+- 已知参数类型错、`chain` 空、`blend` 缺分支、`weight` 越界、递归超限：一律拦下，不写盘。
+- 效果面板与主时间轴对 `motion_*` 零命中。
+- 循环引用在 JSON 树里不可能出现；导入的循环对象在解析阶段报错，不进面板。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 一个 JSON 文本编辑器 | 直接编辑模型对象 | 实现最省 | 十一种类型的参数名要背；深度与节点数完全失控 |
+| 用关键帧代替模型 | 把模型展开成关键帧 | 复用现有关键帧编辑 | 模型是模组既有能力，展开会丢失弹簧/惯性的状态语义 |
+| 深度/节点超限时自动截断 | 保证能保存 | 少一次报错 | 截断会静默改变作者构造的运动，且截断点无法解释 |
+| 未知类型自动改写 `linear` | 数据干净 | 少一类警告 | 丢失作者原始意图；`linear` 与「未设置」语义也不同 |
+| 未知参数自动删除 | 数据干净 | 少一类警告 | 参数可能是新版本模组支持的字段，删掉就不可恢复 |
+| 把 `motion_*` 放进效果面板 | 与可动画字段统一 | 面板更集中 | 它没有关键帧、没有时钟，放进去会让人误以为能打帧 |
+| 参数越界时交给运行时钳制 | 少一层校验 | 输入宽松 | 运行期回落 `linear` 是一个静默的行为变化，作者必须当场知道 |
+
+**本方案的缺点**：
+
+- 模型树是嵌套结构，即使有递归编辑器和摘要，理解 `chain` 与 `blend` 的组合效果仍需经验。
+- 深度 8 / 节点 32 的上限对复杂编排可能不够，超出后没有替代表达方式。
+- 响应预览是示意的，作者容易把它当成游戏内的真实运动。
+- 未知类型与未知参数都「保留 + 警告」，界面会长期带着警告标记，作者需要主动清理。
+
+## 六、实现结果
+
+状态：未实现
+
+按本方案实现六行摘要、侧滑递归编辑器、参数校验、深度与节点上限、回落与警告语义；模型注册表与模组求值逻辑不变。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `motion_position` | vector | `chain(spring → linear)` |
-| `motion_yaw` | angle | `spring(k=8, d=0.75)` |
-| `motion_pitch` | angle | `exponential_smooth(τ=0.15)` |
-| `motion_roll` | angle | `blend(spring, exp, w=0.5)` |
-| `motion_fov` | scalar | `linear` |
-| `motion_zoom` | scalar | `cubic_bezier(0.42,0,0.58,1)` |
+| — | — | 尚未实现 |
 
-- 行内只显示类型 + 关键参数摘要；不展开整棵树。
-- 点击行或“编辑模型”打开 `ModelEditorSheet`。
-- 每行右侧显示值域徽标、fallback 警告、节点数。
-- 6 行都在属性面板 `motion` 组；没有时钟图标、没有“添加首帧”。
+验收要点：
 
-## 模型目录
-
-| 类型 | 参数 | 默认 |
-|---|---|---|
-| `linear` | 无 | — |
-| `smoothstep` | 无 | — |
-| `ease_in` | 无 | — |
-| `ease_out` | 无 | — |
-| `ease_in_out` | 无 | — |
-| `cubic_bezier` | `x1` / `y1` / `x2` / `y2` | 取 `CubicBezierCurve` 常量 |
-| `exponential_smooth` | `tau` | 取 `ExponentialSmoothModel` 常量 |
-| `spring` | `stiffness` / `damping` / `initial_velocity` | 取 `SpringModel` 常量 |
-| `inertia` | 同 `spring` | 取 `InertiaModel` 常量 |
-| `chain` | `models`（子模型数组） | 至少 1 个 |
-| `blend` | `a` / `b` / `weight` | `weight` 取 `BlendModel` 常量 |
-
-参数表从 `MathModelRegistry` / 02 字段目录派生；编辑器不手写第二份注册表。
-
-## 侧编辑面板
-
-```text
-┌ 编辑模型：motion_position ─────────────────────────┐
-│ 值域 vector   节点 3/32   深度 2/8                  │
-│ 类型 [ chain ▼ ]                                   │
-│ 子模型                                            │
-│   1 [ exponential_smooth ▼ ]  tau [0.200]  [×]     │
-│   2 [ spring ▼ ]  k [6.0] d [0.9] v [0]    [×]     │
-│   [+ 添加子模型]                                   │
-│ [预览响应] [重置为 linear] [应用]                  │
-└────────────────────────────────────────────────────┘
-```
-
-- 从属性面板 `motion` 行打开；右侧滑出，宽度 420~560；不新建 layout panel。
-- 关闭不丢草稿；按 `clipKey + objectPath` 保存草稿。
-- “应用”一次 `commit`；一次撤销。
-- “重置为 linear”确认后把 `value` 写 `{type:'linear'}`；可撤销。
-- 标题显示当前通道与值域；不显示关键帧控件。
-
-## 参数控件
-
-| 类型 | 控件 |
-|---|---|
-| `cubic_bezier` | 四个 0~1 数值 + 小曲线预览 |
-| `exponential_smooth` | `tau > 0` |
-| `spring` / `inertia` | `stiffness > 0`、`damping >= 0`、`initial_velocity` 有限数 |
-| `blend` | `weight` 0~1；`a` / `b` 各一个子模型编辑块 |
-| `chain` | 子模型列表；可增删、上移/下移；至少 1 个 |
-| 无参类型 | 只显示类型说明 |
-
-- 参数输入即时校验；类型错 block，不写盘。
-- `cubic_bezier` 的小预览只画 [0,1] 曲线，不参与运行时。
-- `blend` 的 `a/b` 递归使用同一 `ModelEditorNode`；不复制表单。
-- `chain` 的每个子模型可再嵌 `chain/blend`，但受深度/节点限制。
-
-## 递归限制
-
-```text
-depth(model, d=1):
-  if d > 8 → 超限
-  count += 1
-  if count > 32 → 超限
-  chain.models / blend.a / blend.b → depth(d+1)
-```
-
-- 侧面板显示“深度 d/8、节点 n/32”。
-- 超限时本地 block，应用按钮禁用；显示具体路径。
-- `chain.models` 为空 block；`blend.a/b` 缺失 block。
-- 循环引用在 JSON 树里不可能出现；导入的循环对象在解析阶段报错，不进入面板。
-- 超限不自动截断，不静默改结构。
-
-## 回落与警告
-
-| 情况 | 处理 |
-|---|---|
-| 未知模型 `type` | 运行时回落 `linear`；编辑器 `warn`，行显示“未知类型，实际 linear” |
-| 未知参数名 | 运行时忽略；编辑器 `warn`，保留原字段不写丢 |
-| 已知参数类型错 | block，字段定位 |
-| 值域不匹配 | 运行时回落 `linear`；编辑器 `warn`，显示“当前通道值域 vector” |
-| 深度/节点超限 | block；运行时不保证 |
-| `chain` 空 / `blend` 缺分支 | block |
-| `weight` 越界 | block |
-
-未知模型不自动改写成 `linear`；作者可以点“转为 linear”显式替换。未知参数不自动删除；作者可以点“清理未知参数”显式移除。
-
-## 响应预览
-
-- 侧面板“预览响应”按当前模型画一条 0→1 的标量响应曲线；vector 通道画三轴分量或模长。
-- 预览只读，不写盘；不替代游戏内实际运动。
-- `chain`/`blend` 递归采样；深度/节点超限时不画。
-- 预览坐标轴为输入 0→1、输出归一化；不承诺运行时状态初值/历史。
-- 状态型模型（spring/inertia）预览用零初值、单位阶跃；显示“示意”。
-
-## 与其他模块
-
-- 属性面板：`motion` 组 6 行；没有效果面板入口。
-- 效果面板：`motion_*` 永不进入；`grep motion_position` 在效果面板组件 0 命中。
-- 路径/几何：模型编辑器不读写 `paths[]`；`motion_*` 只作用于相机通道。
-- 序列化：模型对象按 03-04 原样写；不写默认值、不写 `authoring`。
-
-## 组件
-
-```text
-src/components/motion/
-  MotionModelGroup.vue        6 行摘要
-  MotionModelRow.vue          类型/参数摘要/警告
-  ModelEditorSheet.vue        侧编辑面板
-  ModelEditorNode.vue         递归模型节点
-  ModelParamFields.vue        按类型参数控件
-  ModelResponsePreview.vue    0→1 响应示意
-src/model/motion/
-  mathModelDoc.ts             类型/参数/默认值
-  mathModelValidation.ts      类型错/未知/深度/节点/值域
-  mathModelSummary.ts         行摘要
-  mathModelResponse.ts        预览采样
-```
-
-- `mathModelDoc.ts` 从 02 模型目录派生；不硬编码第二份。
-- `ModelEditorNode` 递归；`chain/blend` 共用。
-- `MotionModelRow` 只显示摘要和入口；不展开参数。
-- 按 02 模型目录渲染；不读额外显隐表。
-
-## 验收
-
-1. 6 个 `motion_*` 默认无模型：属性面板显示“未设置”，无时钟；效果面板 0 行。
-2. `motion_yaw` 设 `spring(k=8,d=0.75,v=0)`：行摘要 `spring(k=8, d=0.75)`；保存 JSON 正确。
-3. `motion_position` 设 `chain([exponential_smooth(tau=.2), spring(...)])`：摘要 `chain(exp → spring)`；保存嵌套数组。
-4. `motion_roll` 设 `blend(a=spring,b=exp,weight=.5)`：a/b 递归可编辑；weight 0/1 可用，1.2 block。
-5. `motion_fov` 设 `linear`：摘要 `linear`；保存 `{type:'linear'}`。
-6. `motion_zoom` 设 `cubic_bezier` 默认：四参数有默认值；x1/y1/x2/y2 越界 block。
-7. `chain` 添加 3 个子模型，再嵌 `chain`：深度/节点计数正确；第 9 层 block。
-8. `chain` 节点总数 33：应用按钮禁用；显示超限路径。
-9. `chain.models=[]`：block；`blend` 缺 `a` 或 `b`：block。
-10. 未知类型 `{type:'foo'}`：行显示“未知类型，实际 linear”；不自动改写；点“转为 linear”后保存。
-11. 未知参数 `{type:'spring', foo:1}`：warn；保留 `foo`；点“清理未知参数”后移除。
-12. `tau=-1`、`stiffness=0`、`damping=-1`：字段级 block。
-13. `motion_yaw` 放 `linear` 正常；值域不匹配的模型显示 warn，不 block。
-14. 重置为 linear：一次撤销恢复旧树。
-15. 关闭/重开侧面板：草稿按通道恢复；文档未提交改动不落盘。
-16. 效果面板 0 个 `motion_*` 行；主时间轴 0 个 `motion_*` 控件。
-17. 保存重开：6 个模型树、参数、未知字段原样保留；没有默认值补写、没有 `authoring`。
+- 六个通道默认「未设置」，属性面板无时钟图标，效果面板零行。
+- 各类型摘要正确（`linear`、`spring(k, d)`、`chain(...)`、`blend(...)`），保存 JSON 与摘要一致。
+- `chain` 与 `blend` 递归可编辑；`weight` 在 0~1，越界拦下；`chain` 至少一个子模型，空列表拦下；`blend` 缺分支拦下。
+- 深度超过 8 层或节点超过 32 个时应用按钮禁用并显示超限路径。
+- 参数越界（`tau` 非正、`stiffness` 非正、`damping` 为负、`initial_velocity` 非有限数）字段级拦下。
+- 未知类型显示「未知类型，实际 linear」但不自动改写，作者显式「转为 linear」后才变。
+- 未知参数保留并给警告，作者显式「清理未知参数」后才移除。
+- 值域不匹配只警告不拦下。
+- 重置为 linear 一次撤销可恢复旧树；关闭重开侧面板草稿按通道恢复，未提交改动不落盘。
+- 效果面板与主时间轴对 `motion_*` 零命中。
+- 保存重开后模型树、参数与未知字段原样保留，没有补写默认值、没有 `authoring`。

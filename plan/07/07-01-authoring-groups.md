@@ -1,198 +1,117 @@
-# 07-01 编辑组合 AuthoringGroup
+# 编辑组合（AuthoringGroup）
 
-## 目标
+> 状态：未实现
+> 范围：编辑器内存里的组合定义与四个组合命令；不含模组结构、不含运行时组
+> 关联：02 字段目录、03 文档模型与 `commit`、06 双面板归属、07-02 位置组、07-04 朝向组
 
-在编辑器内存里建立一层 `AuthoringGroup`：把 `position.x/y/z`、`yaw/pitch/roll` 这类作者习惯一起编辑的叶子组合成一个操作单元。组合只提供“同一时刻建帧、抓取当前值、批量改值、删除该时刻帧”，写盘仍然是每个叶子自己的 `AnimObject` 关键帧。
+## 一、摘要
 
-`AuthoringGroup` 不是模组结构，不是 `clip.objects` 里的对象，不是运行时组，也不序列化。
+作者编辑位置和朝向时，习惯在同一个时刻一起给几个叶子建帧、一起改值。编辑组合就是把这几个叶子临时绑成一个操作单元，提供四件事：同一时刻建帧、抓取当前值、批量改值、删除该时刻帧。组合只活在编辑器内存里，写盘仍然是每个叶子自己的独立 `AnimObject` 关键帧；`position.x@2.35`、`position.y@2.35`、`position.z@2.35` 是三条记录，不是一个组帧。当前状态：未实现。
 
-## 数据模型
+## 二、为什么做
 
-```ts
-interface AuthoringGroupDef {
-  id: string                    // position.xyz / orientation.ypr / custom_xxx
-  label: string
-  members: string[]              // 叶子路径，如 position.x
-  builtin: boolean               // 来自配置文件 / 作者自定义
-  order: number
-  source: 'config' | 'custom'
-}
+### 2.1 问题
 
-interface AuthoringGroupRegistry {
-  defaults: AuthoringGroupDef[]
-  custom: AuthoringGroupDef[]
-  resolve(groupId: string): AuthoringGroupDef | null
-  groupsForPath(path: string): AuthoringGroupDef[]
-  validate(def: AuthoringGroupDef): AuthoringGroupIssue[]
-}
-```
+- 给相机在某一时刻定住位置，作者要在三个字段上分别点一次「添加首帧」，再分别输入三个数；每一次都是一次提交、一次撤销。三次操作里任何一次手滑，撤销会退掉不该退的那一步。
+- 同一个时刻的三条帧如果时间对不齐（比如一条是 2.35、另一条是 2.3501），运行时按精确时间比较三轴切换，看起来「同时」的帧实际上不在同一刻，画面上会闪一下。
+- 作者想「这一秒把位置和朝向一起抓到当前值」，现在只能逐个字段确认，既看不到会创建几条、也看不到哪些成员其实在另一个面板里。
 
-- 默认组从 `src/config/authoring-groups.json` 读取。
-- 自定义组存在 `doc.authoring.groups`，只在当前文档内存里；保存、推送、导出时剥离。
-- `members` 是叶子路径，不存对象引用、不存数组下标。
-- 同一个叶子可以属于多个组合；组合不是互斥分组。
+### 2.2 目标
 
-## 默认组合
+- 一个动作内，组合里每个可动画叶子在同一精确时间各生成一条独立关键帧；一次提交、一次撤销。
+- 建帧、抓取、批量改值、删帧四个动作都能预先看到「将创建几条、已有几条、跳过几条」。
+- 组合的成员范围可以靠改配置拓宽，不需要改内核代码、不需要改面板。
+- 作者能自建组合，但组合定义不写进脚本，保存重开后脚本数据无损。
 
-| groupId | label | members |
+### 2.3 非目标
+
+- 不引入运行时组：脚本里不出现组对象、组帧、`groupId`、`members`。
+- 不把 schema 里 `position` 那个二十多个字段的组直接当批量组用——它含 step 字段，整组打帧会生成 step 帧并触发三轴对齐。
+- 不做组合之间的互斥分组：同一个叶子可以同时属于多个组合。
+- 不让组合定义参与撤销栈：撤销只回退文档。
+
+## 三、方案
+
+默认只给两组：`position.xyz`（`position.x/y/z`）和 `orientation.ypr`（`yaw/pitch/roll`）。作者在属性面板或效果面板的组头右侧打开「组合编辑」，弹层里每行显示成员路径、当前值、帧数、以及该成员现在归哪个面板；底部四个动作按钮和一个计数提示。
+
+「批量改值」把弹层切成行内编辑：所有值一起填、一起提交，`Esc` 取消、`Enter` 提交。成员已经在效果面板时，弹层只显示摘要和跳转入口，不复制一套值控件——否则同一个值会出现两份编辑入口。
+
+弹层不因为成员在属性面板/效果面板之间迁移而关闭；提交后按 06 的归属规则重新分区，组头计数刷新，焦点留在弹层里。组头在两侧面板都能出现，各自按 `panelMembership` 算自己的计数。主时间轴不显示组合、不显示组帧、不显示组标记。
+
+配置扩展口是 `src/config/authoring-groups.json`：往现有组的 `members` 里追加路径，重启后该组变宽；往 `groups` 里追加一项，重启后多一个默认组。加进去的成员必须是对应轨道当前存在的叶子，跨轨道字段不合并；未知路径在启动时报配置错误并跳过该组，不阻塞其他组。配置组标记为内置、作者不能删，只能临时隐藏。
+
+自定义组合由作者勾选叶子建立，存在 `doc.authoring.groups`；可重命名、增删成员、删除。删组合不删任何关键帧。保存文档、推送预览、导出时整棵 `authoring` 剥离。
+
+## 四、技术细节
+
+### 4.1 核心模型
+
+组合定义只有四件东西：`id`、显示名、成员叶子路径数组、来源（配置或自定义）。成员存路径字符串，不存对象引用、不存数组下标——文档重排、片段重命名都不会让组合指向错地方。注册表由默认组和自定义组两部分组成，按叶子路径反查「这个字段属于哪些组」。
+
+`id` 匹配 `^[A-Za-z][A-Za-z0-9_.-]{1,63}$`，脚本内唯一；自定义组的 `id` 自动生成 `custom_<n>`，作者只改显示名。
+
+### 4.2 契约
+
+四个命令，语义分别是：
+
+- 同一时刻建帧：对组合内每个可动画叶子，该时刻没有帧就建一条，已有帧保留原值。新帧初值按顺序取「该叶子的当前有效值 → 静态 `value` → schema 默认」。
+- 抓取当前值：读每个叶子在该时刻的当前有效值（有帧则插值，无帧取 `value`/默认），只给没有帧的叶子建帧，已有帧不覆盖。
+- 批量改值：给出的值覆盖组合内所有可动画叶子，缺项按当前值填充；有同刻帧就改值，没有就建帧再写值。
+- 删除该时刻帧：精确删除每个叶子在该时刻的关键帧，删到最后一帧允许 `keyframes=[]` 并保留确定 `value`。
+
+四个命令都只用一次 `commit`；任一成员失败整次回滚，一次撤销全部退回。
+
+时间语义：组合操作使用片段局部秒，同一次操作里所有成员写同一个 `time` 数值，不做容差匹配、不四舍五入、不排序替代。三轴切换对齐同样按精确时间相等判断——`position.x/y/z` 必须各自存在 `time` 完全相等的那一帧，不用 `1e-4` 容差。
+
+组合里含 step 字段（`position_mode`、`position_space`、`position_origin`、`position_origin_freeze`、`facing_source`，以及 `base` 空间下的那批 `BASE_SWITCH_FIELDS`）时：`time <= 0` 直接提交；`time > 0` 先算切换影响，缺三轴帧就弹「补齐三轴并提交 / 取消」。补齐时缺的轴用当前值各建一帧，和 step 值写在同一个 `commit`，一次撤销全部回退。
+
+组合里含 `requires` 未满足的叶子（例如 `orient != tangent` 时的 `yaw_offset`）时，该行禁用、不参与批量改值，已有帧保留。含静态值或结构化字段时只允许改 `value`、不显示时钟、不参与建帧和删帧；含事件记录字段时只显示记录入口。
+
+### 4.3 数据形态
+
+写盘形态完全不变：`script.clips[].objects[path]` 里是 `{ value?, keyframes?, authoring? }`，关键帧是 `{time, value}` 的数组。组合定义、组计数、面板归属、弹层状态一概不写盘；`serializeDoc` 输出里 `grep groupId` 和 `grep authoring.groups` 都必须是 0 命中。
+
+### 4.4 边界
+
+- 组合不是互斥分组，同一叶子可属于多个组；两个组同时操作同一叶子时按各自命令独立提交。
+- 组合只覆盖当前片段内适用的叶子；跨轨道字段不合并，跨片段不组合。
+- 组合定义不随文档撤销；只有显式修改 `authoring` 的命令才动它。
+- 配置组作者不能删除，只能临时隐藏；隐藏不影响命令可用性。
+- 保存重开后默认组从配置恢复，自定义组丢失，关键帧数据不受影响。
+
+## 五、为什么不选别的
+
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 在模组侧引入组帧 | 运行时按组求值，脚本写一个组对象 | 改 `.java`、改脚本格式、旧脚本读取路径要兼容 | 07 的硬约束是模组零改动；组帧还会让现有 `objects[path]` 结构失效 |
+| 在 `AnimObject` 上加 `group`/`groupId` 字段 | 写盘时标出同组关系 | 模组解析器不认识新字段；导出/推送要维护第二套语义 | 组合是编辑期便利，不该进入数据格式 |
+| 直接拿 schema 的 `position` 组当批量组 | 复用现成分组标签 | 组里二十多个字段含 step 项，整组打帧会生成 step 帧并触发三轴对齐 | 会把「同时建三个连续值帧」变成「改了一堆开关」，语义跑偏 |
+| 用 `1e-4` 容差匹配同刻帧 | 容忍浮点误差 | 建出的帧时间会被改写，撤销后与写盘值不一致 | 运行时按精确时间比较，编辑器必须同口径 |
+| 组合操作各叶子独立提交 | 每个叶子一次 `commit` | 撤销要按次数退，无法「一次撤销全回退」 | 组合的核心价值就是一次提交一次撤销 |
+
+**本方案的缺点**：
+
+- 自定义组合只存在内存，重开后消失；作者要复用只能写进配置文件。
+- 改配置文件要重启编辑器才生效，没有热加载。
+- 一个叶子属于多个组合时，「这个字段到底被谁管」需要靠面板上的归属徽标来解释，概念成本存在。
+- 成员已经在效果面板时，弹层不复制值控件，批量改值需要跳转到效果面板，操作不是完全顺手。
+
+## 六、实现结果
+
+状态：未实现
+
+按本方案落地组合定义、四个命令、配置扩展口和弹层交互；写盘形态与模组代码均无变化。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `position.xyz` | 位置 XYZ | `position.x` / `position.y` / `position.z` |
-| `orientation.ypr` | 朝向 YPR | `yaw` / `pitch` / `roll` |
+| — | — | 尚未实现 |
 
-首版只默认这两组。其他统一组合不预置；作者需要时在配置文件里新增，或在当前文档里建自定义组合。
+验收要点：
 
-`position` 的 `group("position")` 在 schema 里包含二十多个字段，不能直接当批量组用；它包含 `position_mode`、`position_space`、`position_origin` 等 step 字段，整组打帧会生成 step 帧并触发三轴对齐。默认组合只装连续叶子，step 字段单独编辑。
-
-## 配置扩展口
-
-`src/config/authoring-groups.json`：
-
-```json
-{
-  "version": 1,
-  "groups": [
-    {
-      "id": "position.xyz",
-      "label": "位置 XYZ",
-      "members": ["position.x", "position.y", "position.z"]
-    },
-    {
-      "id": "orientation.ypr",
-      "label": "朝向 YPR",
-      "members": ["yaw", "pitch", "roll"]
-    }
-  ]
-}
-```
-
-- 加成员：在现有组 `members` 里追加路径，重启编辑器后该组变宽；内核、面板、命令不改。
-- 加默认组：在 `groups` 里追加一项，重启后出现在属性面板/效果面板的组头菜单。
-- `id` 必须匹配 `^[A-Za-z][A-Za-z0-9_.-]{1,63}$`，脚本内唯一。
-- `members` 至少一项；重复项去重；未知路径启动时报配置错误并跳过该组，不阻塞其他组。
-- 加载时对照 02 字段目录：成员必须是当前轨道存在的叶子；跨轨道字段不合并。
-- 加载后标记 `builtin=true`、`source='config'`，作者不能删除；只可在当前会话里临时隐藏。
-- 改配置文件即可把 `position_mode`、`position_space` 等 step 字段扩进 `position.xyz`；组合弹层会显示“含 step 字段，建帧会触发三轴对齐”的提示。
-
-## 自定义组合
-
-作者在属性面板或效果面板点“新建组合”：
-
-1. 输入名称。
-2. 从当前片段适用叶子列表里勾选成员；`VALUE` / `STRUCT` / `EVENT` 可以勾选，但组合弹层里对应行只显示“静态值/记录”，不参与关键帧批量操作。
-3. 保存到 `doc.authoring.groups`，`source='custom'`。
-4. 可重命名、增删成员、删除组合；删除组合不删任何 `AnimObject`。
-5. 保存文档、推送预览、导出时 `authoring` 整棵剥离。
-
-自定义组合的 `id` 自动生成 `custom_<n>`；作者可改显示名，不改 `id`。
-
-## 组合命令
-
-```ts
-authoring.group.addFramesAt   { clipKey, groupId, time }
-authoring.group.captureAt     { clipKey, groupId, time }
-authoring.group.applyValuesAt { clipKey, groupId, time, values }
-authoring.group.removeFramesAt{ clipKey, groupId, time }
-```
-
-### `addFramesAt`
-
-- 对组合内每个 `ANIMATED` 叶子：如果该时刻没有关键帧，创建一条；如果已有，保留原值。
-- 新帧初值按顺序取：该叶子在 `time` 的当前有效值 → 该叶子静态 `value` → schema `default`。
-- 所有新帧使用同一个 `time` 数值；不做容差匹配、不四舍五入、不排序替代。
-- 一次 `commit`；任一叶子失败整次回滚。
-
-### `captureAt`
-
-- 读取组合内每个叶子在 `time` 的当前有效值（有关键帧则插值，无关键帧取 `value`/default）。
-- 对没有帧的叶子创建同刻帧；已有帧的叶子不覆盖。
-- UI 显示“将创建 N 条、已有 M 条、跳过 K 条静态/事件”。
-
-### `applyValuesAt`
-
-- `values: Record<path, JsonValue>` 必须覆盖组合内所有可动画叶子；缺项按当前值填充。
-- 每个叶子：有同刻帧则改值；没有则创建帧再写值。
-- 静态 `VALUE` / `STRUCT` 只改 `value`，不建帧；`EVENT` 不参与值批量，行显示“记录”。
-- 一次 `commit`；一次撤销。
-
-### `removeFramesAt`
-
-- 删除组合内每个叶子在 `time` 的关键帧；时间精确相等。
-- 删到最后一帧允许 `keyframes=[]`；保留确定 `value`。
-- 一次 `commit`；面板按 06 `panelMembership` 自动迁移。
-
-## 时间与校验
-
-- 组合操作使用片段局部秒；同一次操作的所有成员写同一个 `time`。
-- 三轴切换对齐用精确时间相等：`position.x/y/z` 必须各自存在 `time` 完全相等的那一帧；不用 `1e-4` 容差。
-- 组合包含 `position_mode / position_space / position_origin / position_origin_freeze / facing_source` 或在 `base` 下的 `BASE_SWITCH_FIELDS` 时：
-  - `time <= 0`：直接提交。
-  - `time > 0`：先跑 `switchImpact`；缺三轴帧时弹“补齐三轴并提交 / 取消”。
-  - 选“补齐三轴并提交”时，缺的轴用当前值各建一帧，和 step 值写在同一个 `commit`；一次撤销全部回退。
-- 组合包含 `requires` 未满足的叶子（如 `orient != tangent` 时的 `yaw_offset`）：该行禁用，不参与 `applyValuesAt`；已有帧保留。
-- 组合包含 `VALUE` / `STRUCT`：只允许静态值编辑，不显示时钟，不参与 `addFramesAt` / `removeFramesAt`。
-- 组合包含 `EVENT`：显示记录入口，不参与批量建帧/改值/删帧。
-
-## 组合弹层
-
-```text
-┌ 组合：位置 XYZ · 当前 2.350s ─────────────────────┐
-│ position.x  [ 1.200 ]  3 帧   在效果面板           │
-│ position.y  [ 0.000 ]  2 帧   在效果面板           │
-│ position.z  [ 未设置 ] 0 帧   属性面板             │
-│ [同一时刻建帧] [抓取当前值] [批量改值] [删除此时刻帧]│
-│ 将创建 1 条；已有 2 条；1 条静态                    │
-└────────────────────────────────────────────────────┘
-```
-
-- 从组头“组合编辑”按钮打开；锚在组头，不占独立面板。
-- 每行显示路径、当前值、帧数、面板归属徽标；不画节点轴、不画第二条时间线。
-- “批量改值”进入行内编辑模式，所有值可一起提交；`Esc` 取消，`Enter` 提交。
-- 成员已在效果面板时，组合弹层只显示摘要和“在效果面板”入口，不复制值控件。
-- 组合弹层不因面板迁移关闭；提交后按 06 重新分区，组头计数刷新，焦点留在弹层。
-- 组头在属性面板/效果面板可同时出现；两边显示同一组合的不同成员集合，计数按 `panelMembership` 计算。
-
-## 面板接入
-
-- 属性面板：每个组头右侧“组合编辑”菜单，列出该组可用的默认组合和自定义组合。
-- 效果面板：同样入口；只对当前在效果面板的成员生效，未在效果面板的成员显示“在属性面板”。
-- 片段工具栏“组合”命令打开当前选中叶子的所属组合；`Shift` 多选叶子时可临时建一个自定义组合。
-- 主时间轴不显示组合、不显示组帧、不显示组标记。
-
-## 序列化
-
-- `doc.authoring.groups` 只存在内存；`serializeDoc` 前剥离。
-- 组合定义不改变 `AnimObject` 形态；不写 `group` 字段、不写 `groupId`、不写 `members`。
-- 保存重开后默认组合从配置文件恢复；自定义组合丢失，脚本数据无损。
-- 撤销/重做只回退 `doc`；组合定义不随文档撤销，除非命令显式修改 `authoring`。
-
-## 组件与模块
-
-```text
-src/authoring/
-  groups.ts                 AuthoringGroupDef / registry / validate
-  groupCommands.ts          addFramesAt / captureAt / applyValuesAt / removeFramesAt
-  groupPanelView.ts         组头计数、成员面板归属、弹层行模型
-src/components/authoring/
-  AuthoringGroupHeader.vue
-  AuthoringGroupPopover.vue
-  AuthoringGroupMemberRow.vue
-src/config/
-  authoring-groups.json
-```
-
-- `groups.ts` 不 import 任何面板组件；只读 schema 目录和文档。
-- `groupCommands.ts` 生成 03 `EditorCommand`，由统一 `commit` 执行。
-- 面板组件只消费 `groupPanelView` 的派生结果，不直接改 `doc`。
-
-## 验收
-
-1. 选中 CAMERA 片段，`position.xyz` 默认出现；在 `t=2.350` 点“同一时刻建帧”，`position.x/y/z` 各出现一条 `time=2.350` 的独立关键帧；帧数 3，文档里没有组对象。
-2. 紧接着批量改值为 `(1,2,3)`，三条帧值正确；撤销一次全部回到建帧前。
-3. `position.x` 已有帧、`position.y/z` 无帧时点“抓取当前值”：x 不覆盖，y/z 各建一帧；弹层显示“已有 1、创建 2”。
-4. 删除 `t=2.350` 的组合帧：三条都删；删到最后一帧的叶子 `keyframes=[]`，回属性面板；撤销全恢复。
-5. 在 `t=3` 把 `position_space` 改成 `base`，组合只建了 x 帧时：弹“补齐三轴并提交”；补齐后 `script.validate` 通过；选取消则文档不变。
-6. 在 `authoring-groups.json` 给 `position.xyz` 加 `position_mode`，重启后组头出现该成员；对它建帧时弹 step 对齐提示；不改任何内核代码。
-7. 自定义组合勾选 `yaw`、`pitch`、`roll`、`orient`：`orient` 行只显示静态值，不参与建帧；三个角度正常批量。
-8. 保存重开：脚本里没有 `authoring`、没有组字段；帧值/时间不变；自定义组合消失，默认组合仍在。
-9. 组合弹层打开时，成员因开/关动画在属性/效果面板间迁移；弹层不关闭、不重复值控件、计数正确。
-10. `grep groupId` 在保存 JSON 中 0 命中；`grep authoring.groups` 在 `serializeDoc` 输出中 0 命中。
+- 同一时刻建帧后，三轴各有一条时间完全相等的独立关键帧；脚本里没有组对象、`groupId`、`members`。
+- 抓取当前值只给没有帧的叶子建帧，已有帧不被覆盖；弹层的「将创建/已有/跳过」计数与实际一致。
+- 批量改值与删帧各一次撤销可全回退；任一成员失败时整次回滚。
+- `t > 0` 改 step 字段而三轴缺帧时被拦住；补齐后三轴都有帧，`script.validate` 通过。
+- 配置里给 `position.xyz` 加成员后重启生效，不需要改内核代码；加 step 字段时建帧弹对齐提示。
+- 自定义组合里静态值与事件字段行不参与建帧；保存重开后脚本无 `authoring`，默认组恢复、自定义组消失。
+- 组合弹层打开期间成员跨面板迁移时弹层不关闭、不出现重复值控件、计数正确。

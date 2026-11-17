@@ -1,213 +1,150 @@
-# 09-01 OVERLAY 字段面与层类型
+# OVERLAY 字段面与层类型
 
-## 目标
+> 状态：未实现
+> 范围：`OVERLAY` 轨道按 `layer_type` 分成的三条字段面、属性/效果双面板归属、层类型切换与写盘前的本地校验
+> 关联：09-02 fade 颜色面、09-03 图片层、09-04 视频层、09-05 字幕层、09-07 层级；06 的双面板规则
 
-把 `OVERLAY` 轨道的全部既有字段按 `layer_type` 分成三条互不污染的面：
+## 一、摘要
 
-- `fade`：全屏颜色覆盖层，只有颜色、遮罩、渐变、混合、透明度、层级；
-- `image`：图片或视频层，只有素材路径、取材、位置、锚点、缩放、透明度、层级；
-- `subtitle`：字幕层，只有文本、字号、位置、锚点、缩放、透明度、层级。
+`OVERLAY` 是一条轨道、三种画面：全屏颜色层、图片/视频层、字幕层，靠 `layer_type` 区分。本文规定这三种层各自能写哪些既有字段、这些字段落在属性面板还是效果面板、以及切换层类型时旧字段怎么处理。字段面的唯一依据是模组当前的 `OVERLAY` 对象 schema 与运行时按层类型分支读取的行为：编辑器不新增字段，也不提供"给片段添加任意属性"的入口。
 
-编辑器不提供“给片段添加任意属性”的字段选择器，也不把全部 `OVERLAY` 字段同时铺在一个面板里。字段是否出现，由 `layer_type` 决定。
+## 二、为什么做
 
-## 源码事实
+### 2.1 问题
 
-`TrackSchemas.overlayObjects()` 的字段面就是本轮的完整字段面：
+`OVERLAY` 的三十来个字段并非对所有层都生效：`color` 只对颜色层有意义，`path` 只对图片层有意义，`text` 只对字幕层有意义。把它们一起铺在面板上，作者看到的是大量"写了但运行时不读"的死字段——脚本能存、游戏不报错，只是画面上什么都不发生，作者无从判断是自己填错了还是这个字段本来就不管用。更麻烦的是校验器只拦一部分：带 `appliesTo` 的字段用错层类型会报 issue，但 `color`、`path`、`text`、`z_index` 没有 `appliesTo`，校验器不会替编辑器清理，这些死字段一旦写进去就长期留在脚本里，跨层类型切换不断累积。
 
-- 动画字段：`x`、`y`、`anchor_x`、`anchor_y`、`scale_x`、`scale_y`、`source.x`、`source.y`、`source.w`、`source.h`、`opacity`、`font_scale`、`color.r`、`color.g`、`color.b`、`mask_x`、`mask_y`、`mask_width`、`mask_height`、`mask_radius`、`gradient_angle`、`gradient_center_x`、`gradient_center_y`、`gradient_radius`。
-- 值字段：`layer_type`、`color`、`gradient`、`mask_shape`、`blend_mode`、`path`、`text`、`z_index`。
+### 2.2 目标
 
-`OverlayClipRuntime.compute()` 按 `layer_type` 分支装配：
+- 选中任意 `OVERLAY` 片段，面板里出现的字段就是当前 `layer_type` 运行时真正会读的字段。
+- 切换层类型后，脚本里不残留任何新类型不读的字段，一次撤销能退回切换前的完整字段面。
+- 已经有帧的属性和没有帧的属性分居两个面板，同一属性不会在两处同时出现值控件。
+- 脚本没写 `layer_type` 时，编辑器与运行时对"按 fade 处理"的判断一致。
 
-- `fade` 只读透明度、颜色、遮罩、渐变、层级；`x/y/anchor/scale` 填 `CanvasTransform` 缺省值，不读脚本。
-- `image` 只读位置、锚点、缩放、取材、透明度、层级；颜色、遮罩、渐变填缺省。
-- `subtitle` 只读位置、锚点、缩放、字号、透明度、层级；颜色、遮罩、渐变填缺省。
+### 2.3 非目标
 
-`ObjectValidator.checkOverlay()` 对“字段已存在、但该字段的 `appliesTo` 不包含当前 `layer_type`”直接报 issue。`color`、`path`、`text`、`z_index` 没有 `appliesTo`，校验器不会替编辑器清理；编辑器必须主动清理，避免留下运行时永远不读的死字段。
+- 不做字段选择器：不提供"从全部字段里挑一个加到片段上"的入口。
+- 不新增字段、不改 schema、不改模组校验器。
+- 不替作者猜层类型：切换是显式动作，编辑器不根据已写字段反推意图。
+- 不清理未知键：不属于 `OVERLAY` 字段面的键保留给诊断。
 
-## 字段表
+## 三、方案
 
-| 字段 | 模式 | 类型/范围 | 默认 | 适用层 | 面板 |
-|---|---|---|---|---|---|
-| `layer_type` | value | enum `fade/image/subtitle`，required | `fade` | 全部 | 属性 |
-| `x` | animated | float，窗口比例 | 0.5 | image / subtitle | 属性 / 效果 |
-| `y` | animated | float，窗口比例 | 0.5 | image / subtitle | 属性 / 效果 |
-| `anchor_x` | animated | float，常用 0–1；schema 无 min/max | 0.5 | image / subtitle | 属性 / 效果 |
-| `anchor_y` | animated | float，常用 0–1；schema 无 min/max | 0.5 | image / subtitle | 属性 / 效果 |
-| `scale_x` | animated | float | 1 | image / subtitle | 属性 / 效果 |
-| `scale_y` | animated | float | 1 | image / subtitle | 属性 / 效果 |
-| `source.x` | animated | float，归一化 | 0 | image（含视频） | 属性 / 效果 |
-| `source.y` | animated | float，归一化 | 0 | image（含视频） | 属性 / 效果 |
-| `source.w` | animated | float，归一化 | 1 | image（含视频） | 属性 / 效果 |
-| `source.h` | animated | float，归一化 | 1 | image（含视频） | 属性 / 效果 |
-| `opacity` | animated | float，0–1 | 1 | 全部 | 属性 / 效果 |
-| `font_scale` | animated | float | 1 | subtitle | 属性 / 效果 |
-| `color.r` | animated | float，0–1 | 0 | fade | 属性 / 效果 |
-| `color.g` | animated | float，0–1 | 0 | fade | 属性 / 效果 |
-| `color.b` | animated | float，0–1 | 0 | fade | 属性 / 效果 |
-| `mask_x` | animated | float，窗口比例 | 0.5 | fade | 属性 / 效果 |
-| `mask_y` | animated | float，窗口比例 | 0.5 | fade | 属性 / 效果 |
-| `mask_width` | animated | float，min 0 | 1 | fade | 属性 / 效果 |
-| `mask_height` | animated | float，min 0 | 1 | fade | 属性 / 效果 |
-| `mask_radius` | animated | float，min 0 | 0.5 | fade | 属性 / 效果 |
-| `gradient_angle` | animated | float，度 | 0 | fade | 属性 / 效果 |
-| `gradient_center_x` | animated | float，窗口比例 | 0.5 | fade | 属性 / 效果 |
-| `gradient_center_y` | animated | float，窗口比例 | 0.5 | fade | 属性 / 效果 |
-| `gradient_radius` | animated | float，min 0，短边比例 | 0.5 | fade | 属性 / 效果 |
-| `color` | value | string `#RRGGBB` | `#000000` | fade | 属性 |
-| `gradient` | value | struct `{type,stops}` | null | fade | 属性 |
-| `mask_shape` | value | enum `full/rect/circle` | `full` | fade | 属性 |
-| `blend_mode` | value | enum `normal/multiply/screen/soft_light/overlay` | `normal` | fade | 属性 |
-| `path` | value | string | 空 | image（含视频） | 属性 |
-| `text` | value | string | 空 | subtitle | 属性 |
-| `z_index` | value | int | 10 | 全部 | 属性 |
+作者选中一个 `OVERLAY` 片段，面板顶部永远是层类型行，下面只出现当前类型适用的字段组。切到颜色层就只剩颜色、遮罩、渐变、混合、透明度、层级；切到图片层就只剩素材、取材、位置、锚点、缩放、透明度、层级；切到字幕层就只剩文本、字号、位置、锚点、缩放、透明度、层级。不适用的字段不是灰掉，而是根本不出现在面板里，也不会被写进 `objects`。
 
-## 层类型适用矩阵
+层类型是结构开关，不是普通枚举。改它等于换一张字段面，所以按"一次转换"处理：先给作者看一份"将保留 / 将移除"的清单，确认后一次提交，一次撤销退回原样。编辑器不会"保留旧值并标注不生效"——那种状态运行时不读、作者也看不懂。
 
-| 字段组 | fade | image | subtitle |
+每个可动字段都有两种身份：还没打帧时它是一个静态值，出现在属性面板并带"开时钟"入口；打了帧之后它变成关键帧组，只出现在效果面板。同一属性在任一时刻只在一个面板里有值控件。value-only 字段（层类型、基色、渐变定义、遮罩形状、混合模式、素材路径、文本、层级）没有时钟，永远只在属性面板。
+
+## 四、技术细节
+
+### 4.1 核心模型
+
+`OVERLAY` 的字段面由 schema 给出，分两类：动画叶子（可打帧的数值）与 value-only 字段。运行时按 `layer_type` 分支装配：颜色层只读透明度、颜色、遮罩、渐变、层级；图片层只读位置、锚点、缩放、取材、透明度、层级；字幕层只读位置、锚点、缩放、字号、透明度、层级。未读的字段即使存在也被填成缺省值。
+
+因此"字段是否出现"完全由层类型决定，不由字段是否已在 JSON 里存在决定。schema 的 `appliesTo` 能覆盖大部分字段，剩下的 `color`、`path`、`text`、`z_index` 需要一张本地的层类型矩阵补上门控。
+
+字段组与缺省值：
+
+| 字段组 | 字段 | 缺省 | 适用层 |
 |---|---|---|---|
-| `layer_type` | 显示 | 显示 | 显示 |
-| `x/y/anchor/scale` | 不显示、不写盘 | 显示 | 显示 |
-| `source.*` | 不显示、不写盘 | 显示 | 不显示、不写盘 |
-| `opacity` | 显示 | 显示 | 显示 |
-| `font_scale` | 不显示、不写盘 | 不显示、不写盘 | 显示 |
-| `color.r/g/b` | 显示 | 不显示、不写盘 | 不显示、不写盘 |
-| `mask_*` | 显示 | 不显示、不写盘 | 不显示、不写盘 |
-| `gradient_*` | 显示 | 不显示、不写盘 | 不显示、不写盘 |
-| `color` | 显示 | 不显示、不写盘 | 不显示、不写盘 |
-| `gradient` | 显示 | 不显示、不写盘 | 不显示、不写盘 |
-| `mask_shape` | 显示 | 不显示、不写盘 | 不显示、不写盘 |
-| `blend_mode` | 显示 | 不显示、不写盘 | 不显示、不写盘 |
-| `path` | 不显示、不写盘 | 显示 | 不显示、不写盘 |
-| `text` | 不显示、不写盘 | 不显示、不写盘 | 显示 |
-| `z_index` | 显示 | 显示 | 显示 |
+| 层类型 | `layer_type` | `fade` | 全部 |
+| 位置 | `x`、`y` | 0.5 | image / subtitle |
+| 锚点 | `anchor_x`、`anchor_y` | 0.5 | image / subtitle |
+| 缩放 | `scale_x`、`scale_y` | 1 | image / subtitle |
+| 取材 | `source.x`、`source.y`、`source.w`、`source.h` | 0 / 0 / 1 / 1 | image（含视频） |
+| 透明度 | `opacity` | 1 | 全部 |
+| 字号 | `font_scale` | 1 | subtitle |
+| 颜色通道 | `color.r`、`color.g`、`color.b` | 0 | fade |
+| 遮罩几何 | `mask_x`、`mask_y`、`mask_width`、`mask_height`、`mask_radius` | 0.5 / 0.5 / 1 / 1 / 0.5 | fade |
+| 渐变几何 | `gradient_angle`、`gradient_center_x`、`gradient_center_y`、`gradient_radius` | 0 / 0.5 / 0.5 / 0.5 | fade |
+| 基色 | `color` | `#000000` | fade |
+| 渐变定义 | `gradient` | 未设置 | fade |
+| 遮罩形状 | `mask_shape` | `full` | fade |
+| 混合模式 | `blend_mode` | `normal` | fade |
+| 素材路径 | `path` | 空 | image（含视频） |
+| 文本 | `text` | 空 | subtitle |
+| 层级 | `z_index` | 10 | 全部 |
 
-“不显示、不写盘”不是“显示但标灰”。凡是当前层类型运行时不读的字段，编辑器都不在面板里给它值控件，也不把它写进 `objects`。
+### 4.2 契约
 
-## 属性面板与效果面板
+双面板的分工按 06 的规则执行，不另立一套：
 
-### 属性面板
+- 属性面板显示当前层类型适用的全部可编辑字段，包括静态值、未设置值和全部 value-only 字段；不显示已经有关键帧的动画叶子。
+- 效果面板只显示已经有关键帧的动画叶子，只做关键帧列表、时间、值、插值编辑；不显示任何 value-only 字段，不提供"添加属性"入口。
+- 属性面板给某个叶子开时钟：创建首帧，该叶子进入效果面板，属性面板不再给它值控件。
+- 效果面板删掉最后一帧，或作者关闭该属性动画：叶子回流属性面板，按静态值显示。
 
-`selection.properties` 对 `OVERLAY` 片段显示：
+层类型切换是一个提交单元：
 
-- `layer_type` 顶部行；
-- 当前层类型适用的全部可编辑字段；
-- 静态值、未设置值、value-only 字段；
-- animated 字段在还没有关键帧时显示当前静态值，并带“开时钟”入口；
-- value-only 字段没有时钟，不提供关键帧入口。
+1. 选新类型，算出保留/移除清单给作者看；
+2. 确认后一次提交，一次撤销回退整个字段面；
+3. 目标类型适用的字段，源类型已有值就保留，源类型没有就按缺省初始化；
+4. 目标类型不适用的字段一律从 `objects` 删除，包括历史上残留的部分。
 
-属性面板不显示已经有 `keyframes.length > 0` 的 animated 叶子；这些叶子只在效果面板出现，避免同一属性在两个面板同时显示值控件。
-
-### 效果面板
-
-`clip.effects` 只显示 `keyframes.length > 0` 的 animated 叶子：
-
-- 每条叶子只做关键帧列表、时间、值、插值编辑；
-- 不显示 `layer_type`、`color`、`gradient`、`mask_shape`、`blend_mode`、`path`、`text`、`z_index`；
-- 不提供“添加属性”或“选择字段”入口；
-- 空片段显示“在属性面板打开时钟后，这里显示关键帧组”。
-
-### 时钟与回流
-
-- 属性面板中某个 animated 叶子开时钟：创建首帧，该叶子进入效果面板，属性面板不再显示它的值控件。
-- 效果面板删除最后一帧：该叶子回流属性面板，按静态值显示。
-- 关闭动画：删除该属性的关键帧组，回流属性面板。
-- `layer_type`、`color`、`gradient`、`mask_shape`、`blend_mode`、`path`、`text`、`z_index` 永远不进效果面板。
-
-## 层类型切换
-
-`layer_type` 是 `OVERLAY` 片段的结构开关，不是普通枚举值。切换它会改变字段适用面，因此按“一次转换”处理，而不是把旧字段原样保留。
-
-### 打开缺失 `layer_type` 的片段
-
-- 校验器与运行时把空值按 `fade` 处理；
-- 编辑器显示“有效层类型：fade（脚本未写）”；
-- 只要作者改动任一 fade 字段，编辑器写显式 `layer_type: "fade"`，消除歧义。
-
-### 切换流程
-
-1. 选择新层类型；
-2. 显示“将保留 / 将移除”的字段清单；
-3. 作者确认后一次提交；
-4. 适用新类型的字段保留原值；
-5. 不适用新类型的字段从 `objects` 删除；
-6. 一次撤销可以回到切换前。
-
-### 字段归属
+主要迁移关系如下，实际以目标类型的完整字段面为准，表里没列到的残留同样要清：
 
 | 切换 | 保留 | 移除 |
 |---|---|---|
 | fade → image | `opacity`、`z_index` | `color.*`、`mask_*`、`gradient_*`、`color`、`gradient`、`mask_shape`、`blend_mode`、`text` |
 | fade → subtitle | `opacity`、`z_index` | `color.*`、`mask_*`、`gradient_*`、`color`、`gradient`、`mask_shape`、`blend_mode`、`path` |
-| image → fade | `opacity`、`z_index` | `x/y/anchor_x/anchor_y/scale_x/scale_y`、`source.*`、`path` |
+| image → fade | `opacity`、`z_index` | `x/y/anchor/scale`、`source.*`、`path` |
 | image → subtitle | `opacity`、`z_index`、`x/y/anchor/scale` | `source.*`、`path` |
 | subtitle → fade | `opacity`、`z_index` | `x/y/anchor/scale`、`font_scale`、`text` |
 | subtitle → image | `opacity`、`z_index`、`x/y/anchor/scale` | `font_scale`、`text` |
 
-`path` 和 `text` 没有 `appliesTo`，校验器不会因为层类型不匹配而报错；编辑器仍然按上表移除，避免死字段。
+### 4.3 数据形态
 
-上表列的是主要字段组，不是完整清单。切换时统一按目标类型的完整字段面处理：
+全部字段写在片段的 `objects` 里，不扩到片段顶层，也不新增任何编辑器专属字段。切换时只删不加，不写缺省值填充；只有作者显式给过值的字段才落盘。
 
-- 目标类型适用的字段：源类型已有值就保留；源类型没有就按默认值初始化，不把运行时的填充值写死；
-- 目标类型不适用的字段：无论是否出现在上表，一律从 `objects` 删除，包括历史残留的 `color.*`、`mask_*`、`gradient_*`、`color`、`gradient`、`mask_shape`、`blend_mode`、`path`、`text`、`font_scale`、`source.*`、`x/y/anchor/scale` 中不适用当前目标的部分；
-- 一次切换是一个 commit，一次撤销回退整个字段面。
+`layer_type` 缺失是合法状态：校验器与运行时都按 `fade` 处理。编辑器显示"有效层类型：fade（脚本未写）"，不报错；作者一旦改动任何 fade 字段，编辑器补写显式 `layer_type: "fade"` 消除歧义。
 
-## 本地校验
+不属于 `OVERLAY` 字段面的未知键不删、不改、不进 UI。推送前校验器会报未知对象路径，编辑器定位到具体键，由作者决定保留还是删除。
 
-在写盘、推送前执行：
+### 4.4 边界
 
-| 检查 | 处理 |
-|---|---|
-| `layer_type` 缺失 | 允许打开；显示 effective fade；首次层类型相关编辑写显式值 |
-| `layer_type` 非 `fade/image/subtitle` | block，定位到 `objects.layer_type` |
-| 存在 `appliesTo` 字段但当前类型不匹配 | block，提示“字段 X 不适用于 layer_type=Y” |
-| `image` 的 `path` 扩展名不是 `png/gif/mp4/webm/mkv` | block；视频扩展名进入 09-04 的识别 |
-| `color` 非 `#RRGGBB`（`#` 可省） | block；运行时会回退黑色，但编辑器不应把错误写盘 |
-| `gradient` 结构不合法 | block，详见 `09-02` |
-| `mask_shape` / `blend_mode` 不在枚举内 | block |
-| `opacity` / 颜色通道超出 0–1 | block |
-| `mask_width/height/radius` 或 `gradient_radius` 小于 0 | block |
-| `source.*` 非有限数，或 `source.w/h < 0` | block |
-| `z_index` 非整数 | block |
+写盘与推送前必须拦住的是"运行时不会按作者预期读取"的形态，而不是替作者做取值决策：
 
-## 组件
+- `layer_type` 不是三个合法值之一：拦截。
+- 存在带 `appliesTo` 的字段，但当前层类型不在其适用范围：拦截，提示哪个字段不适用于哪种层类型。
+- 图片路径扩展名不在允许集合内：拦截；视频扩展名转 09-04 的识别。
+- 基色不是合法的六位十六进制：拦截。运行时会 warn 并回退黑色，但编辑器不该把错误写盘。
+- `gradient` 结构不合法、`mask_shape` 或 `blend_mode` 不在枚举内：拦截。
+- `opacity` 与颜色通道超出 0–1、遮罩与渐变半径小于 0、`source.*` 非有限数或宽高为负、`z_index` 非整数：拦截。
 
-### `OverlayLayerTypeField`
+不做的判断：不因为字段缺失而报警，不因为层类型缺失而报警，不猜测作者想写哪个层类型，不自动改写已有取值。
 
-- 位置：属性面板顶部；
-- 显示当前值；缺失时显示 effective fade；
-- 切换前调用 `previewLayerTypeConversion()`，返回保留/移除清单；
-- 确认后调用 `applyLayerTypeConversion()`，一次 commit；
-- 不做“保留旧值并标注不生效”。
+## 五、为什么不选别的
 
-### `OverlayFieldGroup`
+| 备选方案 | 做法 | 代价 | 为什么没选 |
+|---|---|---|---|
+| 全字段平铺 | 一个面板列出全部 `OVERLAY` 字段，不适用的标灰 | 面板长、死字段多；作者分不清"没填"和"不适用" | 层类型本来就是字段面的决定因素，平铺等于把这个信息藏起来 |
+| 字段选择器 | 作者手动从字段池里挑字段加到片段 | 能造出运行时永远不读的组合；校验器拦不住 `path`/`text` | 字段集合由层类型唯一确定，不需要二次选择 |
+| 切换时保留旧值 | 切类型后保留旧字段并标注"当前不生效" | 脚本持续膨胀；`ObjectValidator` 报 issue；读者无法判断哪个值算数 | 死字段的价值为零，保留只制造歧义 |
+| 切换时清空全部字段 | 切类型后一切从缺省开始 | `opacity`、`z_index` 这类通用值被无谓丢弃，作者要重填 | 通用字段跨层类型有意义，应当保留 |
 
-- 只接收当前层类型适用的字段描述；
-- 不接收“全部 OVERLAY 字段”再由组件自己判断；
-- 字段描述来自 `TrackSchemas.overlayObjects()` 的 `appliesTo` 与 `section`；
-- 对 `color/path/text` 这类没有 `appliesTo` 的字段，用本文件的层类型矩阵补上门控。
+**本方案的缺点**：
 
-## 验收
+- 切换层类型是破坏性操作，作者必须先读清单再确认；如果只是想试试另一种效果，得靠撤销往返。
+- 同一属性在属性面板与效果面板之间来回迁移，作者需要理解"开时钟"这个概念才能找到打帧后的值控件。
+- 本地校验与 schema 的 `appliesTo` 是两份信息，schema 变更时需要同步维护那张补漏的层类型矩阵。
 
-| # | 场景 | 通过条件 |
+## 六、实现结果
+
+状态：未实现
+
+字段面、双面板归属与切换规则已定，代码尚未落地。
+
+| 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| A1 | 选中 fade | 只显示 `layer_type`、`opacity`、`color`、`color.r/g/b`、`gradient`、`gradient_*`、`mask_shape`、`mask_*`、`blend_mode`、`z_index` |
-| A2 | 选中 image | 只显示 `layer_type`、`x/y/anchor/scale`、`source.*`、`opacity`、`path`、`z_index` |
-| A3 | 选中 subtitle | 只显示 `layer_type`、`x/y/anchor/scale`、`font_scale`、`opacity`、`text`、`z_index` |
-| A4 | 缺失 `layer_type` | 显示 effective fade；不报错；首次编辑写显式 fade |
-| A5 | fade→image | 确认清单正确；`color/mask/gradient/blend/text` 从 JSON 移除；`opacity/z_index` 保留；一次撤销回退 |
-| A6 | image→fade | `x/y/anchor/scale/source/path` 从 JSON 移除；`opacity/z_index` 保留 |
-| A7 | subtitle→image | `font_scale/text` 移除；`x/y/anchor/scale` 保留 |
-| A8 | `color.r` 打帧 | 属性面板不再显示 `color.r` 值控件；效果面板出现该叶子；删除最后一帧后回流 |
-| A9 | value-only 字段 | `layer_type/color/gradient/mask_shape/blend_mode/path/text/z_index` 在效果面板 0 命中 |
-| A10 | `ObjectValidator` | 切换后不再出现“字段不适用于 layer_type”的 issue |
-| A11 | 未知键 | 不属于 `OVERLAY` 字段面的键保留供诊断；不静默删除，不进入 UI；推送前 `ObjectValidator` 会报“未知对象路径”，编辑器定位到键，由作者决定删除或保留 |
-| A12 | 保存重开 | 字段值、关键帧、层类型、未知键原样保留 |
+| — | — | — |
 
-## 完成定义
+### 验收要点
 
-- `OVERLAY` 三条层类型的字段面与源码一致；
-- 属性面板/效果面板归属与 06 一致；
-- 层类型切换不留下死字段；
-- 本地校验能在推送前拦住 `ObjectValidator` 会报的形态错误；
-- 没有新增字段、没有新增消息、没有改模组。
+- 分别选中 fade / image / subtitle 三种层，面板只出现该类型字段组，其余字段零命中。
+- 脚本缺 `layer_type` 时显示有效类型为 fade、不报错，首次编辑后写显式值。
+- 三种切换方向各做一次：确认清单与实际写入一致，不适用字段从 JSON 消失，`opacity`、`z_index` 保留，一次撤销完全回退。
+- 给某个动画叶子打帧后，属性面板不再显示它的值控件，效果面板出现该叶子；删掉最后一帧后回流。
+- value-only 字段在效果面板零命中。
+- 切换后 `ObjectValidator` 不再报"字段不适用于 layer_type"。
+- 未知键在保存重开后原样保留，且不出现在任何面板里。
