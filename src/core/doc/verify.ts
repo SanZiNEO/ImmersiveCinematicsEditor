@@ -22,6 +22,7 @@ import type { CatalogIndex } from '../schema/index.ts'
 import type { FieldCatalog, FieldEntry } from '../schema/types.ts'
 import { bindDocument, bindingMatches } from './binding.ts'
 import { readClip } from './clip.ts'
+import * as docBarrel from './index.ts'
 
 import { ClipRegistry, repairSelection } from './identity.ts'
 import { cloneJson, isJsonObject, sameJson } from './json.ts'
@@ -1052,6 +1053,108 @@ async function main(): Promise<void> {
       }
     }
     check('03-08 grep 文档模型 0 处硬编码 enumValues / min / max', offender === '', offender)
+  }
+
+  // ── 8.5 04 消费面：docRevision / clipKeys / selectionInvalid（04-05 / 04-10） ──
+  {
+    check(
+      '04 消费面：doc barrel 导出 DocStore / DocIo / validateStructure / serializeDoc',
+      typeof docBarrel.DocStore === 'function'
+        && typeof docBarrel.DocIo === 'function'
+        && typeof docBarrel.validateStructure === 'function'
+        && typeof docBarrel.serializeDoc === 'function',
+      Object.keys(docBarrel).length,
+    )
+
+    const raw: JsonValue = {
+      meta: { id: 'revdoc', name: 'Rev Doc', author: '' },
+      timeline: {
+        tracks: [
+          {
+            type: 'CAMERA',
+            clips: [
+              { start_time: 0, duration: 2, objects: { 'position.x': { value: 1 } } },
+              { start_time: 2, duration: 2, objects: { 'position.x': { value: 2 } } },
+            ],
+          },
+        ],
+      },
+    }
+    const parsed = parseDoc(raw, { metaKeys: keys })
+    if (!parsed.ok) {
+      throw new Error('revision 夹具无法解析')
+    }
+    const store = new DocStore({ catalog: index, metaKeys: keys })
+    check('04-05 revision 初始为 0', store.revision === 0, store.revision)
+    store.open(parsed.doc, 'rev.json')
+    check('04-05 open 后 revision 递增', store.revision === 1, store.revision)
+    check('04-05 open 清空 clipKeys', store.session.clipKeys.length === 0, store.session.clipKeys)
+
+    const handles = store.registry.handles()
+    check('04-05 夹具含两个片段', handles.length === 2, handles.length)
+    const first = handles[0].key
+    const second = handles[1].key
+
+    store.select({ domain: 'clip', clipKey: first })
+    check(
+      '04-05 select 维护单元素 clipKeys',
+      store.session.clipKeys.length === 1 && store.session.clipKeys[0] === first,
+      store.session.clipKeys,
+    )
+    check('04-05 select 清除失效记录', store.session.selectionInvalid === null)
+
+    store.selectMany([first, second, second])
+    check(
+      '04-05 selectMany 去重并保持顺序',
+      store.session.clipKeys.length === 2
+        && store.session.clipKeys[0] === first
+        && store.session.clipKeys[1] === second,
+      store.session.clipKeys,
+    )
+    check(
+      '04-05 selectMany 主选区取第一个',
+      store.session.selection.domain === 'clip' && store.session.selection.clipKey === first,
+      store.session.selection,
+    )
+
+    const beforeCommit = store.revision
+    const committed = store.commit({ kind: 'object.setValue', clipKey: second, path: 'position.x', value: 7 })
+    check('04-05 commit 成功', committed.ok, committed)
+    check('04-05 commit 后 revision 递增', store.revision === beforeCommit + 1, store.revision)
+    check('04-05 commit 后批选保留', store.session.clipKeys.length === 2, store.session.clipKeys)
+
+    const beforeUndo = store.revision
+    store.undo()
+    check('04-05 undo 后 revision 递增', store.revision === beforeUndo + 1, store.revision)
+    const beforeRedo = store.revision
+    store.redo()
+    check('04-05 redo 后 revision 递增', store.revision === beforeRedo + 1, store.revision)
+
+    store.select({ domain: 'clip', clipKey: second })
+    const removed = store.commit({ kind: 'clip.remove', clipKey: second })
+    check('04-05 删除被选片段成功', removed.ok, removed)
+    check('04-05 删除后选择退回 none', store.session.selection.domain === 'none', store.session.selection)
+    check('04-05 删除后记录失效原因', store.session.selectionInvalid !== null, store.session.selectionInvalid)
+    check('04-05 删除后批选剪枝', !store.session.clipKeys.includes(second), store.session.clipKeys)
+
+    store.select({ domain: 'clip', clipKey: first })
+    check('04-05 重新选择清空失效记录', store.session.selectionInvalid === null)
+    check(
+      '04-05 批选只含存活片段',
+      store.session.clipKeys.every((key) => store.registry.handle(key) !== undefined),
+      store.session.clipKeys,
+    )
+    store.selectMany(['missing-key'])
+    check('04-05 selectMany 过滤不存在的键', store.session.clipKeys.length === 0, store.session.clipKeys)
+    check('04-05 selectMany 过滤后选择为 none', store.session.selection.domain === 'none')
+
+    const beforeClose = store.revision
+    store.close()
+    check('04 close 后没有文档', store.doc === null)
+    check('04 close 后 revision 递增', store.revision === beforeClose + 1, store.revision)
+    check('04 close 清空选择与批选', store.session.selection.domain === 'none' && store.session.clipKeys.length === 0)
+    check('04 close 清空脏标记与历史', store.dirty === false && store.canUndo() === false)
+    check('04 close 后 commit 被拒绝', store.commit({ kind: 'meta.set', key: 'name', value: 'x' }).ok === false)
   }
 
   // ── 9. 校验桥断连与推送 ack 边界（协议缺口记录） ─────────────────────────

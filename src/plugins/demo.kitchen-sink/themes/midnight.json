@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "demo.theme.midnight",
+  "label": "Demo 主题 · 午夜",
+  "appearance": "dark",
+  "tokens": {
+    "bg-app": "#0e1116",
+    "bg-panel": "#151a21",
+    "bg-raised": "#1d242d",
+    "bg-hover": "#232c37",
+    "bg-selected": "#2a3644",
+    "text": "#e4e9f0",
+    "text-secondary": "#b3bdca",
+    "text-muted": "#8b96a5",
+    "border": "#2a3340",
+    "border-strong": "#5d7288",
+    "accent": "#6ea8fe",
+    "focus": "#8bb8ff",
+    "success": "#57c98a",
+    "warning": "#e0b34b",
+    "error": "#f07070",
+    "error-bg": "#3a1d20",
+    "selection-outline": "#6ea8fe",
+    "scrollbar": "#2a3340",
+    "scrollbar-hover": "#3b4a5c"
+  },
+  "syntaxTokens": {
+    "syntax.keyword": "#c792ea",
+    "syntax.string": "#a5d6a7",
+    "syntax.number": "#ffb86c",
+    "syntax.comment": "#7d8896",
+    "syntax.property": "#e4e9f0",
+    "syntax.punctuation": "#b3bdca",
+    "syntax.invalid": "#f07070"
+  },
+  "trackTokens": {
+    "track.camera": "#9a8cff",
+    "track.letterbox": "#4a4a4a",
+    "track.audio": "#4fd1b0",
+    "track.event": "#e0b34b",
+    "track.mod_event": "#ffb86c",
+    "track.overlay": "#6ea8fe",
+    "track.adjust": "#9aa7b8"
+  },
+  "preview": {
+    "bg": "#0e1116",
+    "panel": "#151a21",
+    "text": "#e4e9f0",
+    "accent": "#6ea8fe"
+  }
+}

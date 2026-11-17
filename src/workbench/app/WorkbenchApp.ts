@@ -1,0 +1,454 @@
+/**
+ * 应用装配（04 全轮）。
+ *
+ * 这里把「端口 + 服务 + 注册表 + 插件」接成一个可运行的工作台：
+ * 1. 宿主端口（Electron / 浏览器 dev）；
+ * 2. 诊断、服务注册表、注册表族；
+ * 3. 偏好、布局、主题、i18n、状态、选区、文档、命令、快捷键、焦点、弹窗；
+ * 4. WebUI 传输（本地脚本 + 预览帧）与离机传输回退；
+ * 5. 插件内核 + 内置插件。
+ *
+ * 工作台其它部分只 depend on `api/`，不在这里之外 new 具体实现。
+ */
+import type { CatalogIndex } from '../../core/schema/index.ts'
+import { buildCatalog, indexCatalog } from '../../core/schema/index.ts'
+import type { DocTransport } from '../../core/doc/io.ts'
+import type { ValidationTransport } from '../../core/doc/validate.ts'
+import type { DiagnosticSink } from '../api/diagnostics.ts'
+import type { HostPort } from '../api/host.ts'
+import type { LayoutFile } from '../api/layout.ts'
+import type { ServiceRegistry } from '../api/services.ts'
+import {
+  COMMAND_SERVICE,
+  DIAGNOSTICS_SERVICE,
+  DIALOG_STACK,
+  DOCUMENT_COMMANDS,
+  DOCUMENT_SERVICE,
+  DRAWER_TAB_REGISTRY,
+  FILE_DIALOG_PORT,
+  FOCUS_SERVICE,
+  HOST_SERVICE,
+  I18N_SERVICE,
+  KEYBINDING_SERVICE,
+  LAYOUT_SERVICE,
+  PAGE_REGISTRY,
+  PAGE_ROUTER,
+  PANEL_REGISTRY,
+  PREFERENCES_SERVICE,
+  PREVIEW_SERVICE,
+  SELECTION_SERVICE,
+  SETTINGS_REGISTRY,
+  STATUS_ITEM_REGISTRY,
+  STATUS_SERVICE,
+  THEME_CONTROLLER,
+  THEME_REGISTRY,
+  THEME_SERVICE,
+  WINDOW_PORT,
+} from '../api/tokens.ts'
+import { DiagnosticsStore } from '../kernel/DiagnosticsStore.ts'
+import { ServiceRegistryImpl } from '../kernel/ServiceRegistryImpl.ts'
+import {
+  DrawerTabRegistryImpl,
+  PageRegistryImpl,
+  PanelRegistryImpl,
+  SettingsRegistryImpl,
+  StatusItemRegistryImpl,
+} from '../kernel/CollectionRegistries.ts'
+import { PluginRegistry } from '../kernel/PluginRegistry.ts'
+import { CommandRegistryImpl } from '../commands/CommandRegistryImpl.ts'
+import { KeybindingRegistryImpl } from '../keybindings/KeybindingRegistryImpl.ts'
+import { FocusServiceImpl } from '../focus/FocusServiceImpl.ts'
+import { LayoutService } from '../layout/LayoutService.ts'
+import { LayoutPersistence } from '../layout/persist.ts'
+import { validateLayoutFile } from '../layout/validate.ts'
+import { buildDefaultTree, createDefaultFile } from '../layout/defaultLayouts.ts'
+import { ThemeRegistry } from '../theme/ThemeRegistry.ts'
+import { ThemeService } from '../theme/ThemeService.ts'
+import { PreferencesStore } from '../preferences/PreferencesStore.ts'
+import { I18nService } from '../i18n/index.ts'
+import { createHost } from '../host/createHost.ts'
+import { WebUiClient } from '../host/webui/WebUiClient.ts'
+import { WebUiTransport } from '../host/webui/WebUiTransport.ts'
+import { DocumentServiceImpl } from './DocumentServiceImpl.ts'
+import { SelectionServiceImpl } from './SelectionServiceImpl.ts'
+import { StatusServiceImpl } from './StatusServiceImpl.ts'
+import { DialogStackImpl } from './DialogStackImpl.ts'
+import { PluginHostImpl } from './PluginHostImpl.ts'
+import { PageRouterImpl } from '../shell/pageRouter.ts'
+import { focusElement } from '../shell/focusRegions.ts'
+import { BUILTIN_PLUGINS } from '../../plugins/builtin.ts'
+import type { PluginManifest } from '../api/contributions.ts'
+
+/** 离机传输：没有游戏连接时的真实失败回退（不伪造成功）。 */
+class OfflineTransport implements DocTransport, ValidationTransport {
+  private readonly reason = '未连接游戏 WebUI（8765）：该操作需要游戏内 WebUI 服务'
+
+  async load(): Promise<{ path: string; doc: never }> {
+    throw new Error(this.reason)
+  }
+
+  async save(): Promise<{ path: string }> {
+    throw new Error(this.reason)
+  }
+
+  async validate(): Promise<{ ok: boolean; issues: string[] }> {
+    throw new Error(this.reason)
+  }
+
+  async pushScript(): Promise<{ ok: boolean; reason?: string }> {
+    return { ok: false, reason: this.reason }
+  }
+
+  async newScript(): Promise<{ path: string; doc: never }> {
+    throw new Error(this.reason)
+  }
+
+  async seek(): Promise<void> {
+    throw new Error(this.reason)
+  }
+
+  async exists(): Promise<boolean> {
+    return false
+  }
+}
+
+/** 应用实例。 */
+export class WorkbenchApp {
+  readonly diagnostics: DiagnosticSink
+  readonly services: ServiceRegistry
+  readonly host: HostPort
+  readonly catalog: CatalogIndex
+  readonly preferences: PreferencesStore
+  readonly themes: ThemeRegistry
+  readonly themeService: ThemeService
+  readonly i18n: I18nService
+  readonly status: StatusServiceImpl
+  readonly layout: LayoutService
+  readonly layoutPersistence: LayoutPersistence
+  readonly commands: CommandRegistryImpl
+  readonly keybindings: KeybindingRegistryImpl
+  readonly focus: FocusServiceImpl
+  readonly dialogs: DialogStackImpl
+  readonly router: PageRouterImpl
+  readonly documents: DocumentServiceImpl
+  readonly selection: SelectionServiceImpl
+  readonly panels: PanelRegistryImpl
+  readonly pageRegistry: PageRegistryImpl
+  readonly drawerTabs: DrawerTabRegistryImpl
+  readonly statusItems: StatusItemRegistryImpl
+  readonly settingsRegistry: SettingsRegistryImpl
+  readonly pluginHost: PluginHostImpl
+  readonly plugins: PluginRegistry
+  readonly transport: WebUiTransport | null
+  readonly client: WebUiClient | null
+
+  private readonly serviceRegistry: ServiceRegistryImpl
+
+  constructor(options: { host?: HostPort; plugins?: PluginManifest[] } = {}) {
+    this.serviceRegistry = new ServiceRegistryImpl()
+    this.services = this.serviceRegistry
+    this.diagnostics = new DiagnosticsStore()
+    this.host = options.host ?? createHost()
+    this.catalog = indexCatalog(buildCatalog('editor-04'))
+
+    this.preferences = new PreferencesStore({
+      storage: this.host.storage,
+      diagnostics: this.diagnostics,
+    })
+
+    this.i18n = new I18nService({
+      locale: () => this.preferences.get().language,
+      // 语言以偏好为唯一来源：偏好变了就同步 i18n（模板随之重渲染）。
+      onChange: (setLocale) => {
+        this.preferences.subscribe((next) => {
+          setLocale(next.language)
+        })
+        setLocale(this.preferences.get().language)
+      },
+      diagnostics: this.diagnostics,
+    })
+
+    this.themes = new ThemeRegistry({ diagnostics: this.diagnostics })
+    this.themeService = new ThemeService({
+      registry: this.themes,
+      host: this.host.theme,
+      preferences: this.preferences,
+      diagnostics: this.diagnostics,
+    })
+
+    this.status = new StatusServiceImpl(this.diagnostics)
+    this.dialogs = new DialogStackImpl()
+    this.router = new PageRouterImpl('project')
+
+    this.panels = new PanelRegistryImpl((kind, id, first, second) => {
+      this.diagnostics.report({
+        severity: 'error',
+        source: 'plugin',
+        message: `${kind} ID 重复: ${id}`,
+        detail: `${first} 与 ${second}`,
+      })
+    })
+    this.pageRegistry = new PageRegistryImpl()
+    this.drawerTabs = new DrawerTabRegistryImpl()
+    this.statusItems = new StatusItemRegistryImpl()
+    this.settingsRegistry = new SettingsRegistryImpl()
+
+    this.layout = new LayoutService({
+      panels: this.panels,
+      diagnostics: this.diagnostics,
+      // 默认树按「已注册面板」生成：没有面板的槽位就是空组，不用核心面板占位。
+      defaults: (pageId) => buildDefaultTree(pageId, this.panels),
+      // 抽屉标签不是面板节点，但可以被拖出/拖回：两个谓词让布局校验与 movePanel 都认得它。
+      registered: (ref) =>
+        this.panels.has(ref) || this.drawerTabs.get(ref.panelId)?.pluginId === ref.pluginId,
+      isDrawerTab: (ref) =>
+        this.drawerTabs.get(ref.panelId)?.pluginId === ref.pluginId,
+    })
+    this.layoutPersistence = new LayoutPersistence({
+      storage: this.host.storage,
+      diagnostics: this.diagnostics,
+    })
+
+    this.commands = new CommandRegistryImpl({ diagnostics: this.diagnostics })
+    this.keybindings = new KeybindingRegistryImpl({
+      diagnostics: this.diagnostics,
+      platform: this.host.platform === 'web' ? 'win32' : this.host.platform,
+    })
+    this.focus = new FocusServiceImpl({
+      onFocus: (regionId) => {
+        focusElement(document.querySelector<HTMLElement>(`[data-focus-scope="${CSS.escape(regionId)}"]`))
+      },
+    })
+
+    // WebUI 传输：Electron 宿主才有 token；浏览器 dev 也尝试连（Origin 会被服务端拒，属真实限制）。
+    const token = readBrowserToken()
+    this.client = new WebUiClient({ token: () => token })
+    this.transport = new WebUiTransport({ client: this.client })
+
+    const liveTransport: DocTransport & ValidationTransport = this.transport
+    this.documents = new DocumentServiceImpl({
+      catalog: this.catalog,
+      transport: liveTransport,
+      diagnostics: this.diagnostics,
+      onDirty: (payload, revision) => {
+        void this.writeDraft(payload, revision)
+      },
+      onSaved: () => {
+        void this.clearDrafts()
+      },
+    })
+
+    this.selection = new SelectionServiceImpl(this.documents.store)
+    this.pluginHost = new PluginHostImpl({
+      diagnostics: this.diagnostics,
+      services: this.serviceRegistry,
+      panels: this.panels,
+      pages: this.pageRegistry,
+      drawerTabs: this.drawerTabs,
+      statusItems: this.statusItems,
+      settings: this.settingsRegistry,
+      themes: this.themes,
+      commands: this.commands,
+      i18n: this.i18n,
+      focus: this.focus,
+      dialogs: this.dialogs,
+      documentCommands: this.documents,
+    })
+    this.plugins = new PluginRegistry({
+      diagnostics: this.diagnostics,
+      host: this.pluginHost,
+    })
+
+    void options
+    this.provideServices()
+  }
+
+  /** 启动：偏好 → 主题 → 布局 → 插件 → 连接 → 快捷键。 */
+  async start(): Promise<void> {
+    const preferenceIssues = await this.preferences.load()
+    for (const issue of preferenceIssues.issues) {
+      this.diagnostics.report({ severity: 'warning', source: 'preferences', message: issue })
+    }
+
+    const cached = this.themes.get(this.preferences.get().theme.themeId)
+    if (cached !== undefined) {
+      this.themeService.apply(cached.id)
+    } else {
+      this.themeService.apply(this.preferences.get().theme.themeId)
+    }
+
+    // 先激活插件再建默认布局：默认树按「已注册面板」生成（04-02），
+    // 反过来的话首启会是空布局（面板注册表还没填）。
+    await this.startPlugins()
+    await this.loadLayout()
+    this.installKeybindings()
+    this.wireConnection()
+    this.client?.connect()
+  }
+
+  /** 释放：插件 → 文档 → 传输 → 布局写盘。 */
+  async dispose(): Promise<void> {
+    await this.saveLayout()
+    this.plugins.dispose()
+    this.documents.dispose()
+    this.selection.dispose()
+    this.themeService.dispose()
+    this.client?.close()
+  }
+
+  private provideServices(): void {
+    this.serviceRegistry.provide(DIAGNOSTICS_SERVICE, this.diagnostics)
+    this.serviceRegistry.provide(HOST_SERVICE, this.host)
+    this.serviceRegistry.provide(WINDOW_PORT, this.host.window)
+    this.serviceRegistry.provide(FILE_DIALOG_PORT, this.host.files)
+    this.serviceRegistry.provide(PREFERENCES_SERVICE, this.preferences)
+    this.serviceRegistry.provide(I18N_SERVICE, this.i18n)
+    this.serviceRegistry.provide(THEME_REGISTRY, this.themes)
+    this.serviceRegistry.provide(THEME_SERVICE, this.themeService)
+    this.serviceRegistry.provide(THEME_CONTROLLER, this.themeService)
+    this.serviceRegistry.provide(STATUS_SERVICE, this.status)
+    this.serviceRegistry.provide(DIALOG_STACK, this.dialogs)
+    this.serviceRegistry.provide(PAGE_ROUTER, this.router)
+    this.serviceRegistry.provide(PANEL_REGISTRY, this.panels)
+    this.serviceRegistry.provide(PAGE_REGISTRY, this.pageRegistry)
+    this.serviceRegistry.provide(DRAWER_TAB_REGISTRY, this.drawerTabs)
+    this.serviceRegistry.provide(STATUS_ITEM_REGISTRY, this.statusItems)
+    this.serviceRegistry.provide(SETTINGS_REGISTRY, this.settingsRegistry)
+    this.serviceRegistry.provide(LAYOUT_SERVICE, this.layout)
+    this.serviceRegistry.provide(COMMAND_SERVICE, this.commands)
+    this.serviceRegistry.provide(KEYBINDING_SERVICE, this.keybindings)
+    this.serviceRegistry.provide(FOCUS_SERVICE, this.focus)
+    this.serviceRegistry.provide(DOCUMENT_SERVICE, this.documents)
+    this.serviceRegistry.provide(DOCUMENT_COMMANDS, this.documents)
+    this.serviceRegistry.provide(SELECTION_SERVICE, this.selection)
+    if (this.transport !== null) {
+      this.serviceRegistry.provide(PREVIEW_SERVICE, this.transport)
+    }
+  }
+
+  private async loadLayout(): Promise<void> {
+    const text = await this.host.storage.read('layout.json')
+    const defaults = createDefaultFile(this.panels)
+    const validated = validateLayoutFile(text === null ? defaults : safeParse(text), {
+      pageIds: ['project', 'document', 'settings'],
+      panels: (ref) => this.panels.has(ref),
+    })
+    for (const message of validated.result.messages) {
+      this.diagnostics.report({
+        severity: validated.result.reverted ? 'warning' : 'info',
+        source: 'layout',
+        message,
+      })
+    }
+    this.layout.load(JSON.stringify(validated.file))
+  }
+
+  private async saveLayout(): Promise<void> {
+    try {
+      const parsed = JSON.parse(this.layout.serialize()) as LayoutFile
+      await this.layoutPersistence.save({
+        version: 1,
+        currentPageId: this.router.currentPageId,
+        pages: parsed.pages,
+      })
+    } catch (error) {
+      this.diagnostics.report({
+        severity: 'warning',
+        source: 'layout',
+        message: '布局写盘失败',
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  private async startPlugins(): Promise<void> {
+    this.plugins.load(BUILTIN_PLUGINS.map((manifest) => ({ manifest, source: `builtin:${manifest.id}` })))
+    await this.plugins.activateAll()
+    const states = this.plugins.states()
+    const failed = states.filter((state) => state.status === 'failed' || state.status === 'skipped')
+    if (failed.length > 0) {
+      this.status.notify(`插件加载失败：${failed.map((state) => state.id).join('、')}`, 'error')
+    }
+  }
+
+  private installKeybindings(): void {
+    this.keybindings.registerFromCommands(
+      this.commands.list().map((entry) => ({
+        ...entry.definition,
+      })),
+    )
+    for (const [commandId, chord] of Object.entries(this.preferences.get().shortcuts)) {
+      void commandId
+      void chord
+    }
+    for (const override of this.preferences.get().shortcuts) {
+      try {
+        this.keybindings.setOverride(override.commandId, override.chord)
+      } catch (error) {
+        this.diagnostics.report({
+          severity: 'warning',
+          source: 'preferences',
+          message: `快捷键覆盖被拒绝：${override.commandId}`,
+          detail: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+  }
+
+  private wireConnection(): void {
+    const client = this.client
+    if (client === null) {
+      return
+    }
+    client.subscribe((connected) => {
+      this.documents.setConnected(connected)
+      this.status.notify(connected ? '已连接游戏 WebUI' : '与游戏 WebUI 断开', connected ? 'info' : 'warning')
+    })
+  }
+
+  private async writeDraft(payload: string, revision: number): Promise<void> {
+    const summary = this.documents.summary()
+    if (summary.docId === null) {
+      return
+    }
+    try {
+      await this.host.drafts.write({
+        version: 1,
+        draftId: summary.docId,
+        docId: summary.docId,
+        ...(summary.path === null ? {} : { sourcePath: summary.path }),
+        capturedAt: new Date().toISOString(),
+        docRevision: revision,
+        hash: String(payload.length),
+        payload,
+      })
+    } catch (error) {
+      this.status.notify(`草稿未保存：${error instanceof Error ? error.message : String(error)}`, 'warning')
+    }
+  }
+
+  private async clearDrafts(): Promise<void> {
+    const summary = this.documents.summary()
+    if (summary.docId === null) {
+      return
+    }
+    try {
+      await this.host.drafts.remove(summary.docId)
+    } catch {
+      // 草稿删除失败不阻塞保存结果。
+    }
+  }
+}
+
+function safeParse(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return null
+  }
+}
+
+function readBrowserToken(): string {
+  const params = new URLSearchParams(window.location.search)
+  return params.get('token') ?? ''
+}

@@ -607,3 +607,20 @@ export function clipPositionNodes(doc: ScriptDoc, clipId: string): number[] {
   }
   return positionNodeTimes(shape)
 }
+
+/**
+ * 文档里真实存在的片段键（04 消费面）。
+ *
+ * `ClipRegistry.handles()` 会为已删除片段保留最多两代记录（撤销 / 重做要保持键稳定），
+ * 所以「键仍能查到句柄」不等于「片段还在文档里」。需要判定存活时用这个函数。
+ */
+export function liveClipKeys(doc: ScriptDoc, registry: ClipRegistry): string[] {
+  const keys: string[] = []
+  eachClip(doc, (clip) => {
+    const key = registry.keyOf(clip)
+    if (key !== undefined && !keys.includes(key)) {
+      keys.push(key)
+    }
+  })
+  return keys
+}

@@ -9,3 +9,6 @@ release/
 /fabric
 /forge
 /build
+
+# --- E2E 产物（Playwright） ---
+e2e-artifacts/

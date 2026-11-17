@@ -116,6 +116,16 @@ export interface TrackViewState {
 /** session 层：选择、播放头、缩放、轨道可见 / 锁定 / 静音、marker、A-B 循环、目录钉住。 */
 export interface SessionState {
   selection: Selection
+  /**
+   * 会话批选（04-05 `PanelContext.clipKeys`）：多选片段键，按选择顺序去重。
+   * `open` 清空，`select` / `selectMany` 维护；不写盘。
+   */
+  clipKeys: string[]
+  /**
+   * 上次选择因目标失效被修复时保留的记录（04-05 `invalid` 态）：
+   * 片段被删除 / 撤销后选择器退回，面板需要显示失效原因与撤销入口。
+   */
+  selectionInvalid: { reason: string; previous: Selection } | null
   playhead: number
   pxPerSecond: number
   /** UI 的 A-B 循环；与 `doc.timeline.loop_start/loop_end` 不得互写。 */
@@ -165,6 +175,8 @@ export interface EditorLayers {
 export function createSessionState(): SessionState {
   return {
     selection: { ...EMPTY_SELECTION },
+    clipKeys: [],
+    selectionInvalid: null,
     playhead: 0,
     pxPerSecond: 40,
     loopRange: null,

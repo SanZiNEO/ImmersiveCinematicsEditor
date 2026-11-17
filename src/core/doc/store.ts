@@ -18,6 +18,7 @@ import type { ApplyResult, DocCommand } from './commands.ts'
 import { enforceStructure } from './enforce.ts'
 import {
   ClipRegistry,
+  liveClipKeys,
   locationKey,
   repairSelection,
   selectFirstCameraClip,
@@ -87,6 +88,8 @@ export class DocStore {
   private undoStack: DocSnapshot[] = []
   private redoStack: DocSnapshot[] = []
   private dirtyFlag = false
+  /** 文档修订号：commit / undo / redo / open 后递增（04-05 `PanelContext.docRevision`）。 */
+  private revisionCounter = 0
 
   constructor(options: DocStoreOptions) {
     this.catalog = options.catalog
@@ -115,6 +118,11 @@ export class DocStore {
     return this.dirtyFlag
   }
 
+  /** 文档修订号（只读）：`commit` / `undo` / `redo` / `open` 后递增；面板据此重取派生数据。 */
+  get revision(): number {
+    return this.revisionCounter
+  }
+
   /** 打开一份已解析文档（打开 / 新建共用）；重置撤销栈。 */
   open(doc: ScriptDoc, path: string | null): void {
     this.current = doc
@@ -123,6 +131,9 @@ export class DocStore {
     this.session.currentPath = path
     this.session.playhead = 0
     this.session.selection = selectFirstCameraClip(this.registry)
+    this.session.clipKeys = []
+    this.session.selectionInvalid = null
+    this.revisionCounter += 1
     this.resetHistory()
     this.recomputeDerived()
     this.emit('open')
@@ -131,6 +142,33 @@ export class DocStore {
   /** 新建文档标记为脏（尚未落盘）。 */
   markDirty(): void {
     this.dirtyFlag = true
+  }
+
+  /**
+   * 关闭文档（04 `file.closeDoc`）：清空当前文档与会话状态，保留订阅与目录。
+   *
+   * 关闭不是销毁：再次 `open` 走完整打开流水线，历史清空、选择重新落到第一个 CAMERA 片段。
+   */
+  close(): void {
+    this.current = null
+    this.registry.reset()
+    this.session.currentPath = null
+    this.session.selection = { domain: 'none' }
+    this.session.clipKeys = []
+    this.session.selectionInvalid = null
+    this.session.playhead = 0
+    this.derived.contentEnd = 0
+    this.derived.infinite = false
+    this.derived.localIssues = []
+    this.derived.serverIssues = []
+    this.derived.serverIssuesStale = false
+    this.derived.catalogIssues = []
+    this.derived.previewStale = false
+    this.undoStack = []
+    this.redoStack = []
+    this.dirtyFlag = false
+    this.revisionCounter += 1
+    this.emit('reset')
   }
 
   /** 保存成功：清 dirty。 */
@@ -183,7 +221,10 @@ export class DocStore {
     this.pushUndo(snapshot)
     this.redoStack = []
     this.dirtyFlag = true
-    this.session.selection = repairSelection(doc, this.registry, this.session.selection)
+    const previousSelection = this.session.selection
+    this.session.selection = repairSelection(doc, this.registry, previousSelection)
+    this.syncSelectionState(previousSelection)
+    this.revisionCounter += 1
     this.recomputeDerived()
     this.emit('commit')
     return { ok: true, warnings: result.warnings }
@@ -196,8 +237,11 @@ export class DocStore {
     if (doc === null || snapshot === undefined) {
       return false
     }
+    const previousSelection = this.session.selection
     this.redoStack.push(snapshotOf(doc, this.registry))
     this.restore(snapshot)
+    this.syncSelectionState(previousSelection)
+    this.revisionCounter += 1
     this.dirtyFlag = true
     this.recomputeDerived()
     this.emit('undo')
@@ -211,8 +255,11 @@ export class DocStore {
     if (doc === null || snapshot === undefined) {
       return false
     }
+    const previousSelection = this.session.selection
     this.undoStack.push(snapshotOf(doc, this.registry))
     this.restore(snapshot)
+    this.syncSelectionState(previousSelection)
+    this.revisionCounter += 1
     this.dirtyFlag = true
     this.recomputeDerived()
     this.emit('redo')
@@ -244,9 +291,87 @@ export class DocStore {
   select(selection: Selection): void {
     if (this.current === null) {
       this.session.selection = { domain: 'none' }
+      this.session.clipKeys = []
+      this.session.selectionInvalid = null
       return
     }
-    this.session.selection = repairSelection(this.current, this.registry, selection)
+    const live = new Set(liveClipKeys(this.current, this.registry))
+    const repaired = repairSelection(this.current, this.registry, selection)
+    const previousKey = selection.clipKey
+    const repairedKey = repaired.clipKey
+    const deadTarget = previousKey !== undefined && !live.has(previousKey)
+    if (repairedKey !== undefined && !live.has(repairedKey)) {
+      this.session.selection = { domain: 'none' }
+    } else {
+      this.session.selection = repaired
+    }
+    this.session.selectionInvalid = deadTarget
+      ? {
+          reason: `选区目标已失效：片段 ${previousKey} 已不存在（删除或撤销）`,
+          previous: selection,
+        }
+      : null
+    const current = this.session.selection.clipKey
+    this.session.clipKeys =
+      current !== undefined && live.has(current) ? [current] : []
+  }
+
+  /**
+   * 批选（04-05 `clipKeys`）：只保留当前文档里存在的片段键，按传入顺序去重。
+   *
+   * 主选区设为第一个键（`domain: 'clip'`）；空数组清空选择。
+   */
+  selectMany(clipKeys: readonly string[]): void {
+    if (this.current === null) {
+      this.session.clipKeys = []
+      this.session.selection = { domain: 'none' }
+      this.session.selectionInvalid = null
+      return
+    }
+    const live = new Set(liveClipKeys(this.current, this.registry))
+    const unique: string[] = []
+    for (const key of clipKeys) {
+      if (live.has(key) && !unique.includes(key)) {
+        unique.push(key)
+      }
+    }
+    this.session.clipKeys = unique
+    this.session.selectionInvalid = null
+    const first = unique[0]
+    this.session.selection = first === undefined ? { domain: 'none' } : { domain: 'clip', clipKey: first }
+  }
+
+  /**
+   * 选择修复后的状态同步：失效记录 + 批选剪枝。
+   *
+   * 存活判定用文档结构（`liveClipKeys`），不用注册表残留记录：删除片段的记录会保留两代
+   * 以维持撤销后的键稳定，但面板不能把已删除片段当成还选中。
+   *
+   * 失效记录只在「上一次指向的片段这次不在了」时置位，供 04-05 的 `invalid` 态显示
+   * 失效原因与撤销入口；下一次成功 `select` 会清空它。
+   */
+  private syncSelectionState(previous: Selection): void {
+    const doc = this.current
+    if (doc === null) {
+      return
+    }
+    const live = new Set(liveClipKeys(doc, this.registry))
+    const previousKey = previous.clipKey
+    if (this.session.selection.clipKey !== undefined && !live.has(this.session.selection.clipKey)) {
+      this.session.selection = { domain: 'none' }
+    }
+    if (previousKey !== undefined && !live.has(previousKey)) {
+      this.session.selectionInvalid = {
+        reason: `选区目标已失效：片段 ${previousKey} 已不存在（删除或撤销）`,
+        previous,
+      }
+    }
+    const kept = this.session.clipKeys.filter((key) => live.has(key))
+    const selected = this.session.selection.clipKey
+    if (selected !== undefined && live.has(selected) && !kept.includes(selected)) {
+      kept.unshift(selected)
+    }
+    this.session.clipKeys = kept
   }
 
   /** 服务端 issue：整批替换；`stale` 由桥在断连时置位。 */

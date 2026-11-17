@@ -1,0 +1,77 @@
+/**
+ * 全局基线样式（04-04）。
+ *
+ * 应用是固定视口的工作台：**整窗不允许滚动**，滚动只发生在面板内部
+ * （设置页内容、诊断列表、最近项目列表、抽屉内容等各自 overflow:auto）。
+ * 这里做三件事：清零 margin、把高度锁到视口、禁用页面级滚动与 overscroll。
+ */
+
+html,
+body,
+#app {
+  height: 100%;
+  min-height: 0;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  /* 整窗不滚：任何越界内容由面板自己的滚动容器处理。 */
+  overflow: hidden;
+  /* 防止触控板/滚轮在边界处把整页带着滚（Electron 下尤其明显）。 */
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--bg-app, #12141a);
+  color: var(--text, #e6e8ee);
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  /* 文本选择默认关闭，只让输入框/可选中区域开启（工作台不是文档页）。 */
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable='true'],
+.selectable {
+  user-select: text;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* 焦点可见性交给各组件的 :focus-visible，不禁用 outline。 */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* 固定工作台里不需要页面级滚动条；面板内部的滚动条照常。 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar, var(--border-strong));
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
