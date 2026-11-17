@@ -61,7 +61,6 @@ const classes = computed(() => ({
   'node-dot--down': props.down,
   'node-dot--dim': props.dim,
   'node-dot--invalid': !props.node.valid,
-  'node-dot--cycle': props.node.inCycle,
   'node-dot--isolated': props.node.isolated,
   'node-dot--hovered': props.hovered,
   'node-dot--anchor': props.anchor,
@@ -216,7 +215,7 @@ defineExpose({ focus })
     <span
       v-if="badge !== null"
       class="node-dot__badge"
-      :class="{ 'node-dot__badge--error': !node.valid, 'node-dot__badge--cycle': node.valid && node.inCycle }"
+      :class="{ 'node-dot__badge--error': !node.valid }"
       :title="badgeTitle"
       :aria-label="badgeTitle"
     >{{ badge }}</span>
@@ -256,7 +255,6 @@ defineExpose({ focus })
 .node-dot--down .node-dot__circle { border-color: var(--c2); }
 .node-dot--dim { opacity: 0.35; }
 .node-dot--invalid .node-dot__circle { border-color: var(--error); }
-.node-dot--cycle .node-dot__circle { border-style: dashed; border-color: var(--warning); }
 .node-dot--isolated { opacity: 0.72; }
 .node-dot--hovered .node-dot__circle { background: var(--bg-hover); }
 .node-dot--dim.node-dot--hovered { opacity: 0.6; }
@@ -278,7 +276,6 @@ defineExpose({ focus })
   pointer-events: none;
 }
 .node-dot__badge--error { color: var(--error); border: 1px solid var(--error); }
-.node-dot__badge--cycle { color: var(--warning); border: 1px solid var(--warning); }
 .node-dot__label {
   position: absolute;
   left: 50%;

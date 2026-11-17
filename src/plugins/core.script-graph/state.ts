@@ -35,6 +35,7 @@ import {
   clampScale,
   computeGraphLayout,
   neighboursOf,
+  screenToWorld,
   type GraphLayout,
   type GraphNodePosition,
   type GraphPartition,
@@ -97,8 +98,6 @@ export interface GraphPanelState {
   showEdges: boolean
   /** 渲染模式：小圆点（简洁） / 大卡片。 */
   mode: 'dot' | 'card'
-  /** 布局形态：文件夹矩形分块（默认，可撑 10 万） / 放射力导向（小图好看）。 */
-  layoutKind: 'auto' | 'blocks' | 'force'
   /** 是否播放布局收敛动画（只对视口内节点做精细计算）。 */
   animate: boolean
   collapsed: string[]
@@ -138,8 +137,17 @@ export interface PartitionView {
 /** 空集合（避免每次分配）。 */
 const EMPTY_PATHS: ReadonlySet<string> = new Set<string>()
 
-/** 超过该节点数不做逐帧动画（直接出静态布局，避免每帧全量重算卡死）。 */
-const ANIMATE_NODE_LIMIT = 1500
+/**
+ * 首批布局的节点数上限：这批必须先出图（用户口径：核心展示部分控制在时间内）。
+ *
+ * 10 万节点的图先排前 1500 个节点，坐标立刻可见；其余节点按 {@link LAYOUT_BATCH_GROWTH}
+ * 逐批补入，每批之间让出事件循环，不阻塞交互。
+ */
+const LAYOUT_FIRST_BATCH = 1500
+/** 每批相对上一批的放大倍数。 */
+const LAYOUT_BATCH_GROWTH = 3
+/** 批次之间的间隔（毫秒）：留出绘制与输入处理时间。 */
+const LAYOUT_BATCH_DELAY = 16
 
 type LoadKind = 'mount' | 'manual' | 'auto'
 
@@ -156,7 +164,6 @@ function initialState(): GraphPanelState {
     grouping: true,
     showEdges: true,
     mode: 'dot',
-    layoutKind: 'auto',
     animate: true,
     collapsed: [],
     view: { scale: 1, tx: 0, ty: 0 },
@@ -270,6 +277,12 @@ export class GraphController {
   private viewCentered = false
   /** 布局收敛动画帧句柄。 */
   private layoutAnimationTimer: number | null = null
+  /** 视口变化后重启动画的防抖句柄（拖动时不每帧重启）。 */
+  private viewportAnimationTimer: ReturnType<typeof setTimeout> | undefined
+  /** 分批布局的下一批句柄（大图逐批补入节点）。 */
+  private layoutBatchTimer: ReturnType<typeof setTimeout> | undefined
+  /** 分批顺序缓存（按 graph 引用失效）。 */
+  private layoutOrderCache: { graph: GraphData; order: string[] } | null = null
   private loading: Promise<void> | null = null
   private queuedRefresh = false
   private autoPending = false
@@ -479,6 +492,11 @@ export class GraphController {
     this.unsubscribe = null
     this.clearHoverTimers()
     this.clearAutoTimer()
+    if (this.viewportAnimationTimer !== undefined) {
+      clearTimeout(this.viewportAnimationTimer)
+      this.viewportAnimationTimer = undefined
+    }
+    this.stopLayoutBatch()
     this.stopLayoutAnimation()
     this.flushLayoutWrites()
     this.state.gestureActive = false
@@ -540,6 +558,7 @@ export class GraphController {
     this.viewport.width = nextWidth
     this.viewport.height = nextHeight
     this.centerOnAnchorIfNeeded()
+    this.scheduleViewportAnimation()
   }
 
   /** 首次布局就绪后把锚点居中（1:1，不压缩整图）；之后尊重用户视图。 */
@@ -791,13 +810,19 @@ export class GraphController {
     }
   }
 
-  /** 拖动 / 缩放期间延后自动刷新。 */
+  /** 拖动 / 缩放期间延后自动刷新，并暂停力导向动画（否则节点会从指针下跑掉）。 */
   noteGesture(active: boolean): void {
     const wasActive = this.state.gestureActive
     this.state.gestureActive = active
+    if (active) {
+      this.stopLayoutAnimation()
+    }
     if (wasActive && !active && this.autoPending) {
       this.autoPending = false
       this.scheduleAutoRefresh(250)
+    }
+    if (wasActive && !active) {
+      this.scheduleViewportAnimation()
     }
   }
 
@@ -810,20 +835,127 @@ export class GraphController {
       this.layoutRevision.value += 1
       return
     }
-    // 先给一个立即可见的初始布局（1 步），随后分帧动画收敛。
+    this.stopLayoutAnimation()
+    this.stopLayoutBatch()
     const overrides = this.manualPositions
-    const total = this.forceStepsFor(graph)
-    const initial = computeGraphLayout(graph, { overrides, layoutKind: this.state.layoutKind, steps: 1 })
-    this.layout.value = initial
+    const total = graph.nodes.length
+    // 阶段 1：首批节点（锚点及其直接关联）O(n) 快速摆放后立即出图。
+    const order = this.layoutOrder(graph)
+    const firstLimit = Math.min(total, LAYOUT_FIRST_BATCH)
+    const base = computeGraphLayout(graph, { overrides, steps: 0, limit: firstLimit, order })
+    this.layout.value = base
     this.layoutRevision.value += 1
     this.centerOnAnchorIfNeeded()
-    if (this.state.animate && total > 1) {
-      this.startLayoutAnimation(graph, overrides, total)
-    } else {
-      const base = computeGraphLayout(graph, { overrides, layoutKind: this.state.layoutKind, steps: total })
-      this.layout.value = base
+    // 阶段 2：视口内的首批节点跑力导向动画（视口外坐标固定）。
+    if (this.state.animate) {
+      this.startLayoutAnimation(graph, overrides, base, this.worldBoxOfViewport())
+    }
+    // 阶段 3：其余节点逐批补入，直到全量。
+    if (firstLimit < total) {
+      this.scheduleLayoutBatch(graph, overrides, firstLimit)
+    }
+  }
+
+  /** 逐批放大布局范围：每批之间让出事件循环，不阻塞交互。 */
+  private scheduleLayoutBatch(
+    graph: GraphData,
+    overrides: Record<string, GraphNodePosition>,
+    done: number,
+  ): void {
+    const total = graph.nodes.length
+    const next = Math.min(total, Math.max(done + 1, Math.ceil(done * LAYOUT_BATCH_GROWTH)))
+    this.layoutBatchTimer = setTimeout(() => {
+      this.layoutBatchTimer = undefined
+      if (!this.mountedFlag || this.graph.value !== graph) {
+        return
+      }
+      const batch = computeGraphLayout(graph, {
+        overrides,
+        steps: 0,
+        limit: next,
+        order: this.layoutOrder(graph),
+      })
+      this.layout.value = batch
       this.layoutRevision.value += 1
-      this.centerOnAnchorIfNeeded()
+      if (next < total) {
+        this.scheduleLayoutBatch(graph, overrides, next)
+      } else if (this.state.animate) {
+        // 全量到齐后，按最终坐标重新起一轮视口内力导向。
+        this.startLayoutAnimation(graph, overrides, batch, this.worldBoxOfViewport())
+      }
+    }, LAYOUT_BATCH_DELAY)
+  }
+
+  /**
+   * 分批顺序：从锚点出发按关系距离（无向 BFS）展开，剩余节点按 path 补齐。
+   *
+   * 这样首批就是锚点及其直接上下游——用户真正要看的核心；字典序前缀做不到这一点。
+   * 每张图只算一次（按 graph 引用缓存），后续批次复用。
+   */
+  private layoutOrder(graph: GraphData): string[] {
+    const cached = this.layoutOrderCache
+    if (cached !== null && cached.graph === graph) {
+      return cached.order
+    }
+    const adjacency = new Map<string, string[]>()
+    const link = (from: string, to: string): void => {
+      const list = adjacency.get(from)
+      if (list === undefined) {
+        adjacency.set(from, [to])
+      } else {
+        list.push(to)
+      }
+    }
+    for (const edge of graph.edges) {
+      link(edge.from, edge.to)
+      link(edge.to, edge.from)
+    }
+    const layout = this.layout.value
+    // 锚点：已有布局且属于同一张图时复用其 centerPath；否则取「无出边」的首个节点
+    // （等价于自动锚点的“最终脚本”语义），避免首批从字典序首节点这种任意起点展开。
+    let anchor: string | null = layout?.centerPath ?? null
+    if (anchor === null || !graph.nodes.some((node) => node.path === anchor)) {
+      const hasOut = new Set<string>()
+      for (const edge of graph.edges) {
+        hasOut.add(edge.from)
+      }
+      const finals = [...graph.nodes]
+        .filter((node) => !hasOut.has(node.path))
+        .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
+      anchor = finals[0]?.path ?? graph.nodes[0]?.path ?? null
+    }
+    const order: string[] = []
+    const seen = new Set<string>()
+    if (anchor !== null) {
+      const queue = [anchor]
+      seen.add(anchor)
+      for (let head = 0; head < queue.length; head += 1) {
+        const current = queue[head]
+        order.push(current)
+        for (const next of adjacency.get(current) ?? []) {
+          if (seen.has(next)) {
+            continue
+          }
+          seen.add(next)
+          queue.push(next)
+        }
+      }
+    }
+    const rest = [...graph.nodes].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
+    for (const node of rest) {
+      if (!seen.has(node.path)) {
+        seen.add(node.path)
+        order.push(node.path)
+      }
+    }
+    this.layoutOrderCache = { graph, order }
+    return order
+  }
+
+  private stopLayoutBatch(): void {
+    if (this.layoutBatchTimer !== undefined) {
+      clearTimeout(this.layoutBatchTimer)
+      this.layoutBatchTimer = undefined
     }
   }
 
@@ -833,37 +965,75 @@ export class GraphController {
     return count > 20000 ? 90 : count > 5000 ? 150 : count > 800 ? 240 : 420
   }
 
-  /** 分帧推进力导向，让节点像原型那样“动起来”收敛。 */
+  /** 视口对应的世界包围盒（四角经 `screenToWorld` 转换）。 */
+  private worldBoxOfViewport(): { minX: number; minY: number; maxX: number; maxY: number } {
+    const view = this.state.view
+    const width = this.viewport.width
+    const height = this.viewport.height
+    const topLeft = screenToWorld({ x: 0, y: 0 }, view)
+    const bottomRight = screenToWorld({ x: Math.max(1, width), y: Math.max(1, height) }, view)
+    return {
+      minX: Math.min(topLeft.x, bottomRight.x),
+      minY: Math.min(topLeft.y, bottomRight.y),
+      maxX: Math.max(topLeft.x, bottomRight.x),
+      maxY: Math.max(topLeft.y, bottomRight.y),
+    }
+  }
+
+  /** 落在世界包围盒外扩 `margin` 内的节点（力导向只动这些）。 */
+  private focusPathsIn(
+    layout: GraphLayout,
+    worldBox: { minX: number; minY: number; maxX: number; maxY: number },
+    margin = 600,
+  ): Set<string> {
+    const focus = new Set<string>()
+    const minX = worldBox.minX - margin
+    const minY = worldBox.minY - margin
+    const maxX = worldBox.maxX + margin
+    const maxY = worldBox.maxY + margin
+    for (const node of layout.nodes) {
+      if (node.x >= minX && node.x <= maxX && node.y >= minY && node.y <= maxY) {
+        focus.add(node.path)
+      }
+    }
+    return focus
+  }
+
+  /**
+   * 分帧推进力导向：每帧只对 `focusPaths`（视口内节点）做物理，视口外坐标固定不动。
+   *
+   * 单帧成本由视口内节点数决定，与总节点数无关——10 万节点的图同样能“动起来”。
+   */
   private startLayoutAnimation(
     graph: GraphData,
     overrides: Record<string, GraphNodePosition>,
-    total: number,
+    base: GraphLayout,
+    worldBox: { minX: number; minY: number; maxX: number; maxY: number },
   ): void {
     this.stopLayoutAnimation()
-    // 只有小图才逐帧重算（大图每帧全量重算会卡死；大图直接出静态结果）。
-    if (graph.nodes.length > ANIMATE_NODE_LIMIT) {
-      const base = computeGraphLayout(graph, { overrides, layoutKind: this.state.layoutKind, steps: total })
-      this.layout.value = base
-      this.layoutRevision.value += 1
-      this.centerOnAnchorIfNeeded()
+    const total = this.forceStepsFor(graph)
+    if (total <= 0 || base.nodes.length === 0) {
       return
     }
-    let step = 1
+    const focusPaths = this.focusPathsIn(base, worldBox)
+    if (focusPaths.size === 0) {
+      return
+    }
+    // 视口内节点过多时单帧只推 1 步，并在 120 帧后停，避免单帧超时。
+    const dense = focusPaths.size > 3000
+    const perFrame = dense ? 1 : Math.max(1, Math.ceil(total / 60))
+    const maxFrames = dense ? 120 : Number.POSITIVE_INFINITY
+    let step = 0
+    let frames = 0
     const tick = (): void => {
-      const perFrame = Math.max(1, Math.ceil(total / 90))
+      frames += 1
       step = Math.min(total, step + perFrame)
-      const next = computeGraphLayout(graph, {
-        overrides,
-        layoutKind: this.state.layoutKind,
-        steps: step,
-      })
-      this.layout.value = next
+      this.layout.value = computeGraphLayout(graph, { overrides, steps: step, focusPaths })
       this.layoutRevision.value += 1
-      if (step < total && this.mountedFlag) {
+      if (step < total && frames < maxFrames && this.mountedFlag) {
         this.layoutAnimationTimer = requestAnimationFrame(tick)
       } else {
         this.layoutAnimationTimer = null
-        this.centerOnAnchorIfNeeded()
       }
     }
     this.layoutAnimationTimer = requestAnimationFrame(tick)
@@ -876,21 +1046,31 @@ export class GraphController {
     }
   }
 
-  /** 切换布局形态（分块 ↔ 放射），并重新布局。 */
-  setLayoutKind(kind: 'auto' | 'blocks' | 'force'): void {
-    if (kind === this.state.layoutKind) {
+  /** 视口变了：等 300ms 稳定后，对新区间重新起一轮力导向（拖动时不每帧重启）。 */
+  private scheduleViewportAnimation(): void {
+    if (!this.state.animate || this.graph.value === null) {
       return
     }
-    this.state.layoutKind = kind
-    this.viewCentered = false
-    this.recomputeLayout()
+    if (this.viewport.width <= 0 || this.viewport.height <= 0) {
+      return
+    }
+    if (this.viewportAnimationTimer !== undefined) {
+      clearTimeout(this.viewportAnimationTimer)
+    }
+    this.viewportAnimationTimer = setTimeout(() => {
+      this.viewportAnimationTimer = undefined
+      this.restartAnimationForViewport()
+    }, 300)
   }
 
-  toggleLayoutKind(): void {
-    const next: 'auto' | 'blocks' | 'force' = this.state.layoutKind === 'auto'
-      ? 'force'
-      : this.state.layoutKind === 'force' ? 'blocks' : 'auto'
-    this.setLayoutKind(next)
+  /** 用当前布局当新基准，重新计算视口内焦点集并继续迭代。 */
+  private restartAnimationForViewport(): void {
+    const graph = this.graph.value
+    const base = this.layout.value
+    if (graph === null || base === null || !this.mountedFlag || !this.state.animate) {
+      return
+    }
+    this.startLayoutAnimation(graph, this.manualPositions, base, this.worldBoxOfViewport())
   }
 
   setView(next: GraphViewState): void {
@@ -900,6 +1080,7 @@ export class GraphController {
       ty: finiteOr(next.ty, 0),
     }
     this.scheduleViewSave()
+    this.scheduleViewportAnimation()
   }
 
   zoomBy(factor: number, anchor?: { x: number; y: number }): void {
@@ -1226,6 +1407,8 @@ export class GraphController {
     if (this.hoverCandidate === path && this.hoverShowTimer !== undefined) {
       return
     }
+    // 悬停期间冻结布局：节点在指针下移动会让 pointerleave 抖动、卡片闪烁。
+    this.stopLayoutAnimation()
     clearTimeout(this.hoverShowTimer)
     this.hoverCandidate = path
     this.hoverShowTimer = setTimeout(() => {
@@ -1237,6 +1420,7 @@ export class GraphController {
 
   /** 键盘聚焦节点时立即显示（不依赖 hover 计时）。 */
   hoverNow(path: string): void {
+    this.stopLayoutAnimation()
     this.clearHoverTimers()
     this.state.hoverPath = path
   }

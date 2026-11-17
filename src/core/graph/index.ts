@@ -8,7 +8,8 @@
  * - 节点 = 脚本文件；坏文件仍进图（`valid=false`），不丢整张图；
  * - 触发器身份优先 `id`，缺失用 `type#index`；
  * - 边只从内置三种前置产生，方向「被依赖 → 依赖方」；
- * - 自引用、悬空、重复 id 不建边；环只标记，不修复。
+ * - 自引用、悬空、重复 id 不建边；
+ * - 图必须是 DAG：会成环的边被丢弃并记一条 cycle warning（保证进入布局的图无环）。
  */
 import { isJsonObject } from '../doc/json.ts'
 import type { JsonObject, JsonValue } from '../doc/types.ts'
@@ -315,74 +316,6 @@ function buildFolders(nodes: readonly ParsedNode[]): GraphFolder[] {
   return folders
 }
 
-/** Tarjan SCC（迭代版）；返回每个节点所属分量与分量列表。 */
-function stronglyConnected(count: number, adjacency: readonly number[][]): {
-  component: number[]
-  components: number[][]
-} {
-  const index = new Array<number>(count).fill(-1)
-  const low = new Array<number>(count).fill(0)
-  const onStack = new Array<boolean>(count).fill(false)
-  const component = new Array<number>(count).fill(-1)
-  const stack: number[] = []
-  const components: number[][] = []
-  let counter = 0
-
-  for (let root = 0; root < count; root += 1) {
-    if (index[root] !== -1) {
-      continue
-    }
-    const frames: { node: number; next: number }[] = []
-    index[root] = counter
-    low[root] = counter
-    counter += 1
-    stack.push(root)
-    onStack[root] = true
-    frames.push({ node: root, next: 0 })
-    while (frames.length > 0) {
-      const frame = frames[frames.length - 1]
-      const neighbours = adjacency[frame.node] ?? []
-      if (frame.next < neighbours.length) {
-        const next = neighbours[frame.next]
-        frame.next += 1
-        if (index[next] === -1) {
-          index[next] = counter
-          low[next] = counter
-          counter += 1
-          stack.push(next)
-          onStack[next] = true
-          frames.push({ node: next, next: 0 })
-        } else if (onStack[next]) {
-          low[frame.node] = Math.min(low[frame.node], index[next])
-        }
-        continue
-      }
-      frames.pop()
-      const parent = frames[frames.length - 1]
-      if (parent !== undefined) {
-        low[parent.node] = Math.min(low[parent.node], low[frame.node])
-      }
-      if (low[frame.node] === index[frame.node]) {
-        const members: number[] = []
-        for (;;) {
-          const node = stack.pop()
-          if (node === undefined) {
-            break
-          }
-          onStack[node] = false
-          component[node] = components.length
-          members.push(node)
-          if (node === frame.node) {
-            break
-          }
-        }
-        components.push(members)
-      }
-    }
-  }
-  return { component, components }
-}
-
 /** 建图。 */
 export function buildGraph(files: readonly GraphScriptFile[], options: BuildGraphOptions): GraphData {
   const metaKeys = options.metaKeys ?? ['id', 'name', 'author', 'description', 'dimension', 'priority', 'triggers']
@@ -524,33 +457,12 @@ export function buildGraph(files: readonly GraphScriptFile[], options: BuildGrap
     }
   }
 
-  // 环：按 resolved 边建邻接，SCC > 1 的分量各产出一条 warning。
-  const pathIndex = new Map<string, number>()
-  parsed.forEach((node, index) => pathIndex.set(node.path, index))
-  const adjacency: number[][] = parsed.map(() => [])
-  for (const edge of edges) {
-    const from = pathIndex.get(edge.from)
-    const to = pathIndex.get(edge.to)
-    if (from === undefined || to === undefined || from === to) {
-      continue
-    }
-    adjacency[from].push(to)
-  }
-  const { component, components } = stronglyConnected(parsed.length, adjacency)
-  for (const members of components) {
-    if (members.length <= 1) {
-      continue
-    }
-    const paths = members.map((index) => parsed[index].path).sort()
-    warnings.push({
-      kind: 'cycle',
-      severity: 'warn',
-      path: paths[0] as string,
-      nodeId: paths[0],
-      message: `前置依赖成环：${paths.join(' → ')}`,
-    })
-  }
-  void component
+  // DAG 不变量：图必须是 DAG（无环）。
+  //
+  // 边语义是「A 依赖 B」：`from` 被依赖、`to` 依赖方。成环在语义上无法定义先后，
+  // 力导向布局也会自缠绕，因此**丢弃**会形成环的边并给一条 cycle warning，
+  // 保证进入布局的图一定是 DAG。
+  const keptEdges = keepAcyclicEdges(parsed, edges, warnings)
 
   for (const node of parsed) {
     const graphNode: GraphNode = {
@@ -581,15 +493,15 @@ export function buildGraph(files: readonly GraphScriptFile[], options: BuildGrap
     .slice(0, options.maxWarnings ?? GRAPH_MAX_WARNINGS)
   const nodeLimit = options.maxNodes ?? GRAPH_MAX_NODES
   const edgeLimit = options.maxEdges ?? GRAPH_MAX_EDGES
-  const truncated = nodes.length > nodeLimit || edges.length > edgeLimit
+  const truncated = nodes.length > nodeLimit || keptEdges.length > edgeLimit
   const visibleNodes = truncated ? nodes.slice(0, nodeLimit) : nodes
   const visiblePaths = new Set(visibleNodes.map((node) => node.path))
-  const visibleEdges = (truncated ? edges.slice(0, edgeLimit) : edges)
+  const visibleEdges = (truncated ? keptEdges.slice(0, edgeLimit) : keptEdges)
     .filter((edge) => visiblePaths.has(edge.from) && visiblePaths.has(edge.to))
 
   const stats: GraphStats = {
     nodeCount: nodes.length,
-    edgeCount: edges.length,
+    edgeCount: keptEdges.length,
     folderCount: 0,
     invalidCount: nodes.filter((node) => !node.valid).length,
     warningCount: totalWarnings,
@@ -608,6 +520,69 @@ export function buildGraph(files: readonly GraphScriptFile[], options: BuildGrap
     warnings: orderedWarnings,
     stats,
   }
+}
+
+/**
+ * DAG 不变量：只保留不会形成环的边，成环的边被丢弃并产出一条 `cycle` warning。
+ *
+ * 图必须是 DAG：边语义是「`from` 被 `to` 依赖」，成环后「谁先」无法定义，
+ * 力导向布局也会自缠绕。按输入顺序逐条尝试接纳（Kahn 式增量判环），
+ * 因此结果确定：同一份输入总丢弃同一批边。
+ *
+ * 判环用「新边 `from → to` 是否已存在 `to ⇝ from` 的通路」——只有真成环时才做一次
+ * 可达性搜索，正常 DAG 输入是 O(E) 的。
+ */
+function keepAcyclicEdges(
+  parsed: readonly ParsedNode[],
+  edges: readonly GraphEdge[],
+  warnings: GraphWarning[],
+): GraphEdge[] {
+  const kept: GraphEdge[] = []
+  const out = new Map<string, string[]>()
+  const reaches = (start: string, goal: string): boolean => {
+    if (start === goal) {
+      return true
+    }
+    const seen = new Set<string>([start])
+    const stack = [start]
+    while (stack.length > 0) {
+      const current = stack.pop() as string
+      for (const next of out.get(current) ?? []) {
+        if (next === goal) {
+          return true
+        }
+        if (seen.has(next)) {
+          continue
+        }
+        seen.add(next)
+        stack.push(next)
+      }
+    }
+    return false
+  }
+  for (const edge of edges) {
+    if (edge.from === edge.to || reaches(edge.to, edge.from)) {
+      warnings.push({
+        kind: 'cycle',
+        severity: 'warn',
+        path: edge.to,
+        nodeId: edge.to,
+        triggerIdentity: edge.triggerIdentity,
+        requirementIndex: edge.requirementIndex,
+        message: `前置依赖会成环，已忽略该边：${edge.to} → ${edge.from}`,
+      })
+      continue
+    }
+    kept.push(edge)
+    const list = out.get(edge.from)
+    if (list === undefined) {
+      out.set(edge.from, [edge.to])
+    } else {
+      list.push(edge.to)
+    }
+  }
+  void parsed
+  return kept
 }
 
 /** 图上某节点的全部触发器中，某条前置的定位结果。 */
@@ -654,20 +629,4 @@ export function uniqueTargets(graph: GraphData, excludePath?: string): GraphNode
     && node.scriptId !== undefined
     && counts.get(node.scriptId) === 1
     && node.path !== excludePath)
-}
-
-/** 该节点是否处于环内（前端 layout 也会标；诊断用）。 */
-export function cyclesOf(graph: GraphData): string[][] {
-  const paths = graph.nodes.map((node) => node.path)
-  const index = new Map(paths.map((path, i) => [path, i]))
-  const adjacency: number[][] = paths.map(() => [])
-  for (const edge of graph.edges) {
-    const from = index.get(edge.from)
-    const to = index.get(edge.to)
-    if (from !== undefined && to !== undefined && from !== to) {
-      adjacency[from].push(to)
-    }
-  }
-  const { components } = stronglyConnected(paths.length, adjacency)
-  return components.filter((members) => members.length > 1).map((members) => members.map((i) => paths[i]))
 }

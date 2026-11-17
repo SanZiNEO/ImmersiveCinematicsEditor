@@ -42,7 +42,6 @@ export interface GraphEdgeView {
   d: string
   midX: number
   midY: number
-  cycle: boolean
   back: boolean
   cross: boolean
   requirementIndex: number
@@ -160,8 +159,6 @@ export function buildEdgeViews(
       d: curve.d,
       midX: curve.midX,
       midY: curve.midY,
-      // 环内的边：两端都在环里，且是逆流边（同一 SCC 的层相同）。
-      cycle: from.inCycle && to.inCycle && back,
       back,
       cross: from.folder !== to.folder,
       requirementIndex: edge.requirementIndex,
@@ -275,7 +272,7 @@ export function duplicateScriptIds(nodes: readonly GraphNode[]): Set<string> {
   return result
 }
 
-/** 异常节点集合（invalid / cycle / duplicate id / 悬空或自引用前置 / 诊断条目的 path）。 */
+/** 异常节点集合（invalid / duplicate id / 悬空或自引用前置 / 诊断条目的 path）。 */
 export function anomalyPathSet(graph: GraphData | null, nodes: readonly LaidOutNode[]): Set<string> {
   const result = new Set<string>()
   if (graph === null) {
@@ -283,7 +280,7 @@ export function anomalyPathSet(graph: GraphData | null, nodes: readonly LaidOutN
   }
   const duplicates = duplicateScriptIds(graph.nodes)
   for (const node of nodes) {
-    if (!node.valid || node.inCycle) {
+    if (!node.valid) {
       result.add(node.path)
     }
     if (node.scriptId !== null && node.scriptId !== undefined && duplicates.has(node.scriptId)) {

@@ -7,8 +7,8 @@
  *
  * 覆盖：
  * - buildGraph：空图、坏文件、缺 meta.id、重复 id、三种内置前置、同一触发器多条前置、
- *   自定义前置、悬空/自引用/环、warning 200 截断、节点 800 / 边 2000 截断；
- * - computeGraphLayout：分层、同层稳定、环标记、手摆覆盖、fit/zoom 锚点、命中、上下游防环；
+ *   自定义前置、悬空/自引用、成环边被丢弃（DAG 不变量）、warning 200 截断、节点 800 / 边 2000 截断；
+ * - computeGraphLayout：分层、同层稳定、手摆覆盖、fit/zoom 锚点、命中、上下游、焦点集、分批加载；
  * - GraphLayoutStore：默认、往返、非法坐标、坏 JSON 备份、scale 夹取、collapsed 过滤、
  *   路径/scriptId 重绑定、orphan 生命周期、1 MB 上限、reset、写入失败、文件内容边界。
  */
@@ -440,10 +440,22 @@ async function main(): Promise<void> {
       ],
       { version: 1 },
     )
-    check('cycle：两条边都建', graph.edges.length === 2, graph.edges)
-    check('cycle：产生一条 cycle warning',
+    // DAG 不变量：成环的边被丢弃（只保留先出现的那条），并产出一条 cycle warning。
+    check('DAG：成环的边被丢弃，只留一条', graph.edges.length === 1, graph.edges)
+    check('DAG：产生一条 cycle warning',
       graph.warnings.filter((warning) => warning.kind === 'cycle').length === 1, graph.warnings)
-    check('cycle：节点本身仍 valid', graph.nodes.every((node) => node.valid === true))
+    check('DAG：节点本身仍 valid', graph.nodes.every((node) => node.valid === true))
+    check('DAG：三条边的图里没有环（A→B→C 链）', (() => {
+      const chain = buildGraph(
+        [
+          makeScript('a.json', { id: 'a', name: 'A' }),
+          makeScript('b.json', { id: 'b', name: 'B', triggers: [makeTrigger('on_start', ['a'])] }),
+          makeScript('c.json', { id: 'c', name: 'C', triggers: [makeTrigger('on_start', ['b'])] }),
+        ],
+        { version: 1 },
+      )
+      return chain.edges.length === 2 && chain.warnings.every((warning) => warning.kind !== 'cycle')
+    })())
   }
 
   {
@@ -544,10 +556,11 @@ async function main(): Promise<void> {
       [makeNode('a.json', 'A'), makeNode('b.json', 'B'), makeNode('c.json', 'C')],
       [makeEdge('b.json', 'a.json'), makeEdge('a.json', 'b.json'), makeEdge('c.json', 'a.json')],
     )
+    // 布局层不再有环标记：DAG 保证由 buildGraph 完成，这里只验层仍可算。
     const cycleLayout = computeGraphLayout(cycleGraph)
-    check('环内节点标 inCycle', laidOf(cycleLayout, 'a.json')?.inCycle === true
-      && laidOf(cycleLayout, 'b.json')?.inCycle === true, cycleLayout.nodes.map((node) => [node.path, node.inCycle]))
-    check('环外节点不标 inCycle', laidOf(cycleLayout, 'c.json')?.inCycle === false)
+    check('分层：环输入也能出有限坐标（布局不因脏数据崩）',
+      cycleLayout.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y)),
+      cycleLayout.nodes.map((node) => [node.path, node.x, node.y]))
 
     const overrides = { 'team/alpha.json': { x: 5000, y: 6000 } }
     const overridden = computeGraphLayout(stableGraph, { overrides })
@@ -559,7 +572,7 @@ async function main(): Promise<void> {
       laidOf(overridden, 'team/zeta.json'))
 
     // 不重叠：任意两节点命中框（DOT_HIT）不相交（力导向布局）。
-    const forceLayout = computeGraphLayout(stableGraph, { layoutKind: 'force' })
+    const forceLayout = computeGraphLayout(stableGraph)
     const overlap = (() => {
       const box = forceLayout.nodes.map((node) => ({
         x1: node.x - node.w / 2, y1: node.y - node.h / 2,
@@ -576,6 +589,47 @@ async function main(): Promise<void> {
       return false
     })()
     check('力导向：节点命中框两两不重叠', !overlap)
+
+    // 焦点集：视口外节点坐标必须与 steps=0 完全一致（布局层与动画解耦的核心契约）。
+    {
+      const fast = computeGraphLayout(stableGraph, { steps: 0 })
+      const focused = computeGraphLayout(stableGraph, { steps: 5, focusPaths: new Set(['root.json']) })
+      const frozen = ['team/alpha.json', 'team/zeta.json'].every((path) => {
+        const left = laidOf(fast, path)
+        const right = laidOf(focused, path)
+        return left !== undefined && right !== undefined && left.x === right.x && left.y === right.y
+      })
+      check('焦点集：非焦点节点坐标与 steps=0 完全一致', frozen,
+        ['team/alpha.json', 'team/zeta.json'].map((path) => {
+          const right = laidOf(focused, path)
+          return [path, right?.x, right?.y]
+        }))
+      const rootFast = laidOf(fast, 'root.json')
+      const rootFocused = laidOf(focused, 'root.json')
+      check('焦点集：焦点节点仍参与物理（坐标可动）',
+        rootFast !== undefined && rootFocused !== undefined
+        && Number.isFinite(rootFocused.x) && Number.isFinite(rootFocused.y))
+    }
+
+    // 分批加载：limit 只出前 N 个节点，切片外的边被丢弃；limit ≥ 全量时与不传等价。
+    {
+      const all = computeGraphLayout(cycleGraph, { steps: 0 })
+      const partial = computeGraphLayout(cycleGraph, { steps: 0, limit: 2 })
+      check('分批：limit=2 只出 2 个节点', partial.nodes.length === 2, partial.nodes.length)
+      check('分批：limit=2 时节点是字典序前两个',
+        partial.nodes.map((node) => node.path).join(',') === 'a.json,b.json',
+        partial.nodes.map((node) => node.path))
+      check('分批：切片外的边被丢弃',
+        partial.edges.every((edge) => partial.nodes.includes(edge.from)
+          && partial.nodes.includes(edge.to)),
+        partial.edges.map((edge) => [edge.from.path, edge.to.path]))
+      check('分批：limit ≥ 全量等价于不传 limit',
+        computeGraphLayout(cycleGraph, { steps: 0, limit: 99 }).nodes.length === all.nodes.length)
+      const ordered = computeGraphLayout(cycleGraph, { steps: 0, limit: 2, order: ['c.json', 'a.json', 'b.json'] })
+      check('分批：order 决定首批成员',
+        ordered.nodes.map((node) => node.path).join(',') === 'a.json,c.json',
+        ordered.nodes.map((node) => node.path))
+    }
 
     const viewport = { width: 900, height: 700 }
     const fitted = fitView(stable, viewport)

@@ -87,8 +87,6 @@ export interface GraphNode {
   triggers: GraphTrigger[]
   /** 本脚本全部内置前置的目标 id，去重（悬停/上游高亮用）。 */
   requiresTargets: string[]
-  /** 前端布局算：处于环内。后端/索引不填。 */
-  inCycle?: boolean
   /** 前端算：无前置且无入边。索引不填。 */
   isolated?: boolean
 }

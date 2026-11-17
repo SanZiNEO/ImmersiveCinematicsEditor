@@ -186,18 +186,8 @@ const anchorPath = computed(() => layout.value?.centerPath ?? null)
 /** 大图标签阈值更高：节点多时默认只显示关键节点标签，避免糊成一片。 */
 const labelScaleThreshold = computed(() => {
   const count = controller.visibleNodes.value.length
-  // 分块布局格子 46px，标签需约 90px 宽，因此放大到 ~2x 才显示全部标签。
-  if (state.layoutKind === 'blocks') {
-    if (count > 2000) {
-      return 3.2
-    }
-    if (count > 600) {
-      return 2.6
-    }
-    if (count > 120) {
-      return 2.1
-    }
-    return 1.6
+  if (count > 2000) {
+    return 2.2
   }
   if (count > 600) {
     return 1.4
@@ -337,9 +327,6 @@ function edgeIsDim(edge: GraphEdgeView): boolean {
 }
 
 function edgeMarker(edge: GraphEdgeView): string {
-  if (edge.cycle) {
-    return 'url(#script-graph-arrow-cycle)'
-  }
   const direction = edgeDirection(edge)
   if (direction === 'up') {
     return 'url(#script-graph-arrow-up)'
@@ -904,17 +891,6 @@ onBeforeUnmount(() => {
               >
                 <path class="arrow-head arrow-head--down" d="M 0 0 L 8 4 L 0 8 z" />
               </marker>
-              <marker
-                id="script-graph-arrow-cycle"
-                viewBox="0 0 8 8"
-                refX="7"
-                refY="4"
-                markerWidth="9"
-                markerHeight="9"
-                orient="auto-start-reverse"
-              >
-                <path class="arrow-head arrow-head--cycle" d="M 0 0 L 8 4 L 0 8 z" />
-              </marker>
             </defs>
 
             <g
@@ -927,9 +903,8 @@ onBeforeUnmount(() => {
                 class="graph-edge"
                 :class="{
                   'graph-edge--cross': edge.cross,
-                  'graph-edge--cycle': edge.cycle,
-                  'graph-edge--up': !edge.cycle && edgeDirection(edge) === 'up',
-                  'graph-edge--down': !edge.cycle && edgeDirection(edge) === 'down',
+                  'graph-edge--up': edgeDirection(edge) === 'up',
+                  'graph-edge--down': edgeDirection(edge) === 'down',
                 }"
                 :d="edge.d"
                 :marker-end="edgeMarker(edge)"
@@ -945,14 +920,6 @@ onBeforeUnmount(() => {
               >
                 <title>{{ edgeTooltip(edge) }}</title>
               </path>
-              <text
-                v-if="edge.cycle"
-                class="graph-edge-label"
-                :x="edge.midX"
-                :y="edge.midY"
-                text-anchor="middle"
-                dominant-baseline="middle"
-              >环</text>
             </g>
 
             <g v-for="stub in stubViews" :key="stub.key" class="graph-stub">
@@ -1205,7 +1172,6 @@ onBeforeUnmount(() => {
 }
 .graph-edge--up { stroke: var(--c1); stroke-width: 2.2; }
 .graph-edge--down { stroke: var(--c2); stroke-width: 2.2; }
-.graph-edge--cycle { stroke: var(--error); stroke-width: 2; }
 .graph-edge-hit {
   fill: none;
   stroke: transparent;
@@ -1222,7 +1188,6 @@ onBeforeUnmount(() => {
 .arrow-head--muted { fill: var(--text-muted); }
 .arrow-head--up { fill: var(--c1); }
 .arrow-head--down { fill: var(--c2); }
-.arrow-head--cycle { fill: var(--error); }
 .graph-stub__line {
   stroke: var(--warning);
   stroke-width: 1.2;

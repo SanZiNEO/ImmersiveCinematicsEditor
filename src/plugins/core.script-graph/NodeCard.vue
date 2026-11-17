@@ -54,7 +54,6 @@ const classes = computed(() => ({
   'node-card--down': props.down,
   'node-card--dim': props.dim,
   'node-card--invalid': !props.node.valid,
-  'node-card--cycle': props.node.inCycle,
   'node-card--isolated': props.node.isolated,
   'node-card--hovered': props.hovered,
   'node-card--compact': props.compact,
@@ -235,7 +234,6 @@ defineExpose({ focus })
 .node-card--down { border-color: var(--c2); }
 .node-card--dim { opacity: 0.35; }
 .node-card--invalid { border-left-color: var(--error); }
-.node-card--cycle { border-style: dashed; }
 .node-card--isolated { opacity: 0.72; }
 .node-card--hovered { background: var(--bg-raised); }
 .node-card--dim.node-card--hovered { opacity: 0.6; }
@@ -267,7 +265,6 @@ defineExpose({ focus })
   text-align: center;
 }
 .node-badge--invalid { color: var(--error); border: 1px solid var(--error); }
-.node-badge--cycle { color: var(--warning); border: 1px solid var(--warning); }
 .node-badge--isolated { color: var(--text-muted); border: 1px solid var(--border-strong); }
 .node-card__path {
   margin: 0;

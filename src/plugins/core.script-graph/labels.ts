@@ -155,7 +155,7 @@ export function warningKindLabel(kind: GraphWarningKind): string {
     case 'unknown_trigger':
       return '未知触发器'
     case 'cycle':
-      return '环'
+      return '成环已忽略'
   }
 }
 

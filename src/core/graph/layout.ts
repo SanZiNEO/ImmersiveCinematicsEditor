@@ -20,15 +20,6 @@ export const NODE_H = 64
 export const DOT_RADIUS = 12
 /** 圆点模式命中框边长（较大以便点击；渲染圆点半径仍为 DOT_RADIUS）。 */
 export const DOT_HIT = 32
-/** 弹簧理想长度（决定节点间期望间距，世界像素）。 */
-export const SPRING_LEN = 190
-/** 布局附加边平行偏移基准。 */
-export const LAYER_GAP = 180
-/** 行间距基准（保留兼容导出）。 */
-export const NODE_GAP = 60
-
-const LANE_PAD = 18
-const LANE_GAP = 26
 
 /** 视野/布局包围盒间距（世界像素）。 */
 export const WORLD_PAD = 60
@@ -55,10 +46,24 @@ export interface GraphLayoutOptions {
   overrides?: Readonly<Record<string, GraphNodePosition>>
   /** 力导向布局的锚点节点 path；缺省自动选择。 */
   centerPath?: string | null
-  /** 布局形态：`auto`（按规模自适应）、`blocks`、`force`。 */
-  layoutKind?: 'auto' | 'blocks' | 'force'
-  /** 覆盖迭代步数（动画分帧时逐帧递增传入）。 */
+  /** 0 = 只做 O(n) 快速摆放，不跑物理；>0 = 跑 N 步力导向。缺省按规模自适应。 */
   steps?: number
+  /** 只对这些 path 的节点做物理迭代；其余节点坐标固定不动。缺省 = 全部。 */
+  focusPaths?: ReadonlySet<string>
+  /**
+   * 分批加载：只布局 `order` 的前 `limit` 个节点（缺省 = 全部）。
+   *
+   * 大图先用小批量立即出图（核心可见），随后逐批放大直到全量；
+   * 切片外的边自动丢弃，因此调用方不需要自己裁剪边集。
+   */
+  limit?: number
+  /**
+   * 分批顺序（path 列表，越靠前越先布局）。缺省按 path 字典序。
+   *
+   * 控制器传「从锚点 BFS 展开」的顺序，让首批 = 锚点及其直接关联（真正的核心），
+   * 而不是字典序前缀那种与可见性无关的切片。
+   */
+  order?: readonly string[]
 }
 
 /** 布局后的节点（x/y 为圆心，w/h 为命中框，r 为圆点半径）。 */
@@ -69,7 +74,6 @@ export interface LaidOutNode extends GraphNode {
   h: number
   r: number
   layer: number
-  inCycle: boolean
   isolated: boolean
 }
 
@@ -116,161 +120,125 @@ export function folderLabel(folder: string): string {
   return folder === '' ? 'scripts' : folder
 }
 
-/** Tarjan SCC（迭代版）。 */
-function stronglyConnected(count: number, adjacency: readonly number[][]): { component: number[]; components: number[][] } {
-  const index = new Array<number>(count).fill(-1)
-  const low = new Array<number>(count).fill(0)
-  const onStack = new Array<boolean>(count).fill(false)
-  const component = new Array<number>(count).fill(-1)
-  const stack: number[] = []
-  const components: number[][] = []
-  let counter = 0
-
-  for (let root = 0; root < count; root += 1) {
-    if (index[root] !== -1) {
+/**
+ * 计算每个节点的层（DAG 最长路径）与孤立标记。
+ *
+ * 图由 `buildGraph` 保证是 DAG（成环的边在索引阶段就被丢弃），所以这里不需要 SCC：
+ * 直接对已去重的 CSR 邻接跑一次 Kahn 拓扑 + 最长路径即可，O(n + m)。
+ * 全程定长 TypedArray：10 万节点/20 万边下不分配「每节点一个数组或 Set」，
+ * 这是 `steps: 0` 快速摆放能在 1 秒内跑完的前提。
+ */
+function layersOf(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): {
+  layer: Int32Array
+  isolated: Uint8Array
+} {
+  const count = nodes.length
+  const indexOf = new Map<string, number>()
+  for (let index = 0; index < count; index += 1) {
+    indexOf.set(nodes[index].path, index)
+  }
+  // 第一遍：原始出度计数（含重复边与自环，随后按节点切片去重）。
+  const rawOffsets = new Int32Array(count + 1)
+  for (const edge of edges) {
+    const from = indexOf.get(edge.from)
+    if (from === undefined || indexOf.get(edge.to) === undefined || edge.from === edge.to) {
       continue
     }
-    const frames: { node: number; next: number }[] = []
-    index[root] = counter
-    low[root] = counter
-    counter += 1
-    stack.push(root)
-    onStack[root] = true
-    frames.push({ node: root, next: 0 })
-    while (frames.length > 0) {
-      const frame = frames[frames.length - 1]
-      const neighbours = adjacency[frame.node] ?? []
-      if (frame.next < neighbours.length) {
-        const next = neighbours[frame.next]
-        frame.next += 1
-        if (index[next] === -1) {
-          index[next] = counter
-          low[next] = counter
-          counter += 1
-          stack.push(next)
-          onStack[next] = true
-          frames.push({ node: next, next: 0 })
-        } else if (onStack[next]) {
-          low[frame.node] = Math.min(low[frame.node], index[next])
-        }
-        continue
-      }
-      frames.pop()
-      const parent = frames[frames.length - 1]
-      if (parent !== undefined) {
-        low[parent.node] = Math.min(low[parent.node], low[frame.node])
-      }
-      if (low[frame.node] === index[frame.node]) {
-        const members: number[] = []
-        for (;;) {
-          const node = stack.pop()
-          if (node === undefined) {
-            break
-          }
-          onStack[node] = false
-          component[node] = components.length
-          members.push(node)
-          if (node === frame.node) {
-            break
-          }
-        }
-        components.push(members)
-      }
-    }
+    rawOffsets[from + 1] += 1
   }
-  return { component, components }
-}
-
-/** 计算每个节点的层与环标记（供 dot/card 状态配色与诊断复用）。 */
-function layersOf(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): {
-  layer: number[]
-  inCycle: boolean[]
-  isolated: boolean[]
-} {
-  const indexOf = new Map<string, number>()
-  nodes.forEach((node, index) => indexOf.set(node.path, index))
-  const adjacency: number[][] = nodes.map(() => [])
-  const outgoing = nodes.map(() => 0)
-  const incoming = nodes.map(() => 0)
-  const seen = new Set<string>()
+  for (let index = 0; index < count; index += 1) {
+    rawOffsets[index + 1] += rawOffsets[index]
+  }
+  const rawTargets = new Int32Array(rawOffsets[count])
+  const cursor = rawOffsets.slice(0, count)
   for (const edge of edges) {
     const from = indexOf.get(edge.from)
     const to = indexOf.get(edge.to)
     if (from === undefined || to === undefined || from === to) {
       continue
     }
-    const key = `${from}>${to}`
-    if (seen.has(key)) {
-      continue
-    }
-    seen.add(key)
-    adjacency[from].push(to)
-    outgoing[from] += 1
-    incoming[to] += 1
+    rawTargets[cursor[from]] = to
+    cursor[from] += 1
   }
 
-  const { component, components } = stronglyConnected(nodes.length, adjacency)
-  const componentCount = components.length
-  const componentEdges: Set<number>[] = Array.from({ length: componentCount }, () => new Set<number>())
-  const indegree = new Array<number>(componentCount).fill(0)
-  for (let from = 0; from < nodes.length; from += 1) {
-    for (const to of adjacency[from]) {
-      const left = component[from]
-      const right = component[to]
-      if (left === right) {
+  // 第二遍：按节点切片去重（度数很小，线性扫描比 Set 更快），同时统计入度。
+  const offsets = new Int32Array(count + 1)
+  const incoming = new Int32Array(count)
+  const outgoing = new Int32Array(count)
+  let write = 0
+  for (let node = 0; node < count; node += 1) {
+    offsets[node] = write
+    const start = rawOffsets[node]
+    const end = rawOffsets[node + 1]
+    for (let at = start; at < end; at += 1) {
+      const target = rawTargets[at]
+      let duplicate = false
+      for (let seen = start; seen < at; seen += 1) {
+        if (rawTargets[seen] === target) {
+          duplicate = true
+          break
+        }
+      }
+      if (duplicate) {
         continue
       }
-      if (!componentEdges[left].has(right)) {
-        componentEdges[left].add(right)
-        indegree[right] += 1
+      rawTargets[write] = target
+      write += 1
+      outgoing[node] += 1
+      incoming[target] += 1
+    }
+  }
+  offsets[count] = write
+  const successors = rawTargets.subarray(0, write)
+
+  // 基线层：含内置前置的节点从 1 起（与 05-02 的分层语义一致）。
+  const layer = new Int32Array(count)
+  const hasRequirement = new Uint8Array(count)
+  for (let index = 0; index < count; index += 1) {
+    const found = nodes[index].triggers.some((trigger) =>
+      trigger.requirements.some((requirement) => requirement.role === 'builtin'))
+    if (!found) {
+      continue
+    }
+    hasRequirement[index] = 1
+    layer[index] = 1
+  }
+
+  // Kahn 拓扑推进（队列用 Int32Array，避免 shift 的 O(n) 移动），取最长路径。
+  const queue = new Int32Array(count)
+  const indegree = incoming.slice()
+  let head = 0
+  let tail = 0
+  for (let index = 0; index < count; index += 1) {
+    if (indegree[index] === 0) {
+      queue[tail] = index
+      tail += 1
+    }
+  }
+  while (head < tail) {
+    const node = queue[head]
+    head += 1
+    const candidate = layer[node] + 1
+    for (let at = offsets[node]; at < offsets[node + 1]; at += 1) {
+      const next = successors[at]
+      if (candidate > layer[next]) {
+        layer[next] = candidate
       }
-    }
-  }
-
-  const hasRequirement = nodes.map((node) =>
-    node.triggers.some((trigger) => trigger.requirements.some((requirement) => requirement.role === 'builtin')))
-  const componentBase = new Array<number>(componentCount).fill(0)
-  const componentHasRequirement = new Array<boolean>(componentCount).fill(false)
-  for (let index = 0; index < nodes.length; index += 1) {
-    componentHasRequirement[component[index]] = componentHasRequirement[component[index]] || hasRequirement[index]
-  }
-  for (let comp = 0; comp < componentCount; comp += 1) {
-    componentBase[comp] = componentHasRequirement[comp] ? 1 : 0
-  }
-
-  const componentLayer = new Array<number>(componentCount).fill(0)
-  const queue: number[] = []
-  for (let comp = 0; comp < componentCount; comp += 1) {
-    componentLayer[comp] = componentBase[comp]
-    if (indegree[comp] === 0) {
-      queue.push(comp)
-    }
-  }
-  for (let head = 0; head < queue.length; head += 1) {
-    const comp = queue[head]
-    for (const next of componentEdges[comp]) {
-      componentLayer[next] = Math.max(componentLayer[next], componentLayer[comp] + 1)
       indegree[next] -= 1
       if (indegree[next] === 0) {
-        queue.push(next)
+        queue[tail] = next
+        tail += 1
       }
     }
   }
 
-  const inCycleComponent = components.map((members) => members.length > 1)
-  for (let from = 0; from < nodes.length; from += 1) {
-    for (const to of adjacency[from]) {
-      if (from === to) {
-        inCycleComponent[component[from]] = true
-      }
+  const isolated = new Uint8Array(count)
+  for (let index = 0; index < count; index += 1) {
+    if (incoming[index] === 0 && outgoing[index] === 0 && hasRequirement[index] === 0) {
+      isolated[index] = 1
     }
   }
-
-  const layer = nodes.map((_, index) => componentLayer[component[index]])
-  const inCycle = nodes.map((_, index) => inCycleComponent[component[index]])
-  const isolated = nodes.map((node, index) =>
-    !hasRequirement[index] && incoming[index] === 0 && outgoing[index] === 0)
-  return { layer, inCycle, isolated }
+  return { layer, isolated }
 }
 
 /** 目录顺序：根第一，其余按深度 + 路径字典序。 */
@@ -292,40 +260,6 @@ function folderOrder(nodes: readonly GraphNode[]): string[] {
 }
 
 /* =====================================================================
-   确定性伪随机
-   ===================================================================== */
-
-/** mulberry32：确定性 PRNG（禁止全局 Math.random 参与布局）。 */
-function mulberry32(seed: number): () => number {
-  let a = seed | 0
-  return () => {
-    a = (a + 0x6D2B79F5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-/** 稳定字符串 hash（FNV-1a），用于派生布局种子。 */
-function hashString(value: string): number {
-  let hash = 0x811c9dc5
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return hash | 0
-}
-
-/** 由节点集合派生固定的布局种子：不依赖随机、不依赖时间。 */
-function layoutSeed(nodes: readonly GraphNode[]): number {
-  let seed = 0
-  for (const node of nodes) {
-    seed = (seed * 31 + hashString(node.path)) | 0
-  }
-  return seed === 0 ? 0x5eed : seed
-}
-
-/* =====================================================================
    力导向物理（空间网格近近似斥力，确定性）
    ===================================================================== */
 
@@ -336,10 +270,7 @@ interface PhysNode {
   vx: number
   vy: number
   pinned: boolean
-  folder: string
   folderIndex: number
-  hasRequirement: boolean
-  outdeg: number
 }
 
 /* 以下参数直接照抄参考原型 script-dependency-star.html 的物理段。 */
@@ -360,26 +291,29 @@ const MAXV = 14
 const REPEL_CAP = 8
 const ITERATIONS = 420
 const CELL = 160
-const ZPAD = 52
 
-/** 文件夹中心初始布局：锚点文件夹在原点，其余绕一圈（半径随节点数自适应）。 */
+/**
+ * 文件夹中心：锚点文件夹在原点，其余绕一圈（半径随节点数自适应）。
+ *
+ * 返回与 `folders` 同序的数组：快速摆放与物理循环都按下标取，不再查 Map。
+ */
 function folderCenters(
   folderOrderList: readonly string[],
   anchorFolder: string,
-  seed: number,
   radius: number,
-): Map<string, { x: number; y: number }> {
-  const centers = new Map<string, { x: number; y: number }>()
+): { x: number; y: number }[] {
   const others = folderOrderList.filter((folder) => folder !== anchorFolder)
-  centers.set(anchorFolder, { x: 0, y: 0 })
-  others.forEach((folder, index) => {
+  const centers: { x: number; y: number }[] = folderOrderList.map((folder) => {
+    if (folder === anchorFolder) {
+      return { x: 0, y: 0 }
+    }
+    const index = others.indexOf(folder)
     const angle = (index / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2
-    centers.set(folder, {
+    return {
       x: Math.round(Math.cos(angle) * radius),
       y: Math.round(Math.sin(angle) * radius),
-    })
+    }
   })
-  void seed
   return centers
 }
 
@@ -392,16 +326,16 @@ function clampWorld(nodes: readonly PhysNode[], limit: number): void {
 }
 
 /** 精确全对斥力（照原型 O(n²)，小图用）。 */
-function applyRepulsionAll(nodes: readonly PhysNode[]): void {
+function applyRepulsionAll(nodes: readonly PhysNode[], focus: Uint8Array | null): void {
   for (let i = 0; i < nodes.length; i += 1) {
     for (let j = i + 1; j < nodes.length; j += 1) {
-      repel(nodes[i], nodes[j], REPEL)
+      repel(nodes[i], nodes[j], focus)
     }
   }
 }
 
 /** 一轮斥力：空间网格近似，只算 3x3 邻域格子内的节点对（大图用）。 */
-function applyRepulsion(nodes: readonly PhysNode[], cell: number, force: number): void {
+function applyRepulsion(nodes: readonly PhysNode[], cell: number, focus: Uint8Array | null): void {
   const buckets = new Map<number, number[]>()
   const cellOf = (value: number): number => Math.floor(value / cell)
   // 数字 key：cx * 73856093 ^ cy * 19349663（经典空间散列），避免字符串开销。
@@ -420,7 +354,7 @@ function applyRepulsion(nodes: readonly PhysNode[], cell: number, force: number)
   for (const list of buckets.values()) {
     for (let a = 0; a < list.length; a += 1) {
       for (let b = a + 1; b < list.length; b += 1) {
-        repel(nodes[list[a]], nodes[list[b]], force)
+        repel(nodes[list[a]], nodes[list[b]], focus)
       }
     }
   }
@@ -441,14 +375,23 @@ function applyRepulsion(nodes: readonly PhysNode[], cell: number, force: number)
       for (const ai of list) {
         const A = nodes[ai]
         for (const bi of other) {
-          repel(A, nodes[bi], force)
+          repel(A, nodes[bi], focus)
         }
       }
     }
   }
 }
 
-function repel(A: PhysNode, B: PhysNode, _force: number): void {
+/**
+ * 一对斥力。
+ *
+ * `focus` 为 null 时两端都受力；否则只有焦点节点累积速度——非焦点节点当静态障碍物，
+ * 坐标始终不动（视口外节点在动画期间必须冻结）。
+ */
+function repel(A: PhysNode, B: PhysNode, focus: Uint8Array | null): void {
+  if (focus !== null && focus[A.index] === 0 && focus[B.index] === 0) {
+    return
+  }
   let dx = B.x - A.x
   let dy = B.y - A.y
   let d2 = dx * dx + dy * dy
@@ -468,17 +411,31 @@ function repel(A: PhysNode, B: PhysNode, _force: number): void {
   const f = Math.min(REPEL / d2, REPEL_CAP)
   const ux = dx / d
   const uy = dy / d
-  A.vx -= ux * f
-  A.vy -= uy * f
-  B.vx += ux * f
-  B.vy += uy * f
+  if (focus === null || focus[A.index] === 1) {
+    A.vx -= ux * f
+    A.vy -= uy * f
+  }
+  if (focus === null || focus[B.index] === 1) {
+    B.vx += ux * f
+    B.vy += uy * f
+  }
 }
 
 /** 一轮弹簧、文件夹向心、锚点向心。 */
-function applySprings(nodes: readonly PhysNode[], edges: readonly [number, number][], springLen: number): void {
+function applySprings(
+  nodes: readonly PhysNode[],
+  edges: readonly [number, number][],
+  springLen: number,
+  focus: Uint8Array | null,
+): void {
   for (const [from, to] of edges) {
     const A = nodes[from]
     const B = nodes[to]
+    const aActive = focus === null || focus[A.index] === 1
+    const bActive = focus === null || focus[B.index] === 1
+    if (!aActive && !bActive) {
+      continue
+    }
     const dx = B.x - A.x
     const dy = B.y - A.y
     const d = Math.hypot(dx, dy) || 1
@@ -487,16 +444,26 @@ function applySprings(nodes: readonly PhysNode[], edges: readonly [number, numbe
     // 同文件夹强弹簧（簇内紧凑），跨文件夹弱弹簧（只表达关系、不拉扁簇）。
     const k = A.folderIndex === B.folderIndex ? SPRING_K : SPRING_K_CROSS
     const f = (d - springLen) * k
-    A.vx += ux * f
-    A.vy += uy * f
-    B.vx -= ux * f
-    B.vy -= uy * f
+    if (aActive) {
+      A.vx += ux * f
+      A.vy += uy * f
+    }
+    if (bActive) {
+      B.vx -= ux * f
+      B.vy -= uy * f
+    }
   }
 }
 
-function integrate(nodes: readonly PhysNode[], anchorIndex: number): void {
+function integrate(nodes: readonly PhysNode[], focus: Uint8Array | null): void {
   for (const node of nodes) {
-    if (node.pinned || node.index === anchorIndex) {
+    if (node.pinned) {
+      node.vx = 0
+      node.vy = 0
+      continue
+    }
+    if (focus !== null && focus[node.index] === 0) {
+      // 非焦点节点坐标冻结：速度不积分（否则视口外节点会跟着漂）。
       node.vx = 0
       node.vy = 0
       continue
@@ -514,8 +481,7 @@ function integrate(nodes: readonly PhysNode[], anchorIndex: number): void {
 }
 
 /** 文件夹框分离（重叠时沿较小轴推开两组成员；保证簇框互不重叠）。 */
-function separateZones(nodes: readonly PhysNode[], folderIndexByKey: Map<string, number>, leafCount: number, seed: () => number): void {
-  void seed
+function separateZones(nodes: readonly PhysNode[], folderIndexByKey: Map<string, number>): void {
   const folderKeys = [...folderIndexByKey.keys()]
   const count = folderKeys.length
   if (count < 2) {
@@ -583,131 +549,148 @@ function separateZones(nodes: readonly PhysNode[], folderIndexByKey: Map<string,
     node.x += pushX[f]
     node.y += pushY[f]
   }
-  void leafCount
 }
 
 /* =====================================================================
    主布局
    ===================================================================== */
 
-interface EdgeEndpoints {
-  fromIndex: number
-  toIndex: number
-}
-
-/** 力导向规模上限：超过后改用 O(n) 的文件夹矩形分块（10 万级可用）。 */
-export const FORCE_NODE_LIMIT = 1200
-
-/** 小图（≤ 该值）默认走力导向放射观感；更大的图默认走文件夹分块。 */
-export const SMALL_GRAPH_FORCE_LIMIT = 60
-
-/** 分块内节点网格间距（世界像素）：dot 圆点不重叠，card 模式可缩放细看。 */
-const BLOCK_CELL = 96
-/** 分块内边距。 */
-const BLOCK_PAD = 26
-/** 分块之间的间距。 */
-const BLOCK_GAP = 90
+/** 簇内网格间距（世界像素）：dot 圆点不重叠，card 模式可缩放细看。 */
+const PLACE_CELL = 90
 
 /**
- * 大图布局：文件夹矩形分块 + 块内方阵网格。
+ * O(n) 快速摆放：每个文件夹一个方阵簇，簇心由 `folderCenters` 给出（锚点文件夹在原点）。
  *
- * O(n) 且确定性：每个文件夹算一个方阵块（块内 cols=ceil(sqrt(n))），
- * 块之间按行排布、行内左对齐并整体居中，锚点文件夹排在第一位。
- * 每块天然是一个不重叠的矩形，块内节点成方阵，跨块边由上层渲染连线。
+ * 只做两次线性遍历（计数排序分桶 + 写坐标），不跑物理迭代、不建 Map 桶：
+ * `steps === 0` 时这就是全图坐标，10 万节点也能在 1 秒内出图。
+ * 确定性：桶内顺序 = 节点排序后的顺序，不用随机数。
  */
-function layoutBlocks(
-  laidNodes: LaidOutNode[],
-  folders: readonly string[],
-  anchorFolder: string,
+function initialPlacement(
+  laidNodes: readonly LaidOutNode[],
+  folderIndexByKey: Map<string, number>,
+  centers: readonly { x: number; y: number }[],
 ): void {
-  const membersByFolder = new Map<string, LaidOutNode[]>()
-  for (const node of laidNodes) {
-    const list = membersByFolder.get(node.folder) ?? []
-    list.push(node)
-    membersByFolder.set(node.folder, list)
+  const count = laidNodes.length
+  const folderCount = centers.length
+  // 每个文件夹的成员数（计数排序的第一遍）。
+  const sizes = new Int32Array(folderCount)
+  for (let index = 0; index < count; index += 1) {
+    const slot = folderIndexByKey.get(laidNodes[index].folder) ?? 0
+    sizes[slot] += 1
   }
-  const groups = folders
-    .map((folder) => ({ folder, members: membersByFolder.get(folder) ?? [] }))
-    .filter((group) => group.members.length > 0)
-    // 锚点文件夹排第一（左上），其余按成员数降序、再按路径。
-    .sort((left, right) => {
-      if (left.folder === anchorFolder) {
-        return -1
-      }
-      if (right.folder === anchorFolder) {
-        return 1
-      }
-      const byCount = right.members.length - left.members.length
-      return byCount !== 0 ? byCount : left.folder.localeCompare(right.folder)
-    })
-
-  interface Block { folder: string; members: LaidOutNode[]; cols: number; rows: number; w: number; h: number }
-  const blocks: Block[] = groups.map((group) => {
-    const n = group.members.length
-    const cols = Math.max(1, Math.ceil(Math.sqrt(n)))
-    const rows = Math.max(1, Math.ceil(n / cols))
-    return {
-      folder: group.folder,
-      members: group.members,
-      cols,
-      rows,
-      w: cols * BLOCK_CELL + BLOCK_PAD * 2,
-      h: rows * BLOCK_CELL + BLOCK_PAD * 2,
-    }
-  })
-
-  // 按行装箱：每行放约 sqrt(块数) 块，行宽 = 该列数下的总宽。
-  const cols = Math.max(1, Math.ceil(Math.sqrt(blocks.length)))
-  const targetRowWidth = blocks
-    .slice(0, cols)
-    .reduce((sum, block) => sum + block.w + BLOCK_GAP, -BLOCK_GAP)
-
-  const rows: Block[][] = []
-  let currentRow: Block[] = []
-  let currentWidth = 0
-  for (const block of blocks) {
-    if (currentRow.length > 0 && currentWidth + block.w + BLOCK_GAP > targetRowWidth) {
-      rows.push(currentRow)
-      currentRow = []
-      currentWidth = 0
-    }
-    currentRow.push(block)
-    currentWidth += block.w + BLOCK_GAP
+  // 每列/每行数按簇大小定，随后把位置写进 order（第二遍）。
+  const offsets = new Int32Array(folderCount + 1)
+  for (let slot = 0; slot < folderCount; slot += 1) {
+    offsets[slot + 1] = offsets[slot] + sizes[slot]
   }
-  if (currentRow.length > 0) {
-    rows.push(currentRow)
+  const order = new Int32Array(count)
+  const cursor = offsets.slice(0, folderCount)
+  for (let index = 0; index < count; index += 1) {
+    const slot = folderIndexByKey.get(laidNodes[index].folder) ?? 0
+    order[cursor[slot]] = index
+    cursor[slot] += 1
   }
-
-  // 逐行摆放，整体以原点为中心。
-  const rowHeights = rows.map((row) => Math.max(...row.map((block) => block.h)))
-  const totalWidth = Math.max(...rows.map((row) => row.reduce((sum, block) => sum + block.w + BLOCK_GAP, -BLOCK_GAP)))
-  const totalHeight = rowHeights.reduce((sum, height) => sum + height + BLOCK_GAP, -BLOCK_GAP)
-
-  let y = -totalHeight / 2
-  rows.forEach((row, rowIndex) => {
-    const rowHeight = rowHeights[rowIndex]
-    const rowWidth = row.reduce((sum, block) => sum + block.w + BLOCK_GAP, -BLOCK_GAP)
-    let x = -rowWidth / 2
-    for (const block of row) {
-      const originX = x + BLOCK_PAD
-      const originY = y + BLOCK_PAD + (rowHeight - block.h) / 2
-      block.members.forEach((node, index) => {
-        const col = index % block.cols
-        const rowIndexInner = Math.floor(index / block.cols)
-        node.x = Math.round(originX + col * BLOCK_CELL + BLOCK_CELL / 2)
-        node.y = Math.round(originY + rowIndexInner * BLOCK_CELL + BLOCK_CELL / 2)
-      })
-      x += block.w + BLOCK_GAP
+  for (let slot = 0; slot < folderCount; slot += 1) {
+    const size = sizes[slot]
+    if (size === 0) {
+      continue
     }
-    y += rowHeight + BLOCK_GAP
-  })
-  void totalWidth
+    const center = centers[slot]
+    const cols = Math.max(1, Math.ceil(Math.sqrt(size)))
+    const rows = Math.max(1, Math.ceil(size / cols))
+    const originX = center.x - ((cols - 1) / 2) * PLACE_CELL
+    const originY = center.y - ((rows - 1) / 2) * PLACE_CELL
+    for (let at = offsets[slot]; at < offsets[slot + 1]; at += 1) {
+      const node = laidNodes[order[at]]
+      const position = at - offsets[slot]
+      const col = position % cols
+      const row = (position - col) / cols
+      node.x = Math.round(originX + col * PLACE_CELL)
+      node.y = Math.round(originY + row * PLACE_CELL)
+    }
+  }
 }
 
-/** 计算布局（力导向；确定性；卡片与 dot 共用坐标）。 */
+/**
+ * `focusPaths` → 按 laidNodes 索引的 0/1 掩码；缺省（未给 focusPaths）返回 null = 全部参与物理。
+ *
+ * 给定焦点集后，物理只改焦点节点：视口外节点坐标原地不动（布局层与动画解耦）。
+ */
+function focusMaskOf(
+  focusPaths: ReadonlySet<string> | undefined,
+  byPath: Map<string, number>,
+): Uint8Array | null {
+  if (focusPaths === undefined) {
+    return null
+  }
+  const mask = new Uint8Array(byPath.size)
+  for (const path of focusPaths) {
+    const index = byPath.get(path)
+    if (index !== undefined) {
+      mask[index] = 1
+    }
+  }
+  return mask
+}
+
+/** 缺省迭代步数：规模越大收敛越快，减少步数保证 10 万级可用。 */
+function defaultSteps(count: number): number {
+  return count > 20000 ? 90 : count > 5000 ? 150 : count > 800 ? 240 : ITERATIONS
+}
+
+/** 路径比较：码点序（比 `localeCompare` 快 3 倍以上，10 万节点排序省 ~120ms）。 */
+function comparePath(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+/** 计算布局（确定性；卡片与 dot 共用坐标）。`steps: 0` 只做 O(n) 快速摆放。 */
 export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions = {}): GraphLayout {
-  const nodes = [...graph.nodes].sort((left, right) => left.path.localeCompare(right.path))
-  const { layer, inCycle, isolated } = layersOf(nodes, graph.edges)
+  const allNodes = [...graph.nodes].sort((left, right) => comparePath(left.path, right.path))
+  // 分批加载：按 `order` 取前 `limit` 个节点；切片外的边自然丢弃。
+  const limit = options.limit
+  const order = options.order
+  const nodes = (() => {
+    if (limit === undefined || limit >= allNodes.length) {
+      return allNodes
+    }
+    const take = Math.max(0, limit)
+    if (order === undefined) {
+      return allNodes.slice(0, take)
+    }
+    const byPathAll = new Map(allNodes.map((node) => [node.path, node]))
+    const picked: GraphNode[] = []
+    const seen = new Set<string>()
+    for (const path of order) {
+      if (picked.length >= take) {
+        break
+      }
+      const node = byPathAll.get(path)
+      if (node === undefined || seen.has(path)) {
+        continue
+      }
+      seen.add(path)
+      picked.push(node)
+    }
+    // 兜底：order 覆盖不全时用字典序补齐，保证批次数达到 limit。
+    for (const node of allNodes) {
+      if (picked.length >= take) {
+        break
+      }
+      if (seen.has(node.path)) {
+        continue
+      }
+      seen.add(node.path)
+      picked.push(node)
+    }
+    return picked.sort((left, right) => comparePath(left.path, right.path))
+  })()
+  const included = nodes.length === allNodes.length
+    ? null
+    : new Set(nodes.map((node) => node.path))
+  const edges = included === null
+    ? graph.edges
+    : graph.edges.filter((edge) => included.has(edge.from) && included.has(edge.to))
+  const { layer, isolated } = layersOf(nodes, edges)
 
   const laidNodes: LaidOutNode[] = nodes.map((node, index) => ({
     ...node,
@@ -717,98 +700,70 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
     h: DOT_HIT,
     r: DOT_RADIUS,
     layer: layer[index],
-    inCycle: inCycle[index],
-    isolated: isolated[index],
+    isolated: isolated[index] === 1,
   }))
   if (laidNodes.length === 0) {
     return { nodes: [], edges: [], partitions: [], centerPath: null, width: 1, height: 1 }
   }
 
-  const seedValue = layoutSeed(nodes)
-  const rnd = mulberry32(seedValue)
   const folders = folderOrder(nodes)
   const folderIndexByKey = new Map<string, number>()
   folders.forEach((folder, index) => folderIndexByKey.set(folder, index))
 
-  // 锚点：优先 options.centerPath；否则自动选“最终脚本”（无出边）里度最大的；再退回任意。
+  // 锚点：优先 options.centerPath；否则自动选“最终脚本”（无出边）里层最大的；再退回任意。
   let centerPath = options.centerPath ?? null
   const byPath = new Map(nodes.map((node, index) => [node.path, index]))
   if (centerPath === null || !byPath.has(centerPath)) {
-    const outdeg = new Map<string, number>()
-    for (const edge of graph.edges) {
-      outdeg.set(edge.from, (outdeg.get(edge.from) ?? 0) + 1)
+    // 出度按索引统计（Int32Array，避免 10 万个字符串 Map 条目）。
+    const outdeg = new Int32Array(nodes.length)
+    for (const edge of edges) {
+      const from = byPath.get(edge.from)
+      if (from !== undefined) {
+        outdeg[from] += 1
+      }
     }
-    const candidates = nodes.filter((node) => (outdeg.get(node.path) ?? 0) === 0)
-    if (candidates.length > 0) {
-      centerPath = candidates.sort((left, right) => {
-        const byLayerRight = (layer[byPath.get(right.path) as number] ?? 0)
-        const byLayerLeft = (layer[byPath.get(left.path) as number] ?? 0)
-        return byLayerRight - byLayerLeft
-      })[0]?.path ?? nodes[0]?.path ?? null
-    } else {
-      centerPath = nodes[0]?.path ?? null
+    // 单次扫描取「层最大」的第一个（节点已按 path 排序，等价于原稳定降序排序取首）。
+    let bestIndex = -1
+    let bestLayer = -1
+    for (let index = 0; index < nodes.length; index += 1) {
+      if (outdeg[index] !== 0) {
+        continue
+      }
+      if (layer[index] > bestLayer) {
+        bestLayer = layer[index]
+        bestIndex = index
+      }
     }
+    centerPath = bestIndex >= 0 ? nodes[bestIndex].path : nodes[0]?.path ?? null
   }
   const anchorIndex = centerPath === null ? -1 : (byPath.get(centerPath) ?? -1)
-
-  // 初始位置：锚点文件夹在原点，其余文件夹按文件夹中心 + 簇内随机半径（确定性）。
   const anchorFolder = anchorIndex >= 0 ? nodes[anchorIndex].folder : folders[0] ?? ''
-  {
-    // 出度用一次遍历统计（O(m)），避免每节点扫全边（O(n·m)）。
-    const outdegOf = new Map<string, number>()
-    for (const edge of graph.edges) {
-      outdegOf.set(edge.from, (outdegOf.get(edge.from) ?? 0) + 1)
-    }
-    // 物理节点。
-    const folderOfNode = new Map<string, number>()
-    nodes.forEach((node) => {
-      folderOfNode.set(node.path, folderIndexByKey.get(node.folder) ?? 0)
-    })
-    const phys = nodes.map((node, index) => {
-      const folderIdx = folderOfNode.get(node.path) ?? 0
-      const hasReq = node.triggers.some((trigger) =>
-        trigger.requirements.some((requirement) => requirement.role === 'builtin'))
-      return {
-        index,
-        x: 0,
-        y: 0,
-        vx: 0,
-        vy: 0,
-        pinned: index === anchorIndex,
-        folder: node.folder,
-        folderIndex: folderIdx,
-        hasRequirement: hasReq,
-        outdeg: outdegOf.get(node.path) ?? 0,
-      } as PhysNode
-    })
-    // 文件夹环绕半径随规模自适应（照原型四角/环绕的思路，规模大则铺更开）。
-    const perFolderAvg = Math.max(1, laidNodes.length / Math.max(1, folders.length))
-    const folderRadius = Math.round(Math.min(6000, Math.max(420, Math.sqrt(perFolderAvg) * 190 * Math.sqrt(Math.max(1, folders.length)))))
-    const centers = folderCenters(folders, anchorFolder, seedValue, folderRadius)
-    const springLen = Math.max(110, Math.min(SPRING_LEN_REF, SPRING_LEN_REF * Math.sqrt(laidNodes.length / 40)))
-    // 大图用空间网格加速斥力（保证 10 万级可用）；小图直接全对更精确。
-    const useGrid = laidNodes.length > 800
-    const cellSize = Math.max(CELL, springLen * 1.1)
 
-    phys.forEach((node) => {
-      if (node.index === anchorIndex) {
-        node.x = 0
-        node.y = 0
-        node.vx = 0
-        node.vy = 0
-        return
-      }
-      const center = centers.get(node.folder) ?? { x: 0, y: 0 }
-      const angle = rnd() * Math.PI * 2
-      const radius = 20 + rnd() * 150
-      node.x = center.x + Math.cos(angle) * radius
-      node.y = center.y + Math.sin(angle) * radius
-    })
+  // 文件夹环绕半径随规模自适应（照原型四角/环绕的思路，规模大则铺更开）。
+  const perFolderAvg = Math.max(1, laidNodes.length / Math.max(1, folders.length))
+  const folderRadius = Math.round(Math.max(600, Math.sqrt(perFolderAvg) * 150 * Math.sqrt(Math.max(1, folders.length))))
+  const centers = folderCenters(folders, anchorFolder, folderRadius)
 
+  // 第一步：O(n) 快速摆放。`steps === 0` 时这就是最终坐标（大图 1 秒内可见）。
+  initialPlacement(laidNodes, folderIndexByKey, centers)
+  const iterations = options.steps ?? defaultSteps(laidNodes.length)
+
+  if (iterations > 0) {
+    const focus = focusMaskOf(options.focusPaths, byPath)
+    // 物理节点（坐标取快速摆放结果）。
+    const phys = laidNodes.map((node, index) => ({
+      index,
+      x: node.x,
+      y: node.y,
+      vx: 0,
+      vy: 0,
+      pinned: index === anchorIndex,
+      folderIndex: folderIndexByKey.get(node.folder) ?? 0,
+    } as PhysNode))
     // 边端点（去重）。
     const edgeSeen = new Set<string>()
     const edgeArr: [number, number][] = []
-    for (const edge of graph.edges) {
+    for (const edge of edges) {
       const from = byPath.get(edge.from)
       const to = byPath.get(edge.to)
       if (from === undefined || to === undefined || from === to) {
@@ -821,35 +776,37 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
       edgeSeen.add(key)
       edgeArr.push([from, to])
     }
+    const springLen = Math.max(110, Math.min(SPRING_LEN_REF, SPRING_LEN_REF * Math.sqrt(laidNodes.length / 40)))
+    // 大图用空间网格加速斥力（保证 10 万级可用）；小图直接全对更精确。
+    const useGrid = laidNodes.length > 800
+    const cellSize = Math.max(CELL, springLen * 1.1)
 
     // 迭代（照原型物理：斥力 + 弹簧 + 文件夹向心 + 全局向心 + 阻尼）。
-    // 规模越大收敛越快，减少步数保证 10 万级可用。
-    const defaultIterations = laidNodes.length > 20000 ? 90
-      : laidNodes.length > 5000 ? 150
-        : laidNodes.length > 800 ? 240
-          : ITERATIONS
-    const iterations = options.steps ?? defaultIterations
     for (let round = 0; round < iterations; round += 1) {
       if (useGrid) {
-        applyRepulsion(phys, cellSize, REPEL)
+        applyRepulsion(phys, cellSize, focus)
       } else {
-        applyRepulsionAll(phys)
+        applyRepulsionAll(phys, focus)
       }
-      applySprings(phys, edgeArr, springLen)
+      applySprings(phys, edgeArr, springLen, focus)
       for (const node of phys) {
-        if (node.pinned || node.index === anchorIndex) {
+        if (node.pinned) {
           continue
         }
-        const center = centers.get(node.folder) ?? { x: 0, y: 0 }
+        if (focus !== null && focus[node.index] === 0) {
+          continue
+        }
+        const center = centers[node.folderIndex] ?? { x: 0, y: 0 }
         node.vx += (center.x - node.x) * FOLDER_K
         node.vy += (center.y - node.y) * FOLDER_K
         node.vx += (0 - node.x) * CENTER_K
         node.vy += (0 - node.y) * CENTER_K
       }
-      integrate(phys, anchorIndex)
+      integrate(phys, focus)
       clampWorld(phys, 1e6)
-      if (round % 8 === 7) {
-        separateZones(phys, folderIndexByKey, folders.length, rnd)
+      // 簇框分离会整体平移文件夹（含非焦点节点），焦点模式下一律跳过。
+      if (focus === null && round % 8 === 7) {
+        separateZones(phys, folderIndexByKey)
       }
     }
 
@@ -874,41 +831,51 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
     }
   }
 
-  // 文件夹簇包围盒。
+  // 文件夹簇包围盒（单次遍历累加，避免 10 万参数展开）。
   const partitions: GraphPartition[] = []
-  const membersByFolder = new Map<string, LaidOutNode[]>()
+  const folderCount = folders.length
+  const minXs = new Float64Array(folderCount).fill(Number.POSITIVE_INFINITY)
+  const minYs = new Float64Array(folderCount).fill(Number.POSITIVE_INFINITY)
+  const maxXs = new Float64Array(folderCount).fill(Number.NEGATIVE_INFINITY)
+  const maxYs = new Float64Array(folderCount).fill(Number.NEGATIVE_INFINITY)
+  const counts = new Int32Array(folderCount)
   for (const node of laidNodes) {
-    const list = membersByFolder.get(node.folder) ?? []
-    list.push(node)
-    membersByFolder.set(node.folder, list)
-  }
-  for (const folder of folders) {
-    const members = membersByFolder.get(folder) ?? []
-    if (members.length === 0) {
+    const slot = folderIndexByKey.get(node.folder)
+    if (slot === undefined) {
       continue
     }
-    const minX = Math.min(...members.map((node) => node.x))
-    const minY = Math.min(...members.map((node) => node.y))
-    const maxX = Math.max(...members.map((node) => node.x))
-    const maxY = Math.max(...members.map((node) => node.y))
+    if (node.x < minXs[slot]) minXs[slot] = node.x
+    if (node.y < minYs[slot]) minYs[slot] = node.y
+    if (node.x > maxXs[slot]) maxXs[slot] = node.x
+    if (node.y > maxYs[slot]) maxYs[slot] = node.y
+    counts[slot] += 1
+  }
+  for (let slot = 0; slot < folderCount; slot += 1) {
+    if (counts[slot] === 0) {
+      continue
+    }
+    const minX = minXs[slot]
+    const minY = minYs[slot]
+    const maxX = maxXs[slot]
+    const maxY = maxYs[slot]
     // 照原型 ZPAD=52：框与节点之间留足呼吸空间，框顶部再留出标题高度。
     const boxPad = 52
     const headerPad = 26
     partitions.push({
-      folder,
-      label: folderLabel(folder),
+      folder: folders[slot],
+      label: folderLabel(folders[slot]),
       x: minX - boxPad,
       y: minY - boxPad - headerPad,
       w: maxX - minX + boxPad * 2,
       h: maxY - minY + boxPad * 2 + headerPad,
-      count: members.length,
+      count: counts[slot],
     })
   }
 
   // 边（曲线由 geometry 层负责；这里只产出端点与方向数据）。
   const byPathNode = new Map(laidNodes.map((node) => [node.path, node]))
   const laidEdges: LaidOutEdge[] = []
-  for (const edge of graph.edges) {
+  for (const edge of edges) {
     const from = byPathNode.get(edge.from)
     const to = byPathNode.get(edge.to)
     if (from === undefined || to === undefined || from === to) {
@@ -926,18 +893,28 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
     })
   }
 
-  // 世界包围盒。
+  // 世界包围盒（复用上面的文件夹聚合值，不再遍历一遍 10 万节点）。
   let width = 1
   let height = 1
-  if (laidNodes.length > 0) {
-    const minX = Math.min(...laidNodes.map((node) => node.x))
-    const minY = Math.min(...laidNodes.map((node) => node.y))
-    const maxX = Math.max(...laidNodes.map((node) => node.x))
-    const maxY = Math.max(...laidNodes.map((node) => node.y))
-    width = Math.max(1, maxX - minX + WORLD_PAD * 2)
-    height = Math.max(1, maxY - minY + WORLD_PAD * 2)
+  {
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    for (let slot = 0; slot < folderCount; slot += 1) {
+      if (counts[slot] === 0) {
+        continue
+      }
+      if (minXs[slot] < minX) minX = minXs[slot]
+      if (minYs[slot] < minY) minY = minYs[slot]
+      if (maxXs[slot] > maxX) maxX = maxXs[slot]
+      if (maxYs[slot] > maxY) maxY = maxYs[slot]
+    }
+    if (Number.isFinite(minX) && Number.isFinite(minY)) {
+      width = Math.max(1, maxX - minX + WORLD_PAD * 2)
+      height = Math.max(1, maxY - minY + WORLD_PAD * 2)
+    }
   }
-  void LANE_GAP
   return { nodes: laidNodes, edges: laidEdges, partitions, centerPath, width, height }
 }
 

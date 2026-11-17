@@ -20,9 +20,10 @@ interface DebugWorkbench {
     commit(command: unknown): { ok: boolean; error?: string }
     undo(): boolean
     revert(): Promise<{ ok: boolean; error?: string }>
+    save(): Promise<{ ok: boolean; error?: string }>
   }
   graph: {
-    current(): { nodes: Array<{ path: string; scriptId?: string | null; triggers: Array<{ identity: string; requiresFingerprint: string }> }>; edges: Array<{ from: string; to: string; requirementType: string }> } | null
+    current(): { nodes: Array<{ path: string; scriptId?: string | null; triggers: Array<{ identity: string; requiresFingerprint: string }> }>; edges: Array<{ from: string; to: string; requirementType: string }>; stats: { nodeCount: number; edgeCount: number } } | null
     stale(): boolean
     connected(): boolean
   }
@@ -40,9 +41,10 @@ const FILES = {
   'custom.json': makeScript('CUSTOM', 'Custom', [{ type: 'weather', data: { value: 'rain' } }]),
   'dup1.json': makeScript('DUP', 'Dup1'),
   'dup2.json': makeScript('DUP', 'Dup2'),
-  'cycle-a.json': makeScript('CA', 'CycleA', ['CB']),
-  'cycle-b.json': makeScript('CB', 'CycleB', ['CA']),
 }
+
+/** 夹具脚本数（FILES 的键数）；节点数断言统一引用它，避免改动夹具后漏改。 */
+const FIXTURE_COUNT = Object.keys(FILES).length
 
 let app: ElectronApplication
 let page: Page
@@ -114,6 +116,16 @@ async function hoverNode(pathName: string): Promise<void> {
   await expect(page.locator('[data-hover-card="true"]')).toBeVisible({ timeout: 8_000 })
 }
 
+/** 回到脚本页（前序用例可能停在编辑器页）。 */
+async function backToGraphPage(): Promise<void> {
+  const back = page.locator('.doc-header button', { hasText: '项目' })
+  if (await back.count() > 0) {
+    await back.click()
+  }
+  await expect(page.locator('.script-graph-panel')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('[data-graph-node="a.json"]')).toBeVisible({ timeout: 20_000 })
+}
+
 test('C1/A2：启动直接进脚本页，力导向关系图可见', async () => {
   await expect(page.locator('.project-page')).toBeVisible()
   await expect(page.locator('.script-graph-panel')).toBeVisible()
@@ -123,7 +135,7 @@ test('C1/A2：启动直接进脚本页，力导向关系图可见', async () => 
   // 默认小圆点模式；力导向布局不保证任何「同列/同层」坐标，所以只断言结构与图数据。
   await expect(page.locator('.graph-canvas')).toHaveAttribute('data-graph-mode', 'dot')
   const nodeCount = await page.locator('[data-graph-node]').count()
-  expect(nodeCount).toBe(10)
+  expect(nodeCount).toBe(FIXTURE_COUNT)
   await expect(page.locator('[data-graph-node="a.json"]')).toHaveClass(/node-dot/)
   await expect(page.locator('[data-graph-node="a.json"] .node-dot__circle')).toBeVisible()
 
@@ -416,6 +428,180 @@ test('D1/D3/D4：断连拒写、指纹过期、脏文档拒写', async () => {
     const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
     return workbench.documents.summary().dirty
   }), { timeout: 15_000 }).toBe(false)
+
+  const unexpected = rendererErrors.filter((message) => !message.includes('ws://127.0.0.1:8765'))
+  expect(unexpected).toEqual([])
+})
+
+test('A1/A6：文件夹框折叠与节点总数（空态不造假节点）', async () => {
+  await backToGraphPage()
+  // 默认 grouping=true：文件夹簇框渲染成 `.graph-lane`。
+  expect(await page.locator('.graph-lane').count()).toBeGreaterThan(0)
+  // 空态（无匹配 / 无异常）不能凭空造节点：数量必须等于夹具脚本数。
+  expect(await page.locator('[data-graph-node]').count()).toBe(FIXTURE_COUNT)
+
+  if (await page.locator('.graph-toolbar__more').count() === 0) {
+    await page.locator('.graph-toolbar button[aria-expanded]').click()
+  }
+  const laneCheck = page.locator('.graph-toolbar__more label.toolbar-check', { hasText: '文件夹框' }).locator('input')
+  await expect(laneCheck).toBeChecked()
+  await laneCheck.uncheck()
+  await expect(page.locator('.graph-lane')).toHaveCount(0)
+  // 关掉簇框不减少节点：只是不画框。
+  expect(await page.locator('[data-graph-node]').count()).toBe(FIXTURE_COUNT)
+
+  await laneCheck.check()
+  await expect(page.locator('.graph-lane').first()).toBeVisible({ timeout: 10_000 })
+})
+
+test('A8/A9/A10/A11：悬空桩、重复 id、自定义前置都照常渲染', async () => {
+  await backToGraphPage()
+  // 悬空前置（ghost）：渲染成桩元素，不静默丢弃。
+  expect(await page.locator('.graph-stub').count()).toBeGreaterThan(0)
+
+  // 重复 id（dup1/dup2 的 meta.id 都是 DUP）：两个节点都进图。
+  await expect(page.locator('[data-graph-node="dup1.json"]')).toBeVisible()
+  await expect(page.locator('[data-graph-node="dup2.json"]')).toBeVisible()
+
+  // 自定义前置（weather）：节点正常显示，不因未知类型被过滤。
+  await expect(page.locator('[data-graph-node="custom.json"]')).toBeVisible()
+
+  // DAG 不变量：图里不存在环（成环的边在索引阶段就被丢弃）。
+  const acyclic = await page.evaluate(() => {
+    const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
+    const graph = workbench.graph.current()
+    if (graph === null) {
+      return false
+    }
+    const out = new Map<string, string[]>()
+    for (const edge of graph.edges) {
+      const list = out.get(edge.from) ?? []
+      list.push(edge.to)
+      out.set(edge.from, list)
+    }
+    const reaches = (start: string, goal: string): boolean => {
+      const seen = new Set<string>([start])
+      const stack = [start]
+      while (stack.length > 0) {
+        const current = stack.pop() as string
+        for (const next of out.get(current) ?? []) {
+          if (next === goal) {
+            return true
+          }
+          if (!seen.has(next)) {
+            seen.add(next)
+            stack.push(next)
+          }
+        }
+      }
+      return false
+    }
+    return graph.edges.every((edge) => !reaches(edge.to, edge.from))
+  })
+  expect(acyclic).toBe(true)
+})
+
+test('A16/A17：dot/card 双模式共用同一批坐标', async () => {
+  await backToGraphPage()
+  const canvas = page.locator('.graph-canvas')
+  const modeButton = page.locator('.graph-toolbar .tool-button--mode')
+  const dotCount = await page.locator('[data-graph-node]').count()
+
+  await modeButton.click()
+  await expect(canvas).toHaveAttribute('data-graph-mode', 'card')
+  await expect(page.locator('[data-graph-node="a.json"]')).toHaveClass(/node-card/)
+  const cardCount = await page.locator('[data-graph-node]').count()
+  // 两种模式共用坐标：节点数必须相同，不能因为卡片更大而裁掉节点。
+  expect(cardCount).toBe(dotCount)
+
+  await modeButton.click()
+  await expect(canvas).toHaveAttribute('data-graph-mode', 'dot')
+  await expect(page.locator('[data-graph-node="a.json"]')).toHaveClass(/node-dot/)
+  expect(await page.locator('[data-graph-node]').count()).toBe(dotCount)
+})
+
+test('C11/C12/C15/D7/D8：跨页一致、四面板、刷新合并、统计与渲染一致', async () => {
+  await backToGraphPage()
+  // D8：stats.nodeCount 与真实渲染的节点数一致（夹具 10 个，未触发截断）。
+  const stats = await page.evaluate(() => {
+    const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
+    return workbench.graph.current()?.stats.nodeCount ?? -1
+  })
+  expect(stats).toBe(FIXTURE_COUNT)
+  expect(await page.locator('[data-graph-node]').count()).toBe(FIXTURE_COUNT)
+
+  // C11：图上加一条前置 → 进编辑器页同一脚本，`.requires` 里出现该目标（无第二份缓存）。
+  const target = await page.evaluate(async () => {
+    const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
+    const node = workbench.graph.current()?.nodes.find((item) => item.path === 'custom.json')
+    return workbench.mutations.mutateRequires({
+      path: 'custom.json',
+      triggerIdentity: node?.triggers[0]?.identity ?? '',
+      triggerIndex: 0,
+      requiresFingerprint: node?.triggers[0]?.requiresFingerprint ?? '',
+      operation: 'add',
+      index: 1,
+      requirementType: 'script_played',
+      targetScriptId: 'D',
+    })
+  })
+  expect(target.ok).toBe(true)
+  // custom.json 原有 1 条自定义前置（weather，不计入内置前置数），加 1 条内置前置后为 1。
+  await expect(page.locator('[data-graph-node="custom.json"]')).toHaveAttribute('aria-label', /1 条前置/, { timeout: 20_000 })
+  await page.locator('[data-graph-node="custom.json"]').dblclick()
+  await expect(page.locator('.document-page')).toBeVisible({ timeout: 20_000 })
+  await page.locator('#selection-tab-trigger').click()
+  await page.locator('.trigger-item').first().click()
+  const requires = page.locator('.requires')
+  await expect(requires).toContainText('前置（2）', { timeout: 20_000 })
+
+  // C12：编辑器页改回（删掉刚加的那条内置前置）→ 回脚本页，边数与磁盘一致，无需手动刷新。
+  // 只删新增的那条（最后一条）；自定义 weather 前置保留。
+  await requires.locator('.requires__button', { hasText: '删除' }).last().click()
+  await requires.locator('.requires__button', { hasText: '确认删除' }).click()
+  await expect.poll(async () => {
+    const file = await fakeFile('custom.json')
+    const list = ((file?.meta as { triggers?: Array<{ requires?: unknown[] }> }).triggers ?? [])[0]?.requires ?? []
+    return list.length
+  }, { timeout: 20_000 }).toBe(1)
+  await page.locator('.doc-header button', { hasText: '保存' }).click()
+  await expect(page.locator('.doc-header')).toContainText('已保存', { timeout: 20_000 })
+
+  // D7：连续 commit + save 5 次，图服务不应每次都重扫（`script.list` 是唯一扫描入口）。
+  const before = await page.evaluate(() => {
+    const api = (window as unknown as { __fakeWebUi: { requestCount(type: string): number } }).__fakeWebUi
+    return api.requestCount('script.list')
+  })
+  for (let index = 0; index < 5; index += 1) {
+    await page.evaluate(async (step: number) => {
+      const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
+      workbench.documents.commit({ kind: 'meta.set', key: 'description', value: `d${step}` })
+      await workbench.documents.save()
+    }, index)
+  }
+  const after = await page.evaluate(() => {
+    const api = (window as unknown as { __fakeWebUi: { requestCount(type: string): number } }).__fakeWebUi
+    return api.requestCount('script.list')
+  })
+  expect(after - before).toBeLessThanOrEqual(2)
+
+  await page.locator('.doc-header button', { hasText: '项目' }).click()
+  await expect(page.locator('.script-graph-panel')).toBeVisible({ timeout: 20_000 })
+  // 删掉内置前置后不再有边（weather 是自定义前置，本来就不建边），与磁盘一致。
+  expect(await edgeCountTo('custom.json')).toBe(0)
+  const disk = await fakeFile('custom.json')
+  const diskRequires = ((disk?.meta as { triggers?: Array<{ requires?: unknown[] }> }).triggers ?? [])[0]?.requires ?? []
+  expect(diskRequires.length).toBe(1)
+
+  // C15：四个面板容器同时存在（跨页布局一致）。
+  await expect(page.locator('.script-graph-panel')).toBeVisible()
+  await page.locator('[data-graph-node="a.json"]').dblclick()
+  await expect(page.locator('.document-page')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.timeline-panel')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('[data-focus-scope="panel:core.clip-effects:clip.effects"]')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('[data-focus-scope="panel:core.selection-properties:selection.properties"]')).toBeVisible({ timeout: 20_000 })
+  await page.locator('.doc-header button', { hasText: '项目' }).click()
+  await expect(page.locator('.script-graph-panel')).toBeVisible({ timeout: 20_000 })
 
   const unexpected = rendererErrors.filter((message) => !message.includes('ws://127.0.0.1:8765'))
   expect(unexpected).toEqual([])
