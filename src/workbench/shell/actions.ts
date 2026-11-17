@@ -20,6 +20,8 @@ export interface ShellActionsDeps {
   preferences: PreferencesApi
   status: StatusApi
   i18n: I18nApi
+  /** 工作区根变更后重扫（脚本页刷新）。 */
+  onWorkspaceChanged?: () => void
 }
 
 /** 记录最近项目（最多 20，去重，倒序）。 */
@@ -77,14 +79,28 @@ export class ShellActions {
     this.deps.router.navigate('document', { docId: this.deps.documents.summary().docId ?? '' })
   }
 
-  /** 打开文件夹并记录（不扫描）。 */
+  /**
+   * 打开工作区目录：记最近项目 + 设为当前工作区根。
+   *
+   * 工作区 = `<游戏根目录>/immersive_cinematics`（含 `scripts/` 与 `resource/`）。
+   * 用户选游戏根目录或 `immersive_cinematics` 本身都可以，主进程会归一化。
+   */
   async openFolder(): Promise<void> {
     const path = await this.deps.files.openFolder()
     if (path === null) {
       return
     }
     recordRecent(this.deps.preferences, { path, name: baseName(path), kind: 'folder' })
-    this.deps.status.notify(this.deps.i18n.t('project.folderRecorded'))
+    try {
+      const root = await this.deps.host.workspace.setRoot(path)
+      this.deps.status.notify(this.deps.i18n.t('project.workspaceSet', { path: root }))
+      this.deps.onWorkspaceChanged?.()
+    } catch (error) {
+      this.deps.status.notify(
+        this.deps.i18n.t('project.workspaceFailed', { reason: error instanceof Error ? error.message : String(error) }),
+        'error',
+      )
+    }
   }
 
   /** 从磁盘重载（二次确认）。 */

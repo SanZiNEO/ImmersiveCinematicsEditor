@@ -74,6 +74,18 @@ const workbench = {
     revealUserData: () => ipcRenderer.send('storage:reveal'),
   },
 
+  // 工作区：直接读写 <gameDir>/immersive_cinematics（不经模组）。
+  workspace: {
+    root: () => ipcRenderer.invoke('workspace:root'),
+    setRoot: (path) => ipcRenderer.invoke('workspace:set-root', path),
+    listScripts: () => ipcRenderer.invoke('workspace:list-scripts'),
+    readScript: (path) => ipcRenderer.invoke('workspace:read-script', path),
+    writeScript: (path, text) => ipcRenderer.invoke('workspace:write-script', path, text),
+    removeScript: (path) => ipcRenderer.invoke('workspace:remove-script', path),
+    scriptStamps: () => ipcRenderer.invoke('workspace:script-stamps'),
+    scriptExists: (path) => ipcRenderer.invoke('workspace:script-exists', path),
+  },
+
   // WebUI 握手 token：主进程读 mod 写的 token 文件；每次连接都取新值。
   webuiToken: () => ipcRenderer.sendSync('webui:token'),
 }

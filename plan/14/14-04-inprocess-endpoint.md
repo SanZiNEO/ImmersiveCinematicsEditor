@@ -24,7 +24,7 @@
 - 推送分散在 `WebEditorApi`/`PreviewStreamer`/`WebPreviewScreen`，没有统一的 `EditorPush`。
 - `hello_ack` 当前没有 schemaHash/能力位。
 - `editor.*` 没有统一 ack；关键命令失败可能是超时/静默。
-- `script.save`/`script.validate`/`schema.get`/`script.list`/`script.load`/`editor.pushScript`/`editor.seek`/`editor.play`/飞控等由同一路由处理。
+- `script.validate`/`schema.get`/`editor.pushScript`/`editor.seek`/`editor.play`/飞控等由同一路由处理（`script.list/load/save` 是编辑器直读工作区，不经该路由）。
 - 节流：`playback.state` 50ms、`flight.state` 100ms、`preview.stats` 1000ms（以现有实现为准）。
 
 ### 2.2 AUI 侧
@@ -121,7 +121,7 @@ EditorSessionApi.detach(endpoint, reason) -> 只清本端点
 ### 4.2 输出
 
 - `AuiEndpoint`/`AuiPush`/`AuiSession` 可用。
-- 同一套消息往返：`schema.get`、`script.list/load/save/validate`、`editor.seek/play/pause/stop`、飞控。
+- 同一套消息往返：`schema.get`、`script.validate`、`editor.seek/play/pause/stop`、飞控。脚本文件由编辑器直接读写工作区，两条通路都不经过它。
 - 关键命令 ack 可区分成功/失败。
 - 能力位/schemaHash 真实可用。
 - 无 8765、无 WebSocket、无本地回环。
@@ -141,11 +141,11 @@ EditorSessionApi.detach(endpoint, reason) -> 只清本端点
 
 **正例 A**：AUI 打开 → `attach` → `hello_ack` 带 schemaHash/capabilities；无 8765 监听。
 
-**正例 B**：`schema.get`/`script.list`/`script.load` 返回与 WebUI 相同的字段/结构；AUI 不额外转换字段名。
+**正例 B**：`schema.get` 返回与 WebUI 相同的字段/结构；AUI 不额外转换字段名。脚本文件由编辑器直接读工作区，不经端点。
 
 **正例 C**：`editor.seek`/`play`/`pause`/`stop` 返回 ack；失败有 reason；AUI 状态栏显示。
 
-**正例 D**：`script.save` 成功有 ack；磁盘文件可见；重开 AUI 再 load 一致。
+**正例 D**：编辑器直写工作区文件成功；磁盘文件可见；重开 AUI 再读一致。
 
 **正例 E**：`flight.state` 100ms 节流；`playback.state` 50ms；AUI 不因高频推送卡死。
 

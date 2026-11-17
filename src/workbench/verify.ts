@@ -7,7 +7,7 @@
  *
  * 覆盖：
  * - 插件内核：manifest 校验 / 重复 ID / 依赖缺失与环 / 拓扑顺序 / activate 失败隔离 / 七类贡献提交；
- * - 布局：树校验、比例归一、坏 JSON 回退与备份、原子写与 `.bak`、服务事务 / 预设 / 历史 / 抽屉 group；
+ * - 布局：树校验、比例归一、坏 JSON 回退与备份、原子写（不留 .bak）、服务事务 / 预设 / 历史 / 抽屉 group；
  * - 主题：颜色字面量、对比度、核心 token 继承、导入拒绝、重复 ID、插件主题回滚、变量写入；
  * - 偏好：默认合并、未知键保留、错类型回默认、分项重置、最近项目 20 条 / 去重 / missing、插件段；
  * - 命令 / 快捷键 / 焦点：冲突、IME、输入框白名单、覆盖冲突、enabled 抛错按 disabled、F6 顺序；
@@ -382,7 +382,7 @@ async function main(): Promise<void> {
     const defaults = await import('./layout/defaultLayouts.ts')
     const validateModule = await import('./layout/validate.ts')
     const { LayoutService } = await import('./layout/LayoutService.ts')
-    const { LayoutPersistence, LAYOUT_BACKUP_NAME, LAYOUT_FILE_NAME, LAYOUT_TEMP_NAME } = await import('./layout/persist.ts')
+    const { LayoutPersistence, LAYOUT_FILE_NAME, LAYOUT_TEMP_NAME } = await import('./layout/persist.ts')
     const { PanelRegistryImpl } = await import('./kernel/CollectionRegistries.ts')
     const { DiagnosticsStore } = await import('./kernel/DiagnosticsStore.ts')
 
@@ -527,7 +527,8 @@ async function main(): Promise<void> {
     await persistence.save(defaultsFile)
     check('02 保存走 tmp → 正式文件', storage.order.includes(LAYOUT_TEMP_NAME) && storage.order.includes(LAYOUT_FILE_NAME), storage.order)
     await persistence.save(defaultsFile)
-    check('02 再次保存保留上一版 .bak', storage.files.has(LAYOUT_BACKUP_NAME), [...storage.files.keys()])
+    check('02 保存不留 .bak（版本历史交给 git）',
+      [...storage.files.keys()].every((name) => !name.endsWith('.bak')), [...storage.files.keys()])
     const reloaded = await persistence.load()
     check('02 保存后可读回', reloaded !== null && reloaded.version === 1)
 

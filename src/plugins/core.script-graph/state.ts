@@ -687,12 +687,8 @@ export class GraphController {
 
   private async fetchGraph(service: GraphServicePort, kind: LoadKind): Promise<void> {
     try {
-      if (kind === 'auto' && !service.connected()) {
-        this.state.connected = false
-        this.state.stale = true
-        this.state.error = '未连接模组：启动游戏内 WebUI 服务后才能刷新脚本关系图'
-        return
-      }
+      // 脚本来自工作区文件，与游戏是否运行无关：`connected()` 只影响预览，
+      // 因此自动刷新不再因「未连接模组」提前返回（否则文件改了图也不会更新）。
       const data = kind === 'manual' ? await service.refresh() : await service.snapshot()
       this.applyGraph(data)
     } catch (error) {

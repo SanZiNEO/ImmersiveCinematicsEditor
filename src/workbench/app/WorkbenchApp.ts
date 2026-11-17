@@ -83,7 +83,8 @@ import { DialogStackImpl } from './DialogStackImpl.ts'
 import { PluginHostImpl } from './PluginHostImpl.ts'
 import { ScriptGraphService } from './ScriptGraphService.ts'
 import { ScriptMutationService } from './ScriptMutationService.ts'
-import { WebUiScriptSource } from './WebUiScriptSource.ts'
+import { WorkspaceDocTransport } from './WorkspaceDocTransport.ts'
+import { WorkspaceScriptSource } from './WorkspaceScriptSource.ts'
 import { GraphLayoutStore } from '../../core/graph/layoutStore.ts'
 import { ShellActions } from '../shell/actions.ts'
 import { WEBUI_MESSAGE } from '../host/webui/protocol.ts'
@@ -158,6 +159,10 @@ export class WorkbenchApp {
   readonly plugins: PluginRegistry
   readonly transport: WebUiTransport | null
   readonly client: WebUiClient | null
+  /** 脚本来源：直接读写工作区（不经模组）。 */
+  readonly scriptSource: WorkspaceScriptSource
+  /** 文档传输：文件走工作区，预览/播放走模组。 */
+  readonly docTransport: DocTransport & ValidationTransport
 
   private readonly serviceRegistry: ServiceRegistryImpl
 
@@ -242,12 +247,20 @@ export class WorkbenchApp {
     const client = new WebUiClient({ token: () => token })
     this.client = client
     this.transport = new WebUiTransport({ client })
-    const scriptSource = new WebUiScriptSource(client)
+    // 脚本读写直接走工作区（`<gameDir>/immersive_cinematics/scripts`），不经模组：
+    // 一次目录扫描 + mtime 增量，10 万脚本也不必等 N 次往返。
+    const scriptSource = new WorkspaceScriptSource({ workspace: this.host.workspace })
+    this.scriptSource = scriptSource
 
     this.graphLayout = new GraphLayoutStore({ storage: this.host.storage })
     this.graph = new ScriptGraphService({ source: scriptSource, catalog: this.catalog })
 
-    const liveTransport: DocTransport & ValidationTransport = this.transport
+    // 文档 IO：文件走工作区，播放/预览走模组（游戏没运行就只读写文件）。
+    const liveTransport: DocTransport & ValidationTransport = new WorkspaceDocTransport({
+      workspace: this.host.workspace,
+      preview: this.transport,
+    })
+    this.docTransport = liveTransport
     this.documents = new DocumentServiceImpl({
       catalog: this.catalog,
       transport: liveTransport,
@@ -280,6 +293,13 @@ export class WorkbenchApp {
       preferences: this.preferences,
       status: this.status,
       i18n: this.i18n,
+      onWorkspaceChanged: () => {
+        // 换工作区后：清缓存、重新探测、重扫整图（新目录是另一批脚本）。
+        scriptSource.clear()
+        void scriptSource.probe()
+        this.graphLayout.resetLayout().catch(() => undefined)
+        void this.graph.refresh().catch(() => undefined)
+      },
     })
     this.pluginHost = new PluginHostImpl({
       diagnostics: this.diagnostics,

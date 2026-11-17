@@ -16,6 +16,37 @@ import type {
   ScriptSource,
 } from '../api/graph.ts'
 
+/** 扫描并发度：文件 I/O 为主，16 路足够且不会让事件循环长时间饥饿。 */
+const SCAN_CONCURRENCY = 16
+
+/**
+ * 有界并发 map：保持输入顺序，最多 `limit` 个任务同时在跑。
+ *
+ * 不引入第三方依赖；用「共享游标 + N 个 worker」实现，避免一次性
+ * `Promise.all` 把 10 万个读请求全部压进内存。
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  const width = Math.max(1, Math.min(limit, items.length))
+  let cursor = 0
+  const run = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor
+      cursor += 1
+      if (index >= items.length) {
+        return
+      }
+      results[index] = await worker(items[index], index)
+    }
+  }
+  await Promise.all(Array.from({ length: width }, () => run()))
+  return results
+}
+
 export interface ScriptGraphServiceOptions {
   source: ScriptSource
   catalog: CatalogIndex
@@ -111,17 +142,18 @@ export class ScriptGraphService implements GraphServicePort {
         .filter((path): path is string => path !== null))]
         .sort((left, right) => left.localeCompare(right))
 
-      const files: GraphScriptFile[] = []
-      for (const path of normalized) {
+      // 有界并发：文件读取是 I/O，串行会随脚本数线性变慢
+      // （10 万脚本 × 单次往返 ≈ 分钟级）。并发 16 足够打满磁盘而不会压垮事件循环。
+      const files = await mapWithConcurrency(normalized, SCAN_CONCURRENCY, async (path) => {
         try {
-          files.push({ path, doc: await this.source.load(path) })
+          return { path, doc: await this.source.load(path) } as GraphScriptFile
         } catch (error) {
-          files.push({
+          return {
             path,
             error: error instanceof Error ? error.message : String(error),
-          })
+          } as GraphScriptFile
         }
-      }
+      })
 
       this.versionNumber += 1
       const data = buildGraph(files, {

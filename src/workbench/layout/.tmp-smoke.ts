@@ -214,7 +214,7 @@ await persistence.save(base)
 check('persist tmp', storage.files.get('layout.json.tmp') === serializeLayoutFile(base))
 check('persist main', storage.files.get('layout.json') === serializeLayoutFile(base))
 await persistence.save(base)
-check('persist bak written', storage.files.has('layout.json.bak'))
+check('persist 不留 bak', !storage.files.has('layout.json.bak'))
 
 const bigGroup: GroupNode = { type: 'group', id: 'big', panels: [], visible: true, collapsed: false }
 for (let index = 0; index < 12000; index += 1) {

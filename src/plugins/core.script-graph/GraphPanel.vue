@@ -102,7 +102,7 @@ onBeforeUnmount(() => {
 
     <div v-if="hasBanners" class="graph-banners">
       <p v-if="!state.connected" class="banner banner--warn" role="status">
-        未连接模组：启动游戏内 WebUI 服务后可查看脚本关系。本地脚本仍可从顶栏打开。
+        工作区不可用：请先选择游戏目录（immersive_cinematics）。
         <span v-if="state.stale">当前图已过期。</span>
       </p>
       <p v-if="showErrorBanner" class="banner banner--error" role="alert">

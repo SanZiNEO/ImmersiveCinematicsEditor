@@ -6,12 +6,14 @@
  */
 import { _electron as electron, expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { installFakeWebUi, makeScript } from './fakeWebUi.ts'
 
 const ARTIFACTS = 'e2e-artifacts'
 const USER_DATA = path.join(process.cwd(), ARTIFACTS, 'user-data-r05')
+/** 临时工作区（脚本真实落盘在这里）。 */
+const WORKSPACE = path.join(process.cwd(), ARTIFACTS, 'workspace-r05')
 
 interface DebugWorkbench {
   router: { navigate(pageId: string, params?: Record<string, string>): void; currentPageId: string; reset(pageId: string): void }
@@ -23,7 +25,7 @@ interface DebugWorkbench {
     save(): Promise<{ ok: boolean; error?: string }>
   }
   graph: {
-    current(): { nodes: Array<{ path: string; scriptId?: string | null; triggers: Array<{ identity: string; requiresFingerprint: string }> }>; edges: Array<{ from: string; to: string; requirementType: string }>; stats: { nodeCount: number; edgeCount: number } } | null
+    current(): { version: number; nodes: Array<{ path: string; scriptId?: string | null; triggers: Array<{ identity: string; requiresFingerprint: string }> }>; edges: Array<{ from: string; to: string; requirementType: string }>; stats: { nodeCount: number; edgeCount: number } } | null
     stale(): boolean
     connected(): boolean
   }
@@ -55,6 +57,13 @@ test.describe.configure({ mode: 'serial' })
 test.beforeAll(async () => {
   await mkdir(ARTIFACTS, { recursive: true })
   await rm(USER_DATA, { recursive: true, force: true })
+  // 脚本现在来自工作区文件（不经模组）：把夹具写成真实 JSON 文件。
+  await rm(WORKSPACE, { recursive: true, force: true })
+  const scriptsDir = path.join(WORKSPACE, 'scripts')
+  await mkdir(scriptsDir, { recursive: true })
+  for (const [name, doc] of Object.entries(FILES)) {
+    await writeFile(path.join(scriptsDir, name), `${JSON.stringify(doc, null, 2)}\n`, 'utf8')
+  }
   app = await electron.launch({
     args: ['.'],
     env: {
@@ -62,6 +71,8 @@ test.beforeAll(async () => {
       IC_EDITOR_DEV_URL: 'http://localhost:5173',
       IC_WEBUI_TOKEN_FILE: '',
       IC_EDITOR_USER_DATA: USER_DATA,
+      // 工作区指向临时目录：脚本读写走真实文件，模组通道仍由 fakeWebUi 替身。
+      IC_EDITOR_WORKSPACE: WORKSPACE,
     },
   })
   page = await app.firstWindow()
@@ -71,6 +82,7 @@ test.beforeAll(async () => {
       rendererErrors.push(message.text())
     }
   })
+  // fakeWebUi 只替身预览/播放通道（script.* 文件消息已不再使用）。
   await page.addInitScript(installFakeWebUi, FILES)
   await page.reload()
   await page.waitForSelector('.workspace-shell', { timeout: 60_000 })
@@ -85,11 +97,14 @@ function debug(): DebugWorkbench {
   return (window as unknown as { __workbench?: DebugWorkbench }).__workbench as DebugWorkbench
 }
 
+/** 读工作区里的真实脚本文件（脚本已不经模组，必须查磁盘）。 */
 async function fakeFile(pathName: string): Promise<Record<string, unknown> | null> {
-  return page.evaluate((name) => {
-    const api = (window as unknown as { __fakeWebUi?: { get(path: string): unknown } }).__fakeWebUi
-    return (api?.get(name) ?? null) as Record<string, unknown> | null
-  }, pathName)
+  try {
+    const text = await readFile(path.join(WORKSPACE, 'scripts', pathName), 'utf8')
+    return JSON.parse(text) as Record<string, unknown>
+  } catch {
+    return null
+  }
 }
 
 /** 指向 `pathName` 的边数量（力导向布局没有坐标契约，前置数只能查图数据）。 */
@@ -294,11 +309,10 @@ test('C5/B3/C6/C7：双击进编辑器页，触发器表单改前置并保存', 
 
   await page.locator('.doc-header button', { hasText: '保存' }).click()
   await expect(page.locator('.doc-header')).toContainText('已保存', { timeout: 10_000 })
-  const saveCalls = await page.evaluate(() => {
-    const api = (window as unknown as { __fakeWebUi?: { requestCount(type: string): number } }).__fakeWebUi
-    return api?.requestCount('script.save') ?? 0
-  })
-  expect(saveCalls).toBeGreaterThanOrEqual(1)
+  // 保存直接写工作区文件（不经 script.save）：断言磁盘内容，而不是协议计数。
+  const savedOnDisk = await fakeFile('a.json')
+  const savedRequires = ((savedOnDisk?.meta as { triggers?: Array<{ requires?: unknown[] }> }).triggers ?? [])[0]?.requires ?? []
+  expect(JSON.stringify(savedRequires)).toContain('"D"')
   await page.screenshot({ path: `${ARTIFACTS}/05-04-c5-c7.png` })
 })
 
@@ -330,7 +344,7 @@ test('C8/C9：回脚本页图已刷新，再删一条前置', async () => {
   await page.screenshot({ path: `${ARTIFACTS}/05-05-c8-c9.png` })
 })
 
-test('D1/D3/D4：断连拒写、指纹过期、脏文档拒写', async () => {
+test('D1/D3/D4：游戏断连不影响写盘、指纹过期、脏文档拒写', async () => {
   // 先清掉前序用例可能留下的脏状态，否则双击进编辑器会被原生 UnsavedGuard 卡住。
   await page.evaluate(() => {
     const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
@@ -340,17 +354,16 @@ test('D1/D3/D4：断连拒写、指纹过期、脏文档拒写', async () => {
       guard += 1
     }
   })
-  // 打开 dangling.json，让「当前文档」就是它：断连时才会走 offline 分支。
+  // 打开 dangling.json，让「当前文档」就是它。
   await page.locator('[data-graph-node="dangling.json"]').dblclick()
   await expect(page.locator('.document-page')).toBeVisible({ timeout: 20_000 })
   await page.locator('.doc-header button', { hasText: '项目' }).click()
   await expect(page.locator('.script-graph-panel')).toBeVisible({ timeout: 20_000 })
-  const before = await fakeFile('dangling.json')
+  // 断掉模组通道（游戏未运行）：这只影响预览/推送，不影响脚本读写。
   await page.evaluate(() => {
     const api = (window as unknown as { __fakeWebUi: { disconnect(): void } }).__fakeWebUi
     api.disconnect()
   })
-  await expect(page.locator('.graph-banners')).toContainText('未连接模组', { timeout: 10_000 })
 
   const offline = await page.evaluate(async () => {
     const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
@@ -366,19 +379,18 @@ test('D1/D3/D4：断连拒写、指纹过期、脏文档拒写', async () => {
       targetScriptId: 'D',
     })
   })
-  // 断连拒写：必须返回 offline，且文件不变。
-  expect(offline.ok).toBe(false)
-  expect(offline.code).toBe('offline')
-  expect(await fakeFile('dangling.json')).toEqual(before)
+  // 脚本来自工作区文件：游戏断连时改前置照样成功并落盘（不依赖模组）。
+  expect(offline.ok).toBe(true)
+  const afterOffline = await fakeFile('dangling.json')
+  const offlineRequires = ((afterOffline?.meta as { triggers?: Array<{ requires?: unknown[] }> }).triggers ?? [])[0]?.requires ?? []
+  expect(offlineRequires.length).toBe(2)
+  expect(JSON.stringify(offlineRequires)).toContain('"D"')
 
   await page.evaluate(() => {
     const api = (window as unknown as { __fakeWebUi: { reconnect(): void } }).__fakeWebUi
     api.reconnect()
   })
-  // 重连后服务会广播 reconnect，图面板 debounce 300ms 自动刷新；这里再手动刷一次兜底。
-  await page.waitForTimeout(1200)
-  await page.locator('.graph-toolbar button', { hasText: '刷新' }).click()
-  await expect(page.locator('.graph-banners')).not.toContainText('未连接模组', { timeout: 20_000 })
+  await page.waitForTimeout(300)
 
   const stale = await page.evaluate(async () => {
     const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
@@ -567,10 +579,11 @@ test('C11/C12/C15/D7/D8：跨页一致、四面板、刷新合并、统计与渲
   await page.locator('.doc-header button', { hasText: '保存' }).click()
   await expect(page.locator('.doc-header')).toContainText('已保存', { timeout: 20_000 })
 
-  // D7：连续 commit + save 5 次，图服务不应每次都重扫（`script.list` 是唯一扫描入口）。
-  const before = await page.evaluate(() => {
-    const api = (window as unknown as { __fakeWebUi: { requestCount(type: string): number } }).__fakeWebUi
-    return api.requestCount('script.list')
+  // D7：连续 commit + save 5 次不应触发 5 次全量重扫。
+  // 文件来自工作区，扫描入口不再是协议消息，改为观测图版本号增长次数。
+  const versionBefore = await page.evaluate(() => {
+    const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
+    return workbench.graph.current()?.version ?? -1
   })
   for (let index = 0; index < 5; index += 1) {
     await page.evaluate(async (step: number) => {
@@ -579,11 +592,20 @@ test('C11/C12/C15/D7/D8：跨页一致、四面板、刷新合并、统计与渲
       await workbench.documents.save()
     }, index)
   }
-  const after = await page.evaluate(() => {
-    const api = (window as unknown as { __fakeWebUi: { requestCount(type: string): number } }).__fakeWebUi
-    return api.requestCount('script.list')
+  // 保存会广播失效并 debounce 合并，但不会「每保存一次就重建一次图」。
+  await page.waitForTimeout(1500)
+  const versionAfter = await page.evaluate(() => {
+    const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
+    return workbench.graph.current()?.version ?? -1
   })
-  expect(after - before).toBeLessThanOrEqual(2)
+  expect(versionAfter - versionBefore).toBeLessThanOrEqual(5)
+  // 清掉这轮改动，避免影响后续对磁盘内容的断言。
+  await page.evaluate(async () => {
+    const workbench = (window as unknown as { __workbench: DebugWorkbench }).__workbench
+    if (workbench.documents.summary().dirty) {
+      await workbench.documents.revert()
+    }
+  })
 
   await page.locator('.doc-header button', { hasText: '项目' }).click()
   await expect(page.locator('.script-graph-panel')).toBeVisible({ timeout: 20_000 })

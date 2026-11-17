@@ -143,18 +143,17 @@ function clampInside(bounds, area) {
   }
 }
 
+/**
+ * 原子写：tmp + rename。
+ *
+ * **不生成 `.bak`**：工作区脚本可能有上万个，逐个备份既浪费空间又拖慢写入；
+ * 版本历史交给 git（工作区本身就是仓库），损坏文件另有 `quarantineCorrupt` 单独处理。
+ */
 function atomicWriteText(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
   try {
     fs.writeFileSync(tmp, text, 'utf8')
-    if (fs.existsSync(file)) {
-      try {
-        fs.copyFileSync(file, `${file}.bak`)
-      } catch {
-        // .bak 只是诊断备份，失败不阻断写入。
-      }
-    }
     fs.renameSync(tmp, file)
   } catch (error) {
     try {
@@ -168,6 +167,116 @@ function atomicWriteText(file, text) {
 
 function writeJsonAtomic(file, value) {
   atomicWriteText(file, JSON.stringify(value, null, 2))
+}
+
+// ── 工作区（<gameDir>/immersive_cinematics）───────────────
+//
+// 编辑器直接读写这里的脚本与资源，不经模组 WebSocket：
+// 一次目录扫描拿全量路径，按 mtime+size 做增量解析（10 万脚本可用）。
+// 注意：脚本写入不生成 .bak（脚本是用户作品，不引入备份文件）。
+
+const WORKSPACE_DIR_NAME = 'immersive_cinematics'
+const WORKSPACE_SCRIPTS_DIR = 'scripts'
+const WORKSPACE_MARKER_FILE = 'workspace.json'
+
+/** 工作区根：用户显式设置过的优先，其次猜游戏目录旁的默认位置。 */
+function workspaceRootFile() {
+  return path.join(userDataDir(), WORKSPACE_MARKER_FILE)
+}
+
+/** 工作区根：显式设置过的优先；E2E 可用 `IC_EDITOR_WORKSPACE` 直接指定。 */
+function readWorkspaceRoot() {
+  const override = process.env.IC_EDITOR_WORKSPACE
+  if (typeof override === 'string' && override.trim() !== '') {
+    return override.trim()
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(workspaceRootFile(), 'utf8'))
+    const root = typeof raw?.root === 'string' ? raw.root.trim() : ''
+    return root === '' ? null : root
+  } catch {
+    return null
+  }
+}
+
+function scriptsDirOf(root) {
+  return path.join(root, WORKSPACE_SCRIPTS_DIR)
+}
+
+/** 归一化脚本相对路径：只接受 `scripts/` 下的 .json，拒绝绝对路径与 `..`。 */
+function normalizeScriptRelative(relativePath) {
+  if (typeof relativePath !== 'string') return null
+  const raw = relativePath.replace(/\\/g, '/').trim()
+  if (raw === '' || raw.length > 512) return null
+  if (!raw.toLowerCase().endsWith('.json')) return null
+  const segments = raw.split('/')
+  for (const segment of segments) {
+    if (segment === '' || segment === '.' || segment === '..') return null
+    if (/^[a-zA-Z]:/.test(segment)) return null
+  }
+  return segments.join('/')
+}
+
+function scriptAbsolutePath(root, relativePath) {
+  const normalized = normalizeScriptRelative(relativePath)
+  if (normalized === null) throw new Error(`工作区: 非法脚本路径 ${String(relativePath)}`)
+  const full = path.join(scriptsDirOf(root), ...normalized.split('/'))
+  // 二次防线：拼出来的路径必须仍在 scripts/ 下。
+  const base = path.resolve(scriptsDirOf(root))
+  if (!path.resolve(full).startsWith(base + path.sep) && path.resolve(full) !== base) {
+    throw new Error(`工作区: 路径越界 ${normalized}`)
+  }
+  return full
+}
+
+/** 递归列出脚本相对路径（跳过隐藏目录与 .bak/.tmp）。 */
+function listScriptFiles(root) {
+  const base = scriptsDirOf(root)
+  const out = []
+  const walk = (dir, prefix) => {
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const name = entry.name
+      if (name.startsWith('.')) continue
+      const relative = prefix === '' ? name : `${prefix}/${name}`
+      if (entry.isDirectory()) {
+        walk(path.join(dir, name), relative)
+        continue
+      }
+      if (!entry.isFile()) continue
+      if (!name.toLowerCase().endsWith('.json')) continue
+      if (name.endsWith('.bak') || name.includes('.tmp-')) continue
+      out.push(relative)
+    }
+  }
+  walk(base, '')
+  out.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+  return out
+}
+
+/** 脚本指纹（`mtime:size`）；增量扫描用。 */
+function scriptStamps(root) {
+  const stamps = {}
+  for (const relative of listScriptFiles(root)) {
+    try {
+      const stat = fs.statSync(scriptAbsolutePath(root, relative))
+      stamps[relative] = `${Math.round(stat.mtimeMs)}:${stat.size}`
+    } catch {
+      // 扫描与 stat 之间被删掉：当作不存在，下次扫描自然消失。
+    }
+  }
+  return stamps
+}
+
+function requireWorkspaceRoot() {
+  const root = readWorkspaceRoot()
+  if (root === null) throw new Error('工作区未设置：请先选择游戏目录')
+  return root
 }
 
 /** 坏文件另存一份（按内容 hash 去重），原文件保留给上层决定如何回退。 */
@@ -1120,7 +1229,7 @@ function registerIpcHandlers() {
     applyApplicationMenu()
   })
 
-  // ── storage（原子写 + .bak） ─────────────────────────────
+  // ── storage（原子写，不留 .bak）─────────────────────────
   handleMain('storage:read', async (name) => {
     const normalized = normalizeStorageName(name)
     if (normalized === null) throw new Error(`storage: 非法文件名 ${String(name)}`)
@@ -1174,6 +1283,77 @@ function registerIpcHandlers() {
 
   onMain('storage:reveal', () => {
     shell.openPath(userDataDir()).catch((error) => console.error('[storage] 打开 userData 失败', error))
+  })
+
+  // ── 工作区（脚本/资源直读直写）────────────────────────────
+  handleMain('workspace:root', async () => readWorkspaceRoot())
+
+  handleMain('workspace:set-root', async (target) => {
+    if (typeof target !== 'string' || !path.isAbsolute(target)) {
+      throw new Error('工作区: 必须是绝对路径')
+    }
+    // 接受两种选择：`immersive_cinematics` 本身，或它所在的那一层目录。
+    const direct = target
+    const nested = path.join(target, WORKSPACE_DIR_NAME)
+    const root = fs.existsSync(scriptsDirOf(direct)) ? direct
+      : fs.existsSync(scriptsDirOf(nested)) ? nested
+        : direct
+    fs.mkdirSync(scriptsDirOf(root), { recursive: true })
+    atomicWriteText(workspaceRootFile(), JSON.stringify({ root }, null, 2))
+    return root
+  })
+
+  handleMain('workspace:list-scripts', async () => listScriptFiles(requireWorkspaceRoot()))
+
+  handleMain('workspace:read-script', async (relativePath) => {
+    const file = scriptAbsolutePath(requireWorkspaceRoot(), relativePath)
+    try {
+      const text = await fs.promises.readFile(file, 'utf8')
+      const stat = await fs.promises.stat(file)
+      // 指纹随内容一起返回：与 `scriptStamps()` 同格式，上层才能判断「没变」。
+      return { text, stamp: `${Math.round(stat.mtimeMs)}:${stat.size}` }
+    } catch (error) {
+      if (error && error.code === 'ENOENT') return null
+      throw error
+    }
+  })
+
+  handleMain('workspace:write-script', async (relativePath, text) => {
+    if (typeof text !== 'string') throw new Error('工作区: 内容必须是字符串')
+    const file = scriptAbsolutePath(requireWorkspaceRoot(), relativePath)
+    // 脚本是用户作品：原子写但不留 .bak。
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+    try {
+      await fs.promises.writeFile(tmp, text, 'utf8')
+      await fs.promises.rename(tmp, file)
+    } catch (error) {
+      try {
+        await fs.promises.unlink(tmp)
+      } catch {
+        // ignore
+      }
+      throw error
+    }
+  })
+
+  handleMain('workspace:remove-script', async (relativePath) => {
+    const file = scriptAbsolutePath(requireWorkspaceRoot(), relativePath)
+    try {
+      await fs.promises.unlink(file)
+    } catch (error) {
+      if (error && error.code !== 'ENOENT') throw error
+    }
+  })
+
+  handleMain('workspace:script-stamps', async () => scriptStamps(requireWorkspaceRoot()))
+
+  handleMain('workspace:script-exists', async (relativePath) => {
+    try {
+      return fs.existsSync(scriptAbsolutePath(requireWorkspaceRoot(), relativePath))
+    } catch {
+      return false
+    }
   })
 
   // ── 系统主题变化（nativeTheme → renderer） ────────────────

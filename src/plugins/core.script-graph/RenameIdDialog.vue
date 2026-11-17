@@ -70,7 +70,7 @@ async function apply(): Promise<void> {
       preview.value = null
       const parts = [mutationErrorText(result.code, result.message)]
       if (!result.rolledBack) {
-        parts.push('回滚未完成，请检查各脚本同目录的 .bak 文件')
+        parts.push('回滚未完成，请检查各脚本文件当前内容')
       }
       if (result.failedPaths !== undefined && result.failedPaths.length > 0) {
         parts.push(`失败文件：${result.failedPaths.join('、')}`)
@@ -151,7 +151,7 @@ onMounted(() => {
         </p>
 
         <p class="dialog-hint">
-          应用会改写所有指向旧 id 的前置引用，并做原子写 + `.bak` 备份；先预览再应用。
+          应用会改写所有指向旧 id 的前置引用，逐文件原子写（版本历史交给 git）；先预览再应用。
         </p>
 
         <section v-if="preview !== null" class="preview-block">

@@ -67,7 +67,7 @@ document（编辑器页）
 | `timeline.*` | core.timeline | 05-10/05-11 的片段命令 |
 | `clipEffects.*` / `selectionProperties.*` | 对应插件 | 面板内命令 |
 
-- 脚本页命令的 `enabled` 必须按真实条件：无选中时 `script.openSelected`/`editDependencies`/`renameId` 为 disabled；`script.new` 在断连时 disabled 并给出原因。
+- 脚本页命令的 `enabled` 必须按真实条件：无选中时 `script.openSelected`/`editDependencies`/`renameId` 为 disabled；`script.new` 只依赖工作区目录可写，不因游戏未运行而 disabled。
 - 不在 04 的 `WorkspaceShell` 里写 `if (pageId === 'project')` 这类业务分支；页面差异由插件 `available` 与面板自己处理。
 
 ## 状态项
@@ -111,7 +111,7 @@ document（编辑器页）
 
 - 脚本页：`script.graph` 占满 `project.main`；没有启动器主体；顶栏有新建/打开入口。
 - 编辑器页：四区（左/中/右/下）+ 抽屉；尺寸约束生效；拖动/拆分后重启恢复。
-- 断连时脚本页仍显示上次图并标「已过期」；编辑器页打开本地脚本仍可用（走 03 本地通道）。
+- 游戏未运行时脚本页仍完整可用（图数据来自工作区文件，不经模组）；编辑器页打开/保存本地脚本同样可用；只有预览与推送需要游戏。
 - 命令：10 条脚本页命令都能在命令面板搜到；disabled 条件正确（无选中/断连）。
 - 状态项计数与图统计、诊断列表三处一致。
 - 快捷键：`Enter`/`F2`/`Alt+←/→` 在图聚焦时生效；输入框内不触发；`F6` 可在两页之间切焦点。

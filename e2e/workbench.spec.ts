@@ -91,7 +91,8 @@ test('项目页渲染真实入口与脚本页空态（无启动器主体）', as
   await expect(page.locator('.project-page')).toContainText('打开文件夹')
   await expect(page.locator('.script-graph-panel')).toBeVisible()
   await expect(page.locator('.graph-toolbar')).toBeVisible()
-  await expect(page.locator('.project-page')).toContainText('未连接模组')
+  // 脚本来自工作区文件：未选工作区时提示的是「工作区不可用」，不再提「未连接模组」。
+  await expect(page.locator('.project-page')).toContainText('工作区不可用')
   await expect(page.locator('.project-page')).not.toContainText('还没有最近项目')
   await expect(page.locator('.statusbar')).toContainText('页面：project')
 
@@ -109,9 +110,11 @@ test('项目页渲染真实入口与脚本页空态（无启动器主体）', as
   expect(shell.appearance).toBe('dark')
 })
 
-test('离线点新建脚本：真实失败提示，不伪造成功', async () => {
+test('未设置工作区时新建脚本：真实失败提示，不伪造成功', async () => {
+  // 该用例不注入工作区（workbench.spec 不设 IC_EDITOR_WORKSPACE）：
+  // 新建要写工作区文件，没有工作区就必须失败并提示，不能假装成功。
   await page.locator('.project-page .primary').click()
-  await expect(page.locator('.statusbar')).toContainText(/失败/, { timeout: 20_000 })
+  await expect(page.locator('.statusbar')).toContainText(/失败|工作区/, { timeout: 20_000 })
   const summary = await page.evaluate(() => {
     const workbench = (window as unknown as { __workbench?: WorkbenchDebug }).__workbench
     return workbench?.documents.summary() ?? null

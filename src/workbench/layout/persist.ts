@@ -3,7 +3,7 @@
  *
  * `layout.json` 独立于 `preferences.json` / `window-state.json` / `drafts/`：
  * 坏布局只恢复布局，不连坐主题、快捷键、窗口与草稿。
- * 写入保留 `.bak`；损坏文件复制为 `layout.corrupt.<ISO>.json` 而不是删除。
+ * 不留 `.bak`（版本历史交给 git）；损坏文件复制为 `layout.corrupt.<ISO>.json` 而不是删除。
  */
 import type { DiagnosticSink, DiagnosticSeverity } from '../api/diagnostics.ts'
 import type { StoragePort } from '../api/host.ts'
@@ -12,9 +12,6 @@ import { serializeLayoutFile } from './tree.ts'
 
 /** 布局文件名（`userData/` 下）。 */
 export const LAYOUT_FILE_NAME = 'layout.json'
-
-/** 上一版布局的备份名。 */
-export const LAYOUT_BACKUP_NAME = 'layout.json.bak'
 
 /** 写入中间文件；存储端口的原子写负责真正的 rename。 */
 export const LAYOUT_TEMP_NAME = 'layout.json.tmp'
@@ -44,7 +41,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>
 }
 
-/** 布局文件持久化：读坏文件会隔离备份，写文件保留 `.bak`。 */
+/** 布局文件持久化：读坏文件会隔离备份，正常写入不留 `.bak`。 */
 export class LayoutPersistence {
   private readonly storage: StoragePort
 
@@ -95,8 +92,7 @@ export class LayoutPersistence {
       this.report('error', message)
       throw new Error(message)
     }
-    const previous = await this.storage.read(LAYOUT_FILE_NAME)
-    if (previous !== null) await this.storage.write(LAYOUT_BACKUP_NAME, previous)
+    // 不留 `.bak`：上一版由 git 或用户的版本管理负责，编辑器只保证原子写。
     try {
       await this.storage.write(LAYOUT_TEMP_NAME, text)
     } catch (error) {

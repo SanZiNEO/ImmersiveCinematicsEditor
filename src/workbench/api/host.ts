@@ -97,7 +97,7 @@ export interface MenuPort {
 /** 存储端口：只允许白名单文件（`preferences.json` / `layout.json` / `window-state.json` / `themes/*`）。 */
 export interface StoragePort {
   read(name: string): Promise<string | null>
-  /** 原子写（tmp + rename）+ `.bak`。 */
+  /** 原子写（tmp + rename）；不留 `.bak`（版本历史交给 git）。 */
   write(name: string, text: string): Promise<void>
   remove(name: string): Promise<void>
   list(prefix?: string): Promise<string[]>
@@ -112,6 +112,39 @@ export interface StoragePort {
   revealUserData(): void
 }
 
+/**
+ * 工作区端口：直接读写 `<游戏根目录>/immersive_cinematics/`。
+ *
+ * 脚本与资源都在这个目录下（`scripts/` 可再分子文件夹），编辑器**自己**读写，
+ * 不经过模组的 WebSocket 通道——模组只在推送播放和预览画面时参与。
+ */
+export interface WorkspacePort {
+  /** 当前工作区根（`.../immersive_cinematics`）；未设置时为 `null`。 */
+  root(): Promise<string | null>
+  /** 记住工作区根（用户选目录后调用）；返回归一化后的根（`.../immersive_cinematics`）。 */
+  setRoot(path: string): Promise<string>
+  /**
+   * 递归列出 `scripts/` 下的脚本相对路径（`/` 分隔，相对 `scripts/`）。
+   *
+   * 一次扫描拿到全部路径：10 万脚本也只有一次 I/O 往返。
+   */
+  listScripts(): Promise<string[]>
+  /** 读脚本原文 + 指纹（`mtime:size`）；不存在返回 `null`。 */
+  readScript(path: string): Promise<{ text: string; stamp: string } | null>
+  /** 原子写脚本（tmp + rename），必要时建父目录。 */
+  writeScript(path: string, text: string): Promise<void>
+  /** 删除脚本；不存在不报错。 */
+  removeScript(path: string): Promise<void>
+  /**
+   * 文件指纹（mtime + size），增量扫描用：没变就不重解析。
+   *
+   * 返回 `path → "mtime:size"`；实现可以只返回已存在的文件。
+   */
+  scriptStamps(): Promise<Record<string, string>>
+  /** 脚本是否已存在（新建防覆盖）。 */
+  scriptExists(path: string): Promise<boolean>
+}
+
 /** 宿主能力集合。 */
 export interface HostPort {
   readonly kind: 'electron' | 'browser'
@@ -123,6 +156,7 @@ export interface HostPort {
   readonly drafts: DraftPort
   readonly menu: MenuPort
   readonly storage: StoragePort
+  readonly workspace: WorkspacePort
 }
 
 /** preload 暴露的桥（`window.workbench`）；渲染进程只能看到这些字段。 */

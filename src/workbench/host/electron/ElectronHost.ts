@@ -20,5 +20,6 @@ export function createElectronHost(bridge: WorkbenchBridge): HostPort {
     drafts: bridge.drafts,
     menu: bridge.menu,
     storage: bridge.storage,
+    workspace: bridge.workspace,
   }
 }

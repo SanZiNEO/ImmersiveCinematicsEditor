@@ -185,7 +185,7 @@ export function mutationErrorText(code: string | undefined, message: string): st
     lock_busy: '另一处关系改动正在进行，稍后重试',
     dirty_conflict: '当前文档有未保存修改，先保存或放弃',
     write_failed: '写入失败',
-    offline: '未连接模组',
+    offline: '工作区不可用',
     invalid_id: '脚本 id 不合法（1–32 位字母/数字/下划线）',
     target_exists: '新 id 已被其他脚本占用',
     source_missing: '原 id 不存在',

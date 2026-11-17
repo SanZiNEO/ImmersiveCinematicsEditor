@@ -1020,7 +1020,7 @@ onBeforeUnmount(() => {
           </button>
           <button type="button" class="overlay-button" @click="openScriptFile">打开脚本文件</button>
         </div>
-        <p v-if="!state.connected" class="overlay-text">未连接模组：启动游戏内 WebUI 服务后可以新建脚本。</p>
+        <p v-if="!state.connected" class="overlay-text">工作区不可用：请先选择游戏目录后再新建脚本。</p>
       </div>
 
       <div v-else-if="controller.emptyResult.value" class="graph-overlay graph-overlay--center" data-graph-overlay="true">

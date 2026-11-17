@@ -19,7 +19,55 @@ import { DiagnosticsStore } from './kernel/DiagnosticsStore.ts'
 import { DocumentServiceImpl } from './app/DocumentServiceImpl.ts'
 import { ScriptGraphService } from './app/ScriptGraphService.ts'
 import { ScriptMutationService } from './app/ScriptMutationService.ts'
+import { WorkspaceDocTransport } from './app/WorkspaceDocTransport.ts'
+import { WorkspaceScriptSource } from './app/WorkspaceScriptSource.ts'
+import type { WorkspacePort } from './api/host.ts'
 import type { ScriptSource } from './api/graph.ts'
+
+/** 内存工作区（测试用）：与 Electron 的 `workspace:*` 端口同形。 */
+class MemoryWorkspace implements WorkspacePort {
+  private readonly scripts = new Map<string, string>()
+  private rootPath: string | null = '/game/immersive_cinematics'
+
+  async root(): Promise<string | null> {
+    return this.rootPath
+  }
+
+  async setRoot(path: string): Promise<string> {
+    this.rootPath = path === '' ? null : path
+    return path
+  }
+
+  async listScripts(): Promise<string[]> {
+    return [...this.scripts.keys()].sort()
+  }
+
+  async readScript(path: string): Promise<{ text: string; stamp: string } | null> {
+    const text = this.scripts.get(path)
+    return text === undefined ? null : { text, stamp: `${text.length}:${text}` }
+  }
+
+  async writeScript(path: string, text: string): Promise<void> {
+    this.scripts.set(path, text)
+  }
+
+  async removeScript(path: string): Promise<void> {
+    this.scripts.delete(path)
+  }
+
+  async scriptStamps(): Promise<Record<string, string>> {
+    // 指纹必须随内容变化：用「长度 + 内容本身」保证测试里改内容一定被察觉。
+    const stamps: Record<string, string> = {}
+    for (const [path, text] of this.scripts) {
+      stamps[path] = `${text.length}:${text}`
+    }
+    return stamps
+  }
+
+  async scriptExists(path: string): Promise<boolean> {
+    return this.scripts.has(path)
+  }
+}
 
 let ok = 0
 let fail = 0
@@ -329,6 +377,105 @@ async function main(): Promise<void> {
   documents.dispose()
   rollbackDocuments.dispose()
 }
+
+/** 工作区脚本来源：读写直连工作区，缓存按内容指纹复用，不依赖模组。 */
+async function checkWorkspaceSource(): Promise<void> {
+  const workspace = new MemoryWorkspace()
+  const source = new WorkspaceScriptSource({ workspace })
+
+  await workspace.writeScript('a.json', '{"meta":{"id":"A"},"timeline":{"tracks":[]}}')
+  await workspace.writeScript('sub/b.json', '{"meta":{"id":"B"},"timeline":{"tracks":[]}}')
+
+  check('工作区：list 递归出子目录脚本',
+    (await source.list()).join(',') === 'a.json,sub/b.json', await source.list())
+  check('工作区：load 解析 JSON',
+    ((await source.load('a.json')) as JsonObject).meta !== undefined)
+  check('工作区：load 缺失文件明确报错', await (async () => {
+    try {
+      await source.load('nope.json')
+      return false
+    } catch {
+      return true
+    }
+  })())
+
+  // 缓存：同一内容重复 load 返回同一对象（不重解析）。
+  const first = await source.load('a.json')
+  const second = await source.load('a.json')
+  check('工作区：内容未变时复用缓存对象', first === second)
+
+  // 增量：refreshStamps 只把「指纹未变」的文件标为可复用。
+  await source.load('sub/b.json')
+  const reusable = await source.refreshStamps()
+  check('工作区：增量刷新标出未变化文件',
+    reusable.has('a.json') && reusable.has('sub/b.json'), [...reusable])
+
+  // 保存后缓存立即更新，再读不会拿到旧内容。
+  await source.save('a.json', { meta: { id: 'A2' }, timeline: { tracks: [] } } as JsonObject)
+  const saved = await source.load('a.json')
+  check('工作区：保存后读到新内容', (saved as JsonObject).meta !== undefined
+    && JSON.stringify(saved).includes('A2'), saved)
+
+  // 删除后增量刷新把缓存清掉。
+  await workspace.removeScript('a.json')
+  await source.refreshStamps()
+  check('工作区：删除后缓存清理', source.cached('a.json') === undefined)
+
+  // 工作区未设置 → connected() 为 false（不是「连不上模组」，是没选目录）。
+  const bare = new MemoryWorkspace()
+  await bare.setRoot('')
+  const empty = new WorkspaceScriptSource({ workspace: bare })
+  check('工作区：未设置目录时不可用', await empty.probe() === false)
+}
+
+/** 工作区文档传输：文件走工作区，推送/校验走预览桥；无预览桥时明确失败。 */
+async function checkWorkspaceDocTransport(): Promise<void> {
+  const workspace = new MemoryWorkspace()
+  const offline = new WorkspaceDocTransport({ workspace })
+
+  const created = await offline.newScript()
+  check('文档传输：新建给出 untitled-1.json', created.path === 'untitled-1.json', created.path)
+  check('文档传输：文件侧始终可用', offline.connected() === true)
+  check('文档传输：无预览桥时推送明确失败', await (async () => {
+    const result = await offline.pushScript('{}')
+    return result.ok === false && (result.reason ?? '').includes('游戏未运行')
+  })())
+
+  const doc = { meta: { id: 'X' }, timeline: { tracks: [] } } as JsonObject
+  await offline.save('x.json', doc)
+  check('文档传输：保存写到工作区', (await workspace.readScript('x.json')) !== null)
+  const loaded = await offline.load('x.json')
+  check('文档传输：读回内容一致', JSON.stringify(loaded.doc) === JSON.stringify(doc), loaded.doc)
+  check('文档传输：exists 走工作区', await offline.exists('x.json') === true
+    && await offline.exists('nope.json') === false)
+
+  // 新建第二次不覆盖：untitled-1 已存在时给 untitled-2。
+  await offline.save('untitled-1.json', doc)
+  const second = await offline.newScript()
+  check('文档传输：新建不覆盖已有文件', second.path === 'untitled-2.json', second.path)
+
+  // 有预览桥时转给它。
+  let pushed = ''
+  const online = new WorkspaceDocTransport({
+    workspace,
+    preview: {
+      pushScript: async (script) => {
+        pushed = script
+        return { ok: true }
+      },
+      seek: async () => undefined,
+      validate: async () => ({ ok: true, issues: [] }),
+      connected: () => true,
+    },
+  })
+  const pushResult = await online.pushScript('{"a":1}')
+  check('文档传输：有预览桥时转发推送', pushResult.ok === true && pushed === '{"a":1}', pushed)
+  check('文档传输：预览可用性与文件侧分开', online.previewConnected() === true
+    && offline.previewConnected() === false)
+}
+
+await checkWorkspaceSource()
+await checkWorkspaceDocTransport()
 
 await main()
 console.log(`summary ok=${ok} fail=${fail}`)

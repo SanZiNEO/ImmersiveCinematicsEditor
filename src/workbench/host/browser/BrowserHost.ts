@@ -21,6 +21,7 @@ import type {
   StoragePort,
   ThemeHostPort,
   WindowPort,
+  WorkspacePort,
 } from '../../api/host.ts'
 import type { SystemThemeState, ThemeAppearance, ThemeCache } from '../../api/theme.ts'
 
@@ -191,6 +192,50 @@ class MemoryStorage implements StoragePort {
   }
 }
 
+/** 浏览器 dev 的工作区：内存实现，不假装有文件系统。 */
+class MemoryWorkspace implements WorkspacePort {
+  private readonly scripts = new Map<string, string>()
+  private rootPath: string | null = null
+
+  async root(): Promise<string | null> {
+    return this.rootPath
+  }
+
+  async setRoot(path: string): Promise<string> {
+    this.rootPath = path
+    return path
+  }
+
+  async listScripts(): Promise<string[]> {
+    return [...this.scripts.keys()].sort()
+  }
+
+  async readScript(path: string): Promise<{ text: string; stamp: string } | null> {
+    const text = this.scripts.get(path)
+    return text === undefined ? null : { text, stamp: `${text.length}:${text}` }
+  }
+
+  async writeScript(path: string, text: string): Promise<void> {
+    this.scripts.set(path, text)
+  }
+
+  async removeScript(path: string): Promise<void> {
+    this.scripts.delete(path)
+  }
+
+  async scriptStamps(): Promise<Record<string, string>> {
+    const stamps: Record<string, string> = {}
+    for (const [path, text] of this.scripts) {
+      stamps[path] = `${text.length}:${text.length}`
+    }
+    return stamps
+  }
+
+  async scriptExists(path: string): Promise<boolean> {
+    return this.scripts.has(path)
+  }
+}
+
 export class BrowserHost implements HostPort {
   readonly kind = 'browser' as const
   readonly platform = 'web' as const
@@ -201,6 +246,7 @@ export class BrowserHost implements HostPort {
   readonly drafts = new BrowserDrafts()
   readonly menu = new BrowserMenu()
   readonly storage = new MemoryStorage()
+  readonly workspace = new MemoryWorkspace()
 }
 
 export function createBrowserHost(): HostPort {

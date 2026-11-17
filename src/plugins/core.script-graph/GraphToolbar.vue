@@ -110,7 +110,7 @@ function toggleDiagnostics(): void {
 
 function refreshTitle(): string {
   if (!state.connected) {
-    return '未连接模组：刷新会失败并保留旧图'
+    return '工作区不可用：请先选择游戏目录'
   }
   if (state.refreshing) {
     return '正在扫描脚本…'
@@ -120,7 +120,7 @@ function refreshTitle(): string {
 
 function newTitle(): string {
   if (!state.connected) {
-    return '未连接模组：无法新建脚本'
+    return '工作区不可用：无法新建脚本'
   }
   return '新建脚本并刷新图'
 }
@@ -347,7 +347,7 @@ onBeforeUnmount(() => {
       <div class="graph-toolbar__row graph-toolbar__row--meta">
         <span v-if="state.truncated" class="toolbar-chip">已截断</span>
         <span v-if="state.stale" class="toolbar-chip toolbar-chip--warn" title="收到脚本变更但尚未刷新">已过期</span>
-        <span v-if="!state.connected" class="toolbar-chip toolbar-chip--warn">未连接模组</span>
+        <span v-if="!state.connected" class="toolbar-chip toolbar-chip--warn">工作区不可用</span>
         <span v-if="statsVisible" class="toolbar-chip" :title="`扫描耗时 ${state.scanMillis} ms`">
           {{ controller.statsText.value }}
         </span>

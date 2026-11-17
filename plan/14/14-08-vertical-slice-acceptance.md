@@ -35,8 +35,8 @@
 | 5 | 页面/绑定检查 | 页面元素 id 存在；两面板可同时可见；主轴无对象行/节点；无 JS 依赖 | 截图/日志 |
 | 6 | 中央画面 | 真实游戏画面：HUD、lane 合成、调色；不含编辑器 UI；连续更新 | 录屏/帧计数 |
 | 7 | GPU 路径 | 仅 AUI 时无 CPU PBO 读回；WebUI CPU 消费者仍可用；generation/格式变化正常 | GL 日志/证据 |
-| 8 | schema/脚本读取 | `schema.get`/`script.list`/`script.load` 与 WebUI 同字段；AUI 可打开一个黄金脚本 | 消息日志/截图 |
-| 9 | 编辑/保存/校验 | 改一个字段 → `script.save` ack → 文件落盘 → 重开一致；`script.validate` 结果可见 | 文件 diff/ack/截图 |
+| 8 | schema/脚本读取 | `schema.get` 与 WebUI 同字段；脚本由编辑器直读工作区；AUI 可打开一个黄金脚本 | 消息日志/截图 |
+| 9 | 编辑/保存/校验 | 改一个字段 → 写盘成功 → 文件落盘 → 重开一致；`script.validate` 结果可见 | 文件 diff/ack/截图 |
 | 10 | 播放 | `editor.seek`/`play`/`pause`/`stop` ack；画面/时间轴/状态栏一致 | 录屏/消息 |
 | 11 | 飞控 | 进入飞控；`flight.state` 100ms；记录退出写回选中关键帧；取消不写回 | 录屏/消息/文件 |
 | 12 | 多端点/所有权 | 非 owner 关闭不取消飞控；owner 关闭只向 owner 发 exit；无广播 | 消息日志 |
