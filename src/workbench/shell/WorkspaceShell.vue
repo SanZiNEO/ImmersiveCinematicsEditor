@@ -13,15 +13,9 @@ import type { HostPort } from '../api/host.ts'
 import type { ServiceRegistry } from '../api/services.ts'
 import {
   COMMAND_SERVICE,
-  DOCUMENT_SERVICE,
-  FILE_DIALOG_PORT,
   HOST_SERVICE,
-  I18N_SERVICE,
   KEYBINDING_SERVICE,
   FOCUS_SERVICE,
-  PAGE_ROUTER,
-  PREFERENCES_SERVICE,
-  STATUS_SERVICE,
 } from '../api/tokens.ts'
 import { WORKBENCH_SERVICES_KEY } from '../host/panelContext.ts'
 import AppStatusBar from './AppStatusBar.vue'
@@ -29,7 +23,8 @@ import AppTopBar from './AppTopBar.vue'
 import CommandPalette from './CommandPalette.vue'
 import PageHost from './PageHost.vue'
 import ShowPanelDialog from './ShowPanelDialog.vue'
-import { ShellActions } from './actions.ts'
+import type { ShellActionsPort } from '../api/actions.ts'
+import { SHELL_ACTIONS_SERVICE } from '../api/tokens.ts'
 import { registerShellFocusRegions } from './focusRegions.ts'
 import { useCurrentPageId } from './useWorkbench.ts'
 import { bindShellCommandDeps } from '../../plugins/core.workbench/commands.ts'
@@ -57,16 +52,8 @@ function focus(): FocusServicePort {
   return props.services.require(FOCUS_SERVICE)
 }
 
-function actions(): ShellActions {
-  return new ShellActions({
-    documents: props.services.require(DOCUMENT_SERVICE),
-    files: props.services.require(FILE_DIALOG_PORT),
-    host: props.services.require(HOST_SERVICE),
-    router: props.services.require(PAGE_ROUTER),
-    preferences: props.services.require(PREFERENCES_SERVICE),
-    status: props.services.require(STATUS_SERVICE),
-    i18n: props.services.require(I18N_SERVICE),
-  })
+function actions(): ShellActionsPort {
+  return props.services.require(SHELL_ACTIONS_SERVICE)
 }
 
 function isEditable(target: EventTarget | null): boolean {

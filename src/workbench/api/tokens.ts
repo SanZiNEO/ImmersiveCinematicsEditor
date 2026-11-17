@@ -23,6 +23,9 @@ import { createServiceToken } from './services.ts'
 import type { I18nApi, StatusApi } from './context.ts'
 import type { PreviewServicePort } from './preview.ts'
 import type { ThemeApi, ThemeControllerPort, ThemeRegistryPort } from './theme.ts'
+import type { GraphLayoutServicePort, GraphServicePort, ScriptMutationServicePort } from './graph.ts'
+import type { ShellActionsPort } from './actions.ts'
+import type { CatalogIndex } from '../../core/schema/index.ts'
 
 /** 布局服务。 */
 export const LAYOUT_SERVICE: ServiceToken<WorkspaceLayoutService> = createServiceToken('工作区布局服务')
@@ -98,3 +101,18 @@ export const DIALOG_STACK: ServiceToken<DialogStackPort> = createServiceToken('�
 
 /** 预览流。 */
 export const PREVIEW_SERVICE: ServiceToken<PreviewServicePort> = createServiceToken('预览流')
+
+/** 脚本关系图（快照 / 失效 / 刷新）。 */
+export const GRAPH_SERVICE: ServiceToken<GraphServicePort> = createServiceToken('脚本关系图')
+
+/** 图布局（graph-layout.json）。 */
+export const GRAPH_LAYOUT_SERVICE: ServiceToken<GraphLayoutServicePort> = createServiceToken('图布局')
+
+/** 关系写入（requires / refs）。 */
+export const SCRIPT_MUTATION_SERVICE: ServiceToken<ScriptMutationServicePort> = createServiceToken('关系写入')
+
+/** 外壳动作（新建 / 打开 / 守卫 / 切页）。 */
+export const SHELL_ACTIONS_SERVICE: ServiceToken<ShellActionsPort> = createServiceToken('外壳动作')
+
+/** 02 字段目录（面板只读查询；不复制字段表）。 */
+export const CATALOG_SERVICE: ServiceToken<CatalogIndex> = createServiceToken('字段目录')

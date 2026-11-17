@@ -18,6 +18,7 @@ import { cloneJson, describe, isFiniteNumber, isJsonObject } from './json.ts'
 import {
   ClipRegistry,
   canRemoveClip,
+  eachClip,
   pathEndpointsAtTime,
   pathIntervalsContaining,
   referenceSitesForRename,
@@ -32,6 +33,16 @@ import {
   writeAnimObject,
 } from './object.ts'
 import { isValidObjectPath } from './path.ts'
+import {
+  duplicateTriggerIds,
+  findTriggerIndex,
+  newRequirement,
+  parseRequirement,
+  writeRequirement,
+} from '../graph/requirements.ts'
+import { isBuiltinRequirementType } from '../graph/types.ts'
+import type { BuiltinRequirementType } from '../graph/types.ts'
+import { compactStarts, rippleShift, splitClipObject } from '../timeline/clipEdit.ts'
 import type { AnimObjectShape, JsonObject, JsonValue, ObjectKeyframe, ScriptDoc } from './types.ts'
 import { checkValue } from './value.ts'
 
@@ -47,6 +58,35 @@ export class CommandError extends Error {
 export type DocCommand =
   | { kind: 'meta.set'; key: string; value: JsonValue }
   | { kind: 'timeline.setLoop'; loopStart?: number | null; loopEnd?: number | null }
+  | { kind: 'timeline.addTrack'; type: string }
+  | { kind: 'timeline.removeTrack'; trackId: string }
+  | { kind: 'timeline.reorderTracks'; trackId: string; toIndex: number }
+  | { kind: 'timeline.renameTrack'; trackId: string; name: string }
+  | { kind: 'timeline.moveClips'; clipKeys: string[]; deltaSeconds: number; targetTrackId?: string }
+  | { kind: 'timeline.trimClip'; clipKey: string; edge: 'left' | 'right'; newTime: number }
+  | { kind: 'timeline.splitClip'; clipKey: string; splitTime: number }
+  | { kind: 'timeline.deleteClips'; clipKeys: string[] }
+  | { kind: 'timeline.rippleDelete'; clipKeys: string[] }
+  | { kind: 'timeline.toggleLoop'; clipKeys: string[] }
+  | { kind: 'timeline.compactSelection'; clipKeys: string[] }
+  | { kind: 'timeline.pasteClips'; targetTrackId: string; atTime: number; clips: JsonObject[] }
+  | {
+    kind: 'trigger.requires.add'
+    triggerIdentity: string
+    index: number
+    requirementType: BuiltinRequirementType
+    targetScriptId: string
+  }
+  | {
+    kind: 'trigger.requires.update'
+    triggerIdentity: string
+    index: number
+    requirementType: BuiltinRequirementType
+    targetScriptId: string
+  }
+  | { kind: 'trigger.requires.remove'; triggerIdentity: string; index: number }
+  | { kind: 'trigger.setConditions'; triggerIdentity: string; patch: Record<string, JsonValue>; remove?: string[] }
+  | { kind: 'trigger.setFields'; triggerIdentity: string; patch: JsonObject }
   | { kind: 'clip.add'; trackIndex: number; index?: number; clip: JsonObject }
   | { kind: 'clip.duplicate'; clipKey: string; newId?: string }
   | { kind: 'clip.remove'; clipKey: string }
@@ -110,6 +150,169 @@ function clipArray(ctx: ApplyContext, handle: ClipHandle): JsonValue[] {
 /** 按片段句柄的轨道类型取对象声明；第三方轨道返回 `undefined`。 */
 function objectDefOf(ctx: ApplyContext, handle: ClipHandle, path: string): FieldEntry | undefined {
   return ctx.catalog.objectDef(handle.trackType, path)
+}
+
+/** 轨道定位结果：数组下标 + 轨道对象 + 片段数组。 */
+interface TrackRef {
+  index: number
+  type: string
+  track: JsonObject
+  clips: JsonValue[]
+}
+
+/** 顶层 `timeline.tracks` 必须是数组。 */
+function requireTracks(ctx: ApplyContext): JsonValue[] {
+  const tracks = ctx.doc.timeline.tracks
+  if (!Array.isArray(tracks)) {
+    throw new CommandError('timeline.tracks 不是数组')
+  }
+  return tracks
+}
+
+/** 解析 `type#index` 轨道 id；类型必须与当前位置一致（避免重排后误改别的轨道）。 */
+function resolveTrack(ctx: ApplyContext, trackId: string): TrackRef {
+  const tracks = requireTracks(ctx)
+  const hash = trackId.lastIndexOf('#')
+  if (hash <= 0 || hash === trackId.length - 1) {
+    throw new CommandError(`轨道 id 不合法: ${trackId}`)
+  }
+  const type = trackId.slice(0, hash)
+  const index = Number(trackId.slice(hash + 1))
+  if (!Number.isInteger(index) || index < 0 || index >= tracks.length) {
+    throw new CommandError(`轨道不存在: ${trackId}`)
+  }
+  const track = tracks[index]
+  if (!isJsonObject(track) || !Array.isArray(track.clips)) {
+    throw new CommandError(`轨道不是对象或缺少 clips: ${trackId}`)
+  }
+  if (track.type !== type) {
+    throw new CommandError(`轨道 id 已失效: ${trackId}（当前位置是 ${String(track.type)}#${index}）`)
+  }
+  return { index, type, track, clips: track.clips }
+}
+
+/** 取内联片段句柄；独立片段没有时间轴位置 → 拒绝。 */
+function requireTimelineHandle(ctx: ApplyContext, clipKey: string): ClipHandle {
+  const handle = requireHandle(ctx, clipKey)
+  if (!handle.inline) {
+    throw new CommandError('独立片段没有时间轴位置（缺少 start_time）')
+  }
+  return handle
+}
+
+/** 片段起点（缺失按 0，与解析器默认放置一致）。 */
+function clipStartOf(clip: JsonObject): number {
+  return isFiniteNumber(clip.start_time) ? clip.start_time : 0
+}
+
+/** 片段时长（缺失按 0）。 */
+function clipDurationOf(clip: JsonObject): number {
+  return isFiniteNumber(clip.duration) ? clip.duration : 0
+}
+
+/** 片段是否永不结束：`duration < 0`，或 `loop=true && loop_count < 0`。 */
+function clipIsInfinite(clip: JsonObject): boolean {
+  const duration = clipDurationOf(clip)
+  if (duration < 0) {
+    return true
+  }
+  return clip.loop === true && isFiniteNumber(clip.loop_count) && clip.loop_count < 0
+}
+
+/** 去重命令里的片段键，保持出现顺序。 */
+function uniqueKeys(clipKeys: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const key of clipKeys) {
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(key)
+    }
+  }
+  return result
+}
+
+/** 删除前统一预检：任一被引用 → 整组拒绝。 */
+function assertClipsRemovable(ctx: ApplyContext, handles: readonly ClipHandle[], action: string): void {
+  const labels: string[] = []
+  for (const handle of handles) {
+    const check = canRemoveClip(ctx.doc, handle.id)
+    if (!check.ok) {
+      labels.push(...check.references.map((reference) => reference.label))
+    }
+  }
+  if (labels.length > 0) {
+    throw new CommandError(`片段被引用，不能${action}（${labels.join('；')}）`)
+  }
+}
+
+/** 文档内全部片段 id（可排除一个片段，用于生成本次替换的新 id）。 */
+function usedClipIds(ctx: ApplyContext, except?: JsonObject): Set<string> {
+  const used = new Set<string>()
+  eachClip(ctx.doc, (clip) => {
+    if (clip === except) {
+      return
+    }
+    if (typeof clip.id === 'string' && clip.id.length > 0) {
+      used.add(clip.id)
+    }
+  })
+  return used
+}
+
+/** 生成文档内唯一的新片段 id（超长截断 64，冲突追加 `_2` / `_3`）。 */
+function uniqueClipId(base: string, used: Set<string>): string {
+  let candidate = base.slice(0, 64)
+  let counter = 2
+  while (used.has(candidate)) {
+    const suffix = `_${counter}`
+    candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`
+    counter += 1
+  }
+  used.add(candidate)
+  return candidate
+}
+
+/** 按 `triggerIdentity`（先 id 后 `type#index`）定位触发器。 */
+function requireTrigger(ctx: ApplyContext, identity: string): JsonObject {
+  const triggers = ctx.doc.meta.triggers
+  if (!Array.isArray(triggers)) {
+    throw new CommandError('meta.triggers 不是数组')
+  }
+  const index = findTriggerIndex(triggers, identity, duplicateTriggerIds(triggers))
+  if (index < 0) {
+    throw new CommandError(`触发器不存在: ${identity}`)
+  }
+  const trigger = triggers[index]
+  if (!isJsonObject(trigger)) {
+    throw new CommandError(`触发器不是对象: ${identity}`)
+  }
+  return trigger
+}
+
+/** 校验前置下标与目标脚本 id。 */
+function assertRequirementInput(index: number, targetScriptId: string, length: number, allowAppend: boolean): void {
+  const upper = allowAppend ? length : length - 1
+  if (!Number.isInteger(index) || index < 0 || index > upper) {
+    throw new CommandError(`requires 下标越界: ${index}（0..${upper}）`)
+  }
+  if (typeof targetScriptId !== 'string' || targetScriptId.length === 0) {
+    throw new CommandError('前置目标脚本 id 不能为空')
+  }
+}
+
+/** 读触发器的 `requires` 数组；非数组按空数组处理（写入时整体替换）。 */
+function requirementArrayOf(trigger: JsonObject): JsonValue[] {
+  return Array.isArray(trigger.requires) ? trigger.requires : []
+}
+
+/** 写回 `requires`：空数组删除键（与 05-01 的「缺省 = 无前置」一致）。 */
+function writeRequires(trigger: JsonObject, array: JsonValue[]): void {
+  if (array.length === 0) {
+    delete trigger.requires
+    return
+  }
+  trigger.requires = array
 }
 
 /** 严格读片段形状（命令写值前校验）；block 级问题 → 抛错。 */
@@ -237,6 +440,63 @@ function removeArrayEntries(array: JsonValue[], indexes: readonly number[]): voi
   }
 }
 
+/** `trigger.setFields` 允许写入的键（`type` / `id` 与其他键一律拒绝）。 */
+const TRIGGER_EDITABLE_KEYS: readonly string[] = [
+  'repeatable',
+  'delay',
+  'on_enter',
+  'exit_buffer',
+  'continuity',
+  'poll_interval',
+]
+
+/** 校验 `continuity` 的已知子字段（与结构检查同口径，未知子字段原样保留）。 */
+function assertContinuityShape(value: JsonValue): void {
+  if (!isJsonObject(value)) {
+    throw new CommandError('continuity 需要对象')
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'sweep') && typeof value.sweep !== 'boolean') {
+    throw new CommandError('continuity.sweep 需要布尔值')
+  }
+  for (const key of ['dwell', 'window']) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue
+    }
+    const entry = value[key]
+    if (!isFiniteNumber(entry) || !Number.isInteger(entry) || entry < 0 || entry > 1200) {
+      throw new CommandError(`continuity.${key} 需要 0~1200 的整数`)
+    }
+  }
+}
+
+/** 校验 `trigger.setFields` 的一个值；`null` 表示删除该可选字段。 */
+function assertTriggerFieldValue(key: string, value: JsonValue): void {
+  if (value === null) {
+    return
+  }
+  if (key === 'repeatable' || key === 'on_enter') {
+    if (typeof value !== 'boolean') {
+      throw new CommandError(`${key} 需要布尔值`)
+    }
+    return
+  }
+  if (key === 'delay' || key === 'exit_buffer') {
+    if (!isFiniteNumber(value)) {
+      throw new CommandError(`${key} 需要有限数字`)
+    }
+    return
+  }
+  if (key === 'poll_interval') {
+    if (!isFiniteNumber(value) || !Number.isInteger(value) || value < 1 || value > 600) {
+      throw new CommandError('poll_interval 需要 1~600 的整数')
+    }
+    return
+  }
+  if (key === 'continuity') {
+    assertContinuityShape(value)
+  }
+}
+
 /** 命令实现：每个分支只改 `doc`，失败抛 `CommandError`。 */
 export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResult {
   const warnings: string[] = []
@@ -282,6 +542,411 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
         } else {
           throw new CommandError('loop_end 需要有限数字或 null')
         }
+      }
+      return { warnings }
+    }
+    case 'timeline.addTrack': {
+      const type = typeof command.type === 'string' ? command.type.trim() : ''
+      if (type.length === 0) {
+        throw new CommandError('轨道 type 不能为空')
+      }
+      const tracks = requireTracks(ctx)
+      if (type === 'LETTERBOX' && tracks.some((track) => isJsonObject(track) && track.type === 'LETTERBOX')) {
+        throw new CommandError('LETTERBOX 轨道已存在（最多一条）')
+      }
+      tracks.push({ type, clips: [] })
+      return { warnings }
+    }
+    case 'timeline.removeTrack': {
+      const target = resolveTrack(ctx, command.trackId)
+      if (target.clips.length > 0) {
+        throw new CommandError(`轨道非空，不能删除: ${command.trackId}（先删除或移动 ${target.clips.length} 个片段）`)
+      }
+      requireTracks(ctx).splice(target.index, 1)
+      return { warnings }
+    }
+    case 'timeline.reorderTracks': {
+      const target = resolveTrack(ctx, command.trackId)
+      const tracks = requireTracks(ctx)
+      if (!isFiniteNumber(command.toIndex)) {
+        throw new CommandError('toIndex 需要有限数字')
+      }
+      const toIndex = Math.max(0, Math.min(tracks.length - 1, Math.trunc(command.toIndex)))
+      if (toIndex === target.index) {
+        return { warnings }
+      }
+      const [track] = tracks.splice(target.index, 1)
+      tracks.splice(toIndex, 0, track)
+      return { warnings }
+    }
+    case 'timeline.renameTrack': {
+      const target = resolveTrack(ctx, command.trackId)
+      const name = typeof command.name === 'string' ? command.name.trim() : ''
+      if (name.length === 0) {
+        throw new CommandError('轨道名称不能为空')
+      }
+      const duplicate = requireTracks(ctx).some((track) => track !== target.track
+        && isJsonObject(track) && track.name === name)
+      if (duplicate) {
+        throw new CommandError(`轨道名称已存在: ${name}`)
+      }
+      target.track.name = name
+      return { warnings }
+    }
+    case 'timeline.moveClips': {
+      if (!isFiniteNumber(command.deltaSeconds)) {
+        throw new CommandError('deltaSeconds 需要有限数字')
+      }
+      const keys = uniqueKeys(command.clipKeys)
+      if (keys.length === 0) {
+        return { warnings }
+      }
+      const handles = keys.map((key) => requireTimelineHandle(ctx, key))
+      const target = command.targetTrackId === undefined
+        ? undefined
+        : resolveTrack(ctx, command.targetTrackId)
+      if (target !== undefined) {
+        for (const handle of handles) {
+          if (handle.trackType !== target.type) {
+            throw new CommandError(
+              `跨轨类型不匹配: ${handle.trackType} → ${target.type}（片段 ${handle.key}）`,
+            )
+          }
+        }
+      }
+      for (const handle of handles) {
+        if (clipStartOf(handle.clip) + command.deltaSeconds < 0) {
+          throw new CommandError(`移动后起点小于 0（片段 ${handle.key}）`)
+        }
+      }
+      for (const handle of handles) {
+        handle.clip.start_time = clipStartOf(handle.clip) + command.deltaSeconds
+      }
+      if (target !== undefined) {
+        for (const handle of handles) {
+          const array = clipArray(ctx, handle)
+          const index = array.indexOf(handle.clip)
+          if (index < 0) {
+            throw new CommandError(`片段不在原轨道数组中: ${handle.key}`)
+          }
+          array.splice(index, 1)
+          target.clips.push(handle.clip)
+        }
+      }
+      return { warnings }
+    }
+    case 'timeline.trimClip': {
+      const handle = requireTimelineHandle(ctx, command.clipKey)
+      if (command.edge !== 'left' && command.edge !== 'right') {
+        throw new CommandError(`裁切边需要 left / right，实际: ${String(command.edge)}`)
+      }
+      if (!isFiniteNumber(command.newTime)) {
+        throw new CommandError('裁切时间需要有限数字')
+      }
+      const clip = handle.clip
+      const start = clipStartOf(clip)
+      const duration = clipDurationOf(clip)
+      if (command.edge === 'right') {
+        if (clipIsInfinite(clip)) {
+          throw new CommandError('无限片段没有有限末端，不能右裁切')
+        }
+        if (duration <= 0) {
+          throw new CommandError('片段时长必须为正才能右裁切')
+        }
+        clip.duration = Math.max(command.newTime, start + 0.05) - start
+        return { warnings }
+      }
+      if (duration < 0) {
+        clip.start_time = Math.max(0, command.newTime)
+        return { warnings }
+      }
+      const end = start + duration
+      const upper = Math.max(0, end - 0.05)
+      const newStart = Math.min(Math.max(command.newTime, 0), upper)
+      clip.start_time = newStart
+      clip.duration = end - newStart
+      return { warnings }
+    }
+    case 'timeline.splitClip': {
+      const handle = requireTimelineHandle(ctx, command.clipKey)
+      const clip = handle.clip
+      if (clipIsInfinite(clip)) {
+        throw new CommandError('无限片段不能分割（没有有限末端）')
+      }
+      if (!isFiniteNumber(command.splitTime)) {
+        throw new CommandError('splitTime 需要有限数字')
+      }
+      const start = clipStartOf(clip)
+      const duration = clipDurationOf(clip)
+      const end = start + duration
+      if (!(command.splitTime > start + 0.01 && command.splitTime < end - 0.01)) {
+        throw new CommandError(`splitTime=${command.splitTime} 必须严格在 (${start + 0.01}, ${end - 0.01}) 内`)
+      }
+      const id = typeof clip.id === 'string' && clip.id.length > 0 ? clip.id : undefined
+      if (id !== undefined) {
+        const references = referencesToClip(ctx.doc, id)
+        if (references.length > 0) {
+          throw new CommandError(
+            `片段被引用，不能分割（${references.map((reference) => reference.label).join('；')}）`,
+          )
+        }
+      }
+      const used = usedClipIds(ctx, clip)
+      const idBase = id !== undefined && id.length > 62 ? id.slice(0, 62) : id
+      const split = splitClipObject(
+        clip,
+        command.splitTime,
+        idBase === undefined ? undefined : (suffix) => uniqueClipId(`${idBase}_${suffix}`, used),
+      )
+      const array = clipArray(ctx, handle)
+      const index = array.indexOf(clip)
+      if (index < 0) {
+        throw new CommandError(`片段不在原轨道数组中: ${handle.key}`)
+      }
+      array.splice(index, 1, split.left, split.right)
+      return { warnings }
+    }
+    case 'timeline.deleteClips': {
+      const keys = uniqueKeys(command.clipKeys)
+      if (keys.length === 0) {
+        return { warnings }
+      }
+      const handles = keys.map((key) => requireTimelineHandle(ctx, key))
+      assertClipsRemovable(ctx, handles, '删除')
+      const groups = new Map<JsonValue[], Set<JsonObject>>()
+      for (const handle of handles) {
+        const array = clipArray(ctx, handle)
+        const set = groups.get(array) ?? new Set<JsonObject>()
+        set.add(handle.clip)
+        groups.set(array, set)
+      }
+      for (const [array, set] of groups) {
+        for (let index = array.length - 1; index >= 0; index -= 1) {
+          const clip = array[index]
+          if (isJsonObject(clip) && set.has(clip)) {
+            array.splice(index, 1)
+          }
+        }
+      }
+      return { warnings }
+    }
+    case 'timeline.rippleDelete': {
+      const keys = uniqueKeys(command.clipKeys)
+      if (keys.length === 0) {
+        return { warnings }
+      }
+      const handles = keys.map((key) => requireTimelineHandle(ctx, key))
+      assertClipsRemovable(ctx, handles, '波纹删除')
+      const deletedByTrack = new Map<number, { start: number; duration: number }[]>()
+      for (const handle of handles) {
+        const clip = handle.clip
+        if (clipIsInfinite(clip)) {
+          throw new CommandError('无限片段不能波纹删除（没有有限末端）')
+        }
+        const duration = clipDurationOf(clip)
+        if (duration <= 0) {
+          throw new CommandError(`片段时长必须为正才能波纹删除（片段 ${handle.key}）`)
+        }
+        const list = deletedByTrack.get(handle.trackIndex) ?? []
+        list.push({ start: clipStartOf(clip), duration })
+        deletedByTrack.set(handle.trackIndex, list)
+      }
+      const groups = new Map<JsonValue[], Set<JsonObject>>()
+      for (const handle of handles) {
+        const array = clipArray(ctx, handle)
+        const set = groups.get(array) ?? new Set<JsonObject>()
+        set.add(handle.clip)
+        groups.set(array, set)
+      }
+      for (const [array, set] of groups) {
+        for (let index = array.length - 1; index >= 0; index -= 1) {
+          const clip = array[index]
+          if (isJsonObject(clip) && set.has(clip)) {
+            array.splice(index, 1)
+          }
+        }
+      }
+      const tracks = requireTracks(ctx)
+      for (const [trackIndex, deleted] of deletedByTrack) {
+        const track = tracks[trackIndex]
+        if (!isJsonObject(track) || !Array.isArray(track.clips)) {
+          continue
+        }
+        const remaining = track.clips.filter(isJsonObject)
+        const starts = rippleShift(
+          remaining.map((clip) => ({ start: clipStartOf(clip), duration: clipDurationOf(clip) })),
+          deleted,
+        )
+        remaining.forEach((clip, index) => {
+          clip.start_time = starts[index]
+        })
+      }
+      return { warnings }
+    }
+    case 'timeline.toggleLoop': {
+      const keys = uniqueKeys(command.clipKeys)
+      if (keys.length === 0) {
+        return { warnings }
+      }
+      const handles = keys.map((key) => requireTimelineHandle(ctx, key))
+      const target = handles[0].clip.loop !== true
+      if (target) {
+        for (const handle of handles) {
+          if (clipDurationOf(handle.clip) < 0) {
+            throw new CommandError('无限片段（duration<0）不能开启循环')
+          }
+        }
+      }
+      for (const handle of handles) {
+        if (!target) {
+          handle.clip.loop = false
+          continue
+        }
+        handle.clip.loop = true
+        if (typeof handle.clip.loop_count !== 'number' || handle.clip.loop_count === 0) {
+          handle.clip.loop_count = 1
+        }
+      }
+      return { warnings }
+    }
+    case 'timeline.compactSelection': {
+      const keys = uniqueKeys(command.clipKeys)
+      if (keys.length === 0) {
+        return { warnings }
+      }
+      const handles = keys.map((key) => requireTimelineHandle(ctx, key))
+      for (const handle of handles) {
+        if (clipIsInfinite(handle.clip)) {
+          throw new CommandError('无限片段不能顺排（无法定义 end）')
+        }
+      }
+      const groups = new Map<number, ClipHandle[]>()
+      for (const handle of handles) {
+        const list = groups.get(handle.trackIndex) ?? []
+        list.push(handle)
+        groups.set(handle.trackIndex, list)
+      }
+      for (const list of groups.values()) {
+        const ordered = [...list].sort((left, right) => clipStartOf(left.clip) - clipStartOf(right.clip)
+          || left.clipIndex - right.clipIndex)
+        const starts = compactStarts(ordered.map((handle) => ({
+          start: clipStartOf(handle.clip),
+          duration: clipDurationOf(handle.clip),
+        })))
+        ordered.forEach((handle, index) => {
+          handle.clip.start_time = starts[index]
+        })
+      }
+      return { warnings }
+    }
+    case 'timeline.pasteClips': {
+      const target = resolveTrack(ctx, command.targetTrackId)
+      if (!isFiniteNumber(command.atTime)) {
+        throw new CommandError('atTime 需要有限数字')
+      }
+      if (command.clips.length === 0) {
+        return { warnings }
+      }
+      const prepared: JsonObject[] = []
+      let earliest = Number.POSITIVE_INFINITY
+      for (let index = 0; index < command.clips.length; index += 1) {
+        const raw = command.clips[index]
+        if (!isJsonObject(raw)) {
+          throw new CommandError(`粘贴片段 ${index} 不是对象`)
+        }
+        const result = readClip(raw, {
+          inline: true,
+          jsonPath: `paste[${index}]`,
+          trackType: target.type,
+          catalog: ctx.catalog,
+        })
+        const blocking = result.problems.filter((problem) => problem.severity === 'block')
+        if (blocking.length > 0) {
+          throw new CommandError(
+            `粘贴片段 ${index} 与轨道 ${target.type} 不匹配: ${blocking.map((problem) => problem.message).join('；')}`,
+          )
+        }
+        const clip = cloneJson(raw) as JsonObject
+        prepared.push(clip)
+        earliest = Math.min(earliest, clipStartOf(clip))
+      }
+      const shift = Math.max(0, command.atTime) - earliest
+      for (const clip of prepared) {
+        clip.start_time = Math.max(0, clipStartOf(clip) + shift)
+      }
+      target.clips.push(...prepared)
+      return { warnings }
+    }
+    case 'trigger.requires.add': {
+      if (!isBuiltinRequirementType(command.requirementType)) {
+        throw new CommandError(`未知内置前置类型: ${String(command.requirementType)}`)
+      }
+      const trigger = requireTrigger(ctx, command.triggerIdentity)
+      const array = [...requirementArrayOf(trigger)]
+      assertRequirementInput(command.index, command.targetScriptId, array.length, true)
+      array.splice(command.index, 0, newRequirement(command.requirementType, command.targetScriptId))
+      trigger.requires = array
+      return { warnings }
+    }
+    case 'trigger.requires.update': {
+      if (!isBuiltinRequirementType(command.requirementType)) {
+        throw new CommandError(`未知内置前置类型: ${String(command.requirementType)}`)
+      }
+      const trigger = requireTrigger(ctx, command.triggerIdentity)
+      const array = [...requirementArrayOf(trigger)]
+      assertRequirementInput(command.index, command.targetScriptId, array.length, false)
+      const entry = array[command.index]
+      if (parseRequirement(entry, command.index).role !== 'builtin') {
+        throw new CommandError('custom_readonly')
+      }
+      array[command.index] = writeRequirement(entry, command.requirementType, command.targetScriptId)
+      trigger.requires = array
+      return { warnings }
+    }
+    case 'trigger.requires.remove': {
+      const trigger = requireTrigger(ctx, command.triggerIdentity)
+      const array = [...requirementArrayOf(trigger)]
+      if (!Number.isInteger(command.index) || command.index < 0 || command.index >= array.length) {
+        throw new CommandError(`requires 下标越界: ${command.index}（0..${array.length - 1}）`)
+      }
+      if (parseRequirement(array[command.index], command.index).role !== 'builtin') {
+        throw new CommandError('custom_readonly')
+      }
+      array.splice(command.index, 1)
+      writeRequires(trigger, array)
+      return { warnings }
+    }
+    case 'trigger.setConditions': {
+      const trigger = requireTrigger(ctx, command.triggerIdentity)
+      const current = trigger.conditions
+      if (current !== undefined && !isJsonObject(current)) {
+        throw new CommandError('触发器 conditions 不是对象')
+      }
+      const conditions: JsonObject = current === undefined ? {} : current
+      for (const [key, value] of Object.entries(command.patch)) {
+        conditions[key] = cloneJson(value)
+      }
+      for (const key of command.remove ?? []) {
+        delete conditions[key]
+      }
+      trigger.conditions = conditions
+      return { warnings }
+    }
+    case 'trigger.setFields': {
+      const trigger = requireTrigger(ctx, command.triggerIdentity)
+      const entries = Object.entries(command.patch)
+      for (const [key, value] of entries) {
+        if (!TRIGGER_EDITABLE_KEYS.includes(key)) {
+          throw new CommandError(`触发器字段不允许: ${key}（可用: ${TRIGGER_EDITABLE_KEYS.join(' / ')}）`)
+        }
+        assertTriggerFieldValue(key, value)
+      }
+      for (const [key, value] of entries) {
+        if (value === null) {
+          delete trigger[key]
+          continue
+        }
+        trigger[key] = cloneJson(value)
       }
       return { warnings }
     }

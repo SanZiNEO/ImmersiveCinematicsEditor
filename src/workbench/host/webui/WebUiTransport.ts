@@ -117,6 +117,34 @@ export class WebUiTransport implements DocTransport, ValidationTransport, Previe
     await this.client.request<unknown>(WEBUI_MESSAGE.editorSeek, { time })
   }
 
+  /** `script.list`：脚本页唯一扫描入口的第一跳（只列路径，不递归目录）。 */
+  async list(): Promise<string[]> {
+    const result = await this.client.request<unknown>(WEBUI_MESSAGE.scriptList, {})
+    if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+      throw new Error('script.list 回执格式错误')
+    }
+    if (!('files' in result) || !Array.isArray(result.files)) {
+      throw new Error('script.list 回执缺少 files')
+    }
+    return result.files.filter((file): file is string => typeof file === 'string')
+  }
+
+  /** 播放（05-12：服务端是唯一时间源；ack 不表示已开始）。 */
+  play(start?: number, end?: number): void {
+    this.client.send(WEBUI_MESSAGE.editorPlay, {
+      ...(start === undefined ? {} : { start }),
+      ...(end === undefined ? {} : { end }),
+    })
+  }
+
+  pause(): void {
+    this.client.send(WEBUI_MESSAGE.editorPause, {})
+  }
+
+  stop(): void {
+    this.client.send(WEBUI_MESSAGE.editorStop, {})
+  }
+
   /** `script.load` 失败即视为不存在（服务端没有单独的存在性接口）。 */
   async exists(path: string): Promise<boolean> {
     try {

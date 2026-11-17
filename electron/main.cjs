@@ -35,7 +35,7 @@ const CSP = [
 ].join('; ')
 
 // storage 端口白名单：三个固定文件 + themes/、drafts/ 命名空间。
-const STORAGE_ROOT_FILES = new Set(['preferences.json', 'layout.json', 'window-state.json'])
+const STORAGE_ROOT_FILES = new Set(['preferences.json', 'layout.json', 'window-state.json', 'graph-layout.json'])
 const STORAGE_NAMESPACES = ['themes', 'drafts']
 
 const APPEARANCES = new Set(['dark', 'light', 'high-contrast'])
@@ -477,7 +477,11 @@ function normalizeStorageName(raw) {
   if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) return null
   const segments = name.split('/')
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return null
-  if (segments.length === 1) return STORAGE_ROOT_FILES.has(name) ? name : null
+  if (segments.length === 1) {
+    if (STORAGE_ROOT_FILES.has(name)) return name
+    if (/^graph-layout\.corrupt[.-][A-Za-z0-9._-]+\.json$/.test(name)) return name
+    return null
+  }
   if (!STORAGE_NAMESPACES.includes(segments[0])) return null
   return name
 }

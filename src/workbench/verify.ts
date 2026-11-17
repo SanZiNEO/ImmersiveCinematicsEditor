@@ -1090,19 +1090,32 @@ async function main(): Promise<void> {
 
     const pluginSources = await Promise.all((await listFiles('../plugins/', (name) => name.endsWith('.ts'))).map(async (file) => readFile(new URL(file, WORKBENCH_DIR), 'utf8')))
     const pluginJoined = pluginSources.join('\n')
-    check('01 插件不 import src/core（只走 api 与自己的文件）', !/from '\.\.\/\.\.\/core\//.test(pluginJoined))
+    check(
+      '01 插件不 import 文档 store / 宿主实现（只走 api、core 纯函数与 panelContext）',
+      !/from '\.\.\/\.\.\/workbench\/(app|kernel|layout|dock|drawer|theme|preferences|commands|keybindings|focus|shell)\//.test(pluginJoined)
+        && !/core\/doc\/(store|io|validate)\.ts/.test(pluginJoined),
+      pluginJoined.match(/from '[^']+'/g)?.filter((line) => line.includes('workbench/app') || line.includes('doc/store')).slice(0, 5),
+    )
   }
 
   // ── 9. 参考插件与 builtin 清单（04-11） ──────────────────────────────
   {
-    // builtin.ts 静态 import demo manifest，而 demo 主题是 JSON（Node strip-only 不支持 JSON import），
-    // 所以这里读源码断言「唯一清单」：只有两行 import + 一个数组，且两行 import 都在。
+    // builtin.ts 静态 import 全部真实插件与 demo；Node strip-only 不支持 JSON import，
+    // 所以这里读源码断言「唯一清单」：只有 manifest import + 一个数组。
     const builtinSource = await readWorkbench('../plugins/builtin.ts')
     const valueImports = builtinSource.split('\n').filter((line) => line.startsWith('import ') && !line.startsWith('import type '))
-    check('11 builtin.ts 是唯一静态清单（两个插件 import）', valueImports.length === 2
-      && valueImports.some((line) => line.includes('./core.workbench/manifest'))
-      && valueImports.some((line) => line.includes('./demo.kitchen-sink/manifest')), valueImports)
-    check('11 builtin.ts 数组顺序为 core → demo', /BUILTIN_PLUGINS[^=]*=\s*\[[\s\S]*coreWorkbench[\s\S]*demoKitchenSink[\s\S]*\]/.test(builtinSource), builtinSource.slice(0, 400))
+    const expectedManifests = [
+      './core.workbench/manifest',
+      './core.script-graph/manifest',
+      './core.timeline/manifest',
+      './core.clip-effects/manifest',
+      './core.selection-properties/manifest',
+      './demo.extra/manifest',
+      './demo.kitchen-sink/manifest',
+    ]
+    check('11 builtin.ts 是唯一静态清单（7 个插件 import）', valueImports.length === 7
+      && expectedManifests.every((path) => valueImports.some((line) => line.includes(path))), valueImports)
+    check('11 builtin.ts 数组顺序为 core → 05 真实插件 → demo', /BUILTIN_PLUGINS[^=]*=\s*\[[\s\S]*coreWorkbench[\s\S]*scriptGraph[\s\S]*timelinePlugin[\s\S]*coreClipEffects[\s\S]*coreSelectionProperties[\s\S]*demoExtra[\s\S]*demoKitchenSink[\s\S]*\]/.test(builtinSource), builtinSource.slice(0, 500))
 
     const demoManifestSource = [
       await readFile(new URL('../plugins/demo.kitchen-sink/manifest.ts', WORKBENCH_DIR), 'utf8'),

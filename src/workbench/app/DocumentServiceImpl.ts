@@ -9,27 +9,52 @@
 import type { CatalogIndex } from '../../core/schema/index.ts'
 import { DocIo } from '../../core/doc/io.ts'
 import type { DocTransport, OpenResult, SaveResult } from '../../core/doc/io.ts'
-import { liveClipKeys } from '../../core/doc/identity.ts'
+import { collectClipReferences, liveClipKeys } from '../../core/doc/identity.ts'
 import type { ClipRegistry } from '../../core/doc/identity.ts'
-import { isJsonObject } from '../../core/doc/json.ts'
+import { cloneJson, isJsonObject } from '../../core/doc/json.ts'
 import { metaKeys } from '../../core/doc/keys.ts'
 import { DocStore } from '../../core/doc/store.ts'
 import type { CommitResult } from '../../core/doc/store.ts'
 import type { DocCommand } from '../../core/doc/commands.ts'
-import type { DocIssue, Selection } from '../../core/doc/types.ts'
+import type { DocIssue, JsonObject, Selection } from '../../core/doc/types.ts'
 import { ValidationBridge } from '../../core/doc/validate.ts'
 import type { ValidationTransport } from '../../core/doc/validate.ts'
 import type {
   ClipListEntry,
+  ClipViewEntry,
   CommitOutcome,
   DocumentCommands,
   DocumentService,
   DocumentSummary,
   OpenOutcome,
+  PreviewRange,
   SaveOutcome,
+  ScriptView,
+  SessionView,
+  TrackSessionView,
+  TrackViewEntry,
+  TriggerViewEntry,
   ValidateOutcome,
 } from '../api/documents.ts'
 import type { DiagnosticSink } from '../api/diagnostics.ts'
+import {
+  duplicateTriggerIds,
+  parseRequirement,
+  requiresArrayOf,
+  triggerFingerprint,
+  triggerIdentityOf,
+} from '../../core/graph/requirements.ts'
+
+/** 片段显示名：label / name / id / 未命名片段。 */
+function readClipLabel(clip: JsonObject, id: string | undefined): string {
+  for (const key of ['label', 'name'] as const) {
+    const value = clip[key]
+    if (typeof value === 'string' && value.length > 0) {
+      return value
+    }
+  }
+  return id !== undefined && id.length > 0 ? id : '未命名片段'
+}
 
 /** 文档服务依赖。 */
 export interface DocumentServiceImplOptions {
@@ -77,7 +102,7 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
       ...(options.validateDebounceMs === undefined ? {} : { debounceMs: options.validateDebounceMs }),
     })
     this.store.subscribe((event) => {
-      if (event === 'commit' || event === 'undo' || event === 'redo') {
+      if (event === 'commit' || event === 'undo' || event === 'redo' || event === 'external') {
         this.bridge.schedule()
         this.scheduleDraft()
       }
@@ -186,6 +211,265 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
       })
     }
     return entries
+  }
+
+  /** 当前脚本只读视图：轨道、触发器、A-B、有限末端（全是克隆，不暴露 store）。 */
+  view(): ScriptView | null {
+    const doc = this.store.doc
+    if (doc === null) {
+      return null
+    }
+    const meta = doc.meta
+    const metaText = (key: string): string => {
+      const value = meta[key]
+      return typeof value === 'string' ? value : ''
+    }
+    const metaNumber = (key: string): number => {
+      const value = meta[key]
+      return typeof value === 'number' && Number.isFinite(value) ? value : 0
+    }
+
+    const triggers: TriggerViewEntry[] = []
+    const rawTriggers = Array.isArray(meta.triggers) ? meta.triggers : []
+    const duplicateIds = duplicateTriggerIds(rawTriggers)
+    for (let index = 0; index < rawTriggers.length; index += 1) {
+      const raw = rawTriggers[index]
+      if (!isJsonObject(raw)) {
+        continue
+      }
+      const requirements = requiresArrayOf(raw).map((entry, requirementIndex) => {
+        const parsed = parseRequirement(entry, requirementIndex)
+        if (parsed.role === 'builtin') {
+          return {
+            ...parsed,
+            editable: true,
+          }
+        }
+        return parsed
+      })
+      const conditions = isJsonObject(raw.conditions) ? cloneJson(raw.conditions) as JsonObject : {}
+      const continuity = isJsonObject(raw.continuity) ? cloneJson(raw.continuity) as JsonObject : undefined
+      triggers.push({
+        identity: triggerIdentityOf(raw, index, duplicateIds),
+        index,
+        type: typeof raw.type === 'string' ? raw.type : '',
+        repeatable: raw.repeatable === true,
+        delay: typeof raw.delay === 'number' && Number.isFinite(raw.delay) ? Math.max(0, raw.delay) : 0,
+        onEnter: raw.on_enter === true,
+        exitBuffer: typeof raw.exit_buffer === 'number' && Number.isFinite(raw.exit_buffer) ? Math.max(0, raw.exit_buffer) : 0,
+        conditions,
+        ...(continuity === undefined ? {} : { continuity }),
+        requirements,
+        requiresFingerprint: triggerFingerprint(raw),
+      })
+    }
+
+    const referenceCounts = new Map<string, number>()
+    for (const reference of collectClipReferences(doc)) {
+      referenceCounts.set(reference.clipId, (referenceCounts.get(reference.clipId) ?? 0) + 1)
+    }
+    const issueKeys = new Set<string>()
+    for (const issue of [...this.store.derived.localIssues, ...this.store.derived.serverIssues]) {
+      if (issue.clipKey !== undefined) {
+        issueKeys.add(issue.clipKey)
+      }
+    }
+
+    const tracks: TrackViewEntry[] = []
+    const rawTracks = Array.isArray(doc.timeline.tracks) ? doc.timeline.tracks : []
+    for (let index = 0; index < rawTracks.length; index += 1) {
+      const track = rawTracks[index]
+      if (!isJsonObject(track)) {
+        continue
+      }
+      const type = typeof track.type === 'string' ? track.type : ''
+      const name = typeof track.name === 'string' ? track.name : ''
+      const clips: ClipViewEntry[] = []
+      const rawClips = Array.isArray(track.clips) ? track.clips : []
+      for (const rawClip of rawClips) {
+        if (!isJsonObject(rawClip)) {
+          continue
+        }
+        const clipKey = this.store.registry.keyOf(rawClip)
+        if (clipKey === undefined) {
+          continue
+        }
+        const start = typeof rawClip.start_time === 'number' && Number.isFinite(rawClip.start_time) ? rawClip.start_time : 0
+        const duration = typeof rawClip.duration === 'number' && Number.isFinite(rawClip.duration) ? rawClip.duration : 0
+        const loop = rawClip.loop === true
+        const loopCount = typeof rawClip.loop_count === 'number' && Number.isFinite(rawClip.loop_count)
+          ? rawClip.loop_count
+          : undefined
+        const infinite = duration < 0 || (loop && (loopCount ?? -1) < 0)
+        const id = typeof rawClip.id === 'string' ? rawClip.id : undefined
+        const label = readClipLabel(rawClip, id)
+        const references = id === undefined ? 0 : referenceCounts.get(id) ?? 0
+        clips.push({
+          clipKey,
+          ...(id === undefined ? {} : { clipId: id }),
+          start,
+          duration,
+          loop,
+          ...(loopCount === undefined ? {} : { loopCount }),
+          infinite,
+          label,
+          references,
+          warn: issueKeys.has(clipKey),
+        })
+      }
+      tracks.push({
+        trackId: `${type}#${index}`,
+        type,
+        index,
+        name,
+        clips,
+      })
+    }
+
+    const loopStart = typeof doc.timeline.loop_start === 'number' && Number.isFinite(doc.timeline.loop_start)
+      ? doc.timeline.loop_start
+      : null
+    const loopEnd = typeof doc.timeline.loop_end === 'number' && Number.isFinite(doc.timeline.loop_end)
+      ? doc.timeline.loop_end
+      : null
+
+    return {
+      docId: this.summary().docId,
+      path: this.store.session.currentPath,
+      revision: this.store.revision,
+      meta: {
+        id: metaText('id'),
+        name: metaText('name'),
+        author: metaText('author'),
+        description: metaText('description'),
+        dimension: metaText('dimension'),
+        priority: metaNumber('priority'),
+      },
+      triggers,
+      tracks,
+      loopStart,
+      loopEnd,
+      contentEnd: this.store.derived.contentEnd,
+      infinite: this.store.derived.infinite,
+    }
+  }
+
+  clipObjects(clipKey: string): JsonObject | null {
+    const handle = this.store.registry.handle(clipKey)
+    if (handle === undefined) {
+      return null
+    }
+    const objects = handle.clip.objects
+    return isJsonObject(objects) ? cloneJson(objects) as JsonObject : {}
+  }
+
+  sessionView(): SessionView {
+    const session = this.store.session
+    const trackView: Record<string, TrackSessionView> = {}
+    for (const [key, value] of Object.entries(session.trackView)) {
+      const index = key.lastIndexOf(':')
+      if (index < 0) {
+        continue
+      }
+      const type = key.slice(0, index)
+      const trackIndex = key.slice(index + 1)
+      trackView[`${type}#${trackIndex}`] = { ...value }
+    }
+    return {
+      playhead: session.playhead,
+      pxPerSecond: session.pxPerSecond,
+      markers: [...session.markers],
+      previewRange: session.previewRange === null ? null : { ...session.previewRange },
+      trackView,
+    }
+  }
+
+  setPlayhead(time: number): void {
+    if (!Number.isFinite(time)) {
+      return
+    }
+    this.store.session.playhead = Math.max(0, time)
+    this.emit()
+  }
+
+  setPxPerSecond(value: number): void {
+    if (!Number.isFinite(value)) {
+      return
+    }
+    this.store.session.pxPerSecond = Math.min(500, Math.max(5, value))
+    this.emit()
+  }
+
+  addMarker(time: number): void {
+    if (!Number.isFinite(time) || time < 0) {
+      return
+    }
+    const rounded = Math.round(time * 1000) / 1000
+    const markers = this.store.session.markers.filter((marker) => Math.abs(marker - rounded) > 0.001)
+    markers.push(rounded)
+    markers.sort((left, right) => left - right)
+    this.store.session.markers = markers
+    this.emit()
+  }
+
+  removeMarker(time: number): void {
+    if (!Number.isFinite(time)) {
+      return
+    }
+    let nearest: number | undefined
+    for (const marker of this.store.session.markers) {
+      if (nearest === undefined || Math.abs(marker - time) < Math.abs(nearest - time)) {
+        nearest = marker
+      }
+    }
+    if (nearest === undefined || Math.abs(nearest - time) > 0.001) {
+      return
+    }
+    this.store.session.markers = this.store.session.markers.filter((marker) => marker !== nearest)
+    this.emit()
+  }
+
+  clearMarkers(): void {
+    this.store.session.markers = []
+    this.emit()
+  }
+
+  setPreviewRange(range: PreviewRange | null): void {
+    if (range === null) {
+      this.store.session.previewRange = null
+      this.emit()
+      return
+    }
+    const start = Math.min(range.start, range.end)
+    const end = Math.max(range.start, range.end)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 0.1) {
+      this.store.session.previewRange = null
+      this.emit()
+      return
+    }
+    this.store.session.previewRange = { start, end }
+    this.emit()
+  }
+
+  setTrackView(trackId: string, patch: Partial<TrackSessionView>): void {
+    const index = trackId.lastIndexOf('#')
+    if (index <= 0) {
+      return
+    }
+    const type = trackId.slice(0, index)
+    const trackIndexText = trackId.slice(index + 1)
+    const trackIndex = Number(trackIndexText)
+    if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+      return
+    }
+    const key = `${type}:${trackIndex}`
+    const current = this.store.session.trackView[key] ?? { visible: true, locked: false, muted: false }
+    this.store.session.trackView[key] = {
+      visible: patch.visible ?? current.visible,
+      locked: patch.locked ?? current.locked,
+      muted: patch.muted ?? current.muted,
+    }
+    this.emit()
   }
 
   async open(path: string): Promise<OpenOutcome> {

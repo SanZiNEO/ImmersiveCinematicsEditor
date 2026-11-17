@@ -65,6 +65,10 @@ export interface PreviewServicePort {
   subscribe(listener: () => void): () => void
   /** 请求服务端刷新一帧（`editor.previewConfig` 的副作用）。 */
   requestRefresh(): void
+  /** 播放（可选起止秒）；状态以 `playback.state` 回推，不本地计时。 */
+  play(start?: number, end?: number): void
+  pause(): void
+  stop(): void
 }
 
 /** 解析一帧；格式不对返回 `null`（丢弃，不抛异常）。 */

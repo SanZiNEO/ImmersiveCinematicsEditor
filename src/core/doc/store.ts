@@ -52,7 +52,7 @@ interface DocSnapshot {
 }
 
 /** 变更事件（订阅者用于调度预览推送 / script.validate）。 */
-export type StoreEvent = 'open' | 'commit' | 'undo' | 'redo' | 'reset'
+export type StoreEvent = 'open' | 'commit' | 'undo' | 'redo' | 'reset' | 'external'
 
 export interface DocStoreOptions {
   catalog: CatalogIndex
@@ -133,6 +133,9 @@ export class DocStore {
     this.session.selection = selectFirstCameraClip(this.registry)
     this.session.clipKeys = []
     this.session.selectionInvalid = null
+    this.session.markers = []
+    this.session.previewRange = null
+    this.session.loopRange = null
     this.revisionCounter += 1
     this.resetHistory()
     this.recomputeDerived()
@@ -157,6 +160,9 @@ export class DocStore {
     this.session.clipKeys = []
     this.session.selectionInvalid = null
     this.session.playhead = 0
+    this.session.loopRange = null
+    this.session.previewRange = null
+    this.session.markers = []
     this.derived.contentEnd = 0
     this.derived.infinite = false
     this.derived.localIssues = []
@@ -174,6 +180,37 @@ export class DocStore {
   /** 保存成功：清 dirty。 */
   markSaved(): void {
     this.dirtyFlag = false
+  }
+
+  /**
+   * 外部已落盘的文档同步进当前会话（05-06 / 05-07）。
+   *
+   * 不改撤销栈、不重载文件：用于「图/后台事务已经写盘，当前打开的是同一脚本」。
+   * `markClean=true` 时清脏；否则保留原脏状态。
+   */
+  applyExternal(root: JsonObject, options: { markClean?: boolean } = {}): boolean {
+    const parsed = parseDoc(root, { metaKeys: this.metaKeys })
+    if (!parsed.ok) {
+      return false
+    }
+    const doc = parsed.doc
+    const previous = this.current
+    if (previous !== null) {
+      doc.authoring = previous.authoring
+      doc.clipAuthoring = previous.clipAuthoring
+    }
+    this.current = doc
+    this.registry.sync(doc, { restore: true })
+    const previousSelection = this.session.selection
+    this.session.selection = repairSelection(doc, this.registry, previousSelection)
+    this.syncSelectionState(previousSelection)
+    this.revisionCounter += 1
+    if (options.markClean === true) {
+      this.dirtyFlag = false
+    }
+    this.recomputeDerived()
+    this.emit('external')
+    return true
   }
 
   /** 目录指纹钉住（打开 / 重绑时由 binding / io 写入；不写进脚本）。 */

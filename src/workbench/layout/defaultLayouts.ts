@@ -49,7 +49,8 @@ export const PANEL_SIZE_CONSTRAINTS: Readonly<Record<string, PanelSizeConstraint
   'clip.effects': { minWidth: 420 },
   'selection.properties': { minWidth: 280, maxWidth: 560 },
   preview: { minWidth: 320 },
-  timeline: { minHeight: BOTTOM_MIN_HEIGHT },
+  timeline: { minHeight: BOTTOM_MIN_HEIGHT, maxHeight: 560 },
+  'timeline.main': { minHeight: BOTTOM_MIN_HEIGHT, maxHeight: 560 },
   diagnostics: { minHeight: DRAWER_MIN_HEIGHT },
 })
 

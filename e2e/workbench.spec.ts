@@ -84,12 +84,15 @@ test('主进程跑的是开发模式，窗口与安全选项真实生效', async
   await page.screenshot({ path: `${ARTIFACTS}/01-project-page.png` })
 })
 
-test('项目页渲染真实入口与空态（无假统计）', async () => {
+test('项目页渲染真实入口与脚本页空态（无启动器主体）', async () => {
   await expect(page.locator('.project-page')).toBeVisible()
   await expect(page.locator('.project-page .primary')).toHaveText('新建脚本')
   await expect(page.locator('.project-page')).toContainText('打开脚本文件')
   await expect(page.locator('.project-page')).toContainText('打开文件夹')
-  await expect(page.locator('.project-page')).toContainText('还没有最近项目')
+  await expect(page.locator('.script-graph-panel')).toBeVisible()
+  await expect(page.locator('.graph-toolbar')).toBeVisible()
+  await expect(page.locator('.project-page')).toContainText('未连接模组')
+  await expect(page.locator('.project-page')).not.toContainText('还没有最近项目')
   await expect(page.locator('.statusbar')).toContainText('页面：project')
 
   const shell = await page.evaluate(() => ({
@@ -138,7 +141,8 @@ test('document 页：默认布局渲染左右中下面板与抽屉（真实组�
   await expect(page.locator('.doc-header')).toContainText('离线')
   // 面板是懒加载：等真实内容挂上再统计 DOM（不是等固定时间）。
   await expect(page.locator('canvas.preview-canvas')).toHaveCount(1, { timeout: 30_000 })
-  await expect(page.locator('[data-focus-scope="panel:demo.kitchen-sink:demo.panel.effects"]')).toContainText('demo', { timeout: 30_000 })
+  await expect(page.locator('[data-focus-scope="panel:core.clip-effects:clip.effects"]')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('[data-focus-scope="panel:core.selection-properties:selection.properties"]')).toBeVisible({ timeout: 30_000 })
 
   const state = await page.evaluate(() => {
     const workbench = (window as unknown as { __workbench?: WorkbenchDebug }).__workbench

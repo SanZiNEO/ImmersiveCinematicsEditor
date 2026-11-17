@@ -130,6 +130,8 @@ export interface SessionState {
   pxPerSecond: number
   /** UI 的 A-B 循环；与 `doc.timeline.loop_start/loop_end` 不得互写。 */
   loopRange: { start: number; end: number } | null
+  /** UI 预览范围（session，不写文档；05-12）。 */
+  previewRange: { start: number; end: number } | null
   markers: number[]
   trackView: Record<string, TrackViewState>
   /** 文档打开时钉住的目录指纹（03-08）；不写进脚本。 */
@@ -180,6 +182,7 @@ export function createSessionState(): SessionState {
     playhead: 0,
     pxPerSecond: 40,
     loopRange: null,
+    previewRange: null,
     markers: [],
     trackView: {},
     catalogHash: null,

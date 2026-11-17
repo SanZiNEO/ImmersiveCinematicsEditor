@@ -5,7 +5,8 @@
  * 校验只走 `ValidationBridge`。本文件只声明面板与外壳可用的只读/写端口。
  */
 import type { DocCommand } from '../../core/doc/commands.ts'
-import type { DocIssue, Selection } from '../../core/doc/types.ts'
+import type { DocIssue, JsonObject, Selection } from '../../core/doc/types.ts'
+import type { GraphRequirement } from '../../core/graph/types.ts'
 
 /** `commit` 结果（透传 03 `CommitResult`）。 */
 export interface CommitOutcome {
@@ -85,11 +86,112 @@ export interface ClipListEntry {
   duration: number
 }
 
+/** 触发器只读视图（编辑器页触发器表单用；克隆，不暴露 store）。 */
+export interface TriggerViewEntry {
+  identity: string
+  index: number
+  type: string
+  repeatable: boolean
+  delay: number
+  onEnter: boolean
+  exitBuffer: number
+  conditions: JsonObject
+  continuity?: JsonObject
+  requirements: GraphRequirement[]
+  /** 当前 requires 数组的稳定指纹（图上改前置用）。 */
+  requiresFingerprint: string
+}
+
+/** 片段只读视图（主轴用；不含对象/关键帧细节）。 */
+export interface ClipViewEntry {
+  clipKey: string
+  clipId?: string
+  start: number
+  duration: number
+  loop: boolean
+  loopCount?: number
+  infinite: boolean
+  /** 显示名：`clip.label` / `clip.name` / `clip.id` / `未命名片段`。 */
+  label: string
+  /** 被 paths / rule_bindings / exit / 条件 / 动作引用时 > 0。 */
+  references: number
+  /** 该片段有 block/warn 级 issue。 */
+  warn: boolean
+}
+
+/** 轨道只读视图。 */
+export interface TrackViewEntry {
+  /** `type#index`（05-10）。 */
+  trackId: string
+  type: string
+  index: number
+  name: string
+  clips: ClipViewEntry[]
+}
+
+/** 当前脚本的完整只读视图。 */
+export interface ScriptView {
+  docId: string | null
+  path: string | null
+  revision: number
+  meta: {
+    id: string
+    name: string
+    author: string
+    description: string
+    dimension: string
+    priority: number
+  }
+  triggers: TriggerViewEntry[]
+  tracks: TrackViewEntry[]
+  loopStart: number | null
+  loopEnd: number | null
+  contentEnd: number | null
+  infinite: boolean
+}
+
+/** UI 预览范围（session，不写文档）。 */
+export interface PreviewRange {
+  start: number
+  end: number
+}
+
+/** 轨道会话状态。 */
+export interface TrackSessionView {
+  visible: boolean
+  locked: boolean
+  muted: boolean
+}
+
+/** 主轴 / 标尺会话快照（只读）。 */
+export interface SessionView {
+  playhead: number
+  pxPerSecond: number
+  markers: readonly number[]
+  previewRange: PreviewRange | null
+  /** trackId → 会话状态。 */
+  trackView: Readonly<Record<string, TrackSessionView>>
+}
+
 /** 文档生命周期（打开 / 新建 / 保存 / 校验 / 回滚 / 关闭）。 */
 export interface DocumentService {
   summary(): DocumentSummary
   /** 当前文档里的片段摘要（按文档顺序；不含已删除片段的残留记录）。 */
   clips(): ClipListEntry[]
+  /** 当前脚本只读视图（轨道 / 触发器 / A-B / 有限末端）；无文档为 `null`。 */
+  view(): ScriptView | null
+  /** 片段 `objects` 的只读克隆；片段不存在为 `null`。 */
+  clipObjects(clipKey: string): JsonObject | null
+  /** 主轴会话快照（播放头 / 缩放 / 标记 / 预览范围 / 轨道状态）。 */
+  sessionView(): SessionView
+  setPlayhead(time: number): void
+  setPxPerSecond(value: number): void
+  addMarker(time: number): void
+  removeMarker(time: number): void
+  clearMarkers(): void
+  setPreviewRange(range: PreviewRange | null): void
+  /** `trackId` = `type#index`。 */
+  setTrackView(trackId: string, patch: Partial<TrackSessionView>): void
   open(path: string): Promise<OpenOutcome>
   newDoc(): Promise<OpenOutcome>
   save(): Promise<SaveOutcome>

@@ -13,12 +13,15 @@
 import type { CatalogIndex } from '../../core/schema/index.ts'
 import { buildCatalog, indexCatalog } from '../../core/schema/index.ts'
 import type { DocTransport } from '../../core/doc/io.ts'
+import type { JsonValue } from '../../core/doc/types.ts'
+import { cloneJson } from '../../core/doc/json.ts'
 import type { ValidationTransport } from '../../core/doc/validate.ts'
 import type { DiagnosticSink } from '../api/diagnostics.ts'
 import type { HostPort } from '../api/host.ts'
 import type { LayoutFile } from '../api/layout.ts'
 import type { ServiceRegistry } from '../api/services.ts'
 import {
+  CATALOG_SERVICE,
   COMMAND_SERVICE,
   DIAGNOSTICS_SERVICE,
   DIALOG_STACK,
@@ -27,6 +30,8 @@ import {
   DRAWER_TAB_REGISTRY,
   FILE_DIALOG_PORT,
   FOCUS_SERVICE,
+  GRAPH_LAYOUT_SERVICE,
+  GRAPH_SERVICE,
   HOST_SERVICE,
   I18N_SERVICE,
   KEYBINDING_SERVICE,
@@ -36,8 +41,10 @@ import {
   PANEL_REGISTRY,
   PREFERENCES_SERVICE,
   PREVIEW_SERVICE,
+  SCRIPT_MUTATION_SERVICE,
   SELECTION_SERVICE,
   SETTINGS_REGISTRY,
+  SHELL_ACTIONS_SERVICE,
   STATUS_ITEM_REGISTRY,
   STATUS_SERVICE,
   THEME_CONTROLLER,
@@ -74,6 +81,12 @@ import { SelectionServiceImpl } from './SelectionServiceImpl.ts'
 import { StatusServiceImpl } from './StatusServiceImpl.ts'
 import { DialogStackImpl } from './DialogStackImpl.ts'
 import { PluginHostImpl } from './PluginHostImpl.ts'
+import { ScriptGraphService } from './ScriptGraphService.ts'
+import { ScriptMutationService } from './ScriptMutationService.ts'
+import { WebUiScriptSource } from './WebUiScriptSource.ts'
+import { GraphLayoutStore } from '../../core/graph/layoutStore.ts'
+import { ShellActions } from '../shell/actions.ts'
+import { WEBUI_MESSAGE } from '../host/webui/protocol.ts'
 import { PageRouterImpl } from '../shell/pageRouter.ts'
 import { focusElement } from '../shell/focusRegions.ts'
 import { BUILTIN_PLUGINS } from '../../plugins/builtin.ts'
@@ -132,6 +145,10 @@ export class WorkbenchApp {
   readonly router: PageRouterImpl
   readonly documents: DocumentServiceImpl
   readonly selection: SelectionServiceImpl
+  readonly graph: ScriptGraphService
+  readonly graphLayout: GraphLayoutStore
+  readonly mutations: ScriptMutationService
+  readonly shellActions: ShellActions
   readonly panels: PanelRegistryImpl
   readonly pageRegistry: PageRegistryImpl
   readonly drawerTabs: DrawerTabRegistryImpl
@@ -222,8 +239,13 @@ export class WorkbenchApp {
 
     // WebUI 传输：Electron 宿主才有 token；浏览器 dev 也尝试连（Origin 会被服务端拒，属真实限制）。
     const token = readBrowserToken()
-    this.client = new WebUiClient({ token: () => token })
-    this.transport = new WebUiTransport({ client: this.client })
+    const client = new WebUiClient({ token: () => token })
+    this.client = client
+    this.transport = new WebUiTransport({ client })
+    const scriptSource = new WebUiScriptSource(client)
+
+    this.graphLayout = new GraphLayoutStore({ storage: this.host.storage })
+    this.graph = new ScriptGraphService({ source: scriptSource, catalog: this.catalog })
 
     const liveTransport: DocTransport & ValidationTransport = this.transport
     this.documents = new DocumentServiceImpl({
@@ -234,11 +256,31 @@ export class WorkbenchApp {
         void this.writeDraft(payload, revision)
       },
       onSaved: () => {
+        const path = this.documents.summary().path
+        if (path !== null) {
+          this.graph.invalidate('save', [path])
+        }
         void this.clearDrafts()
       },
     })
 
+    this.mutations = new ScriptMutationService({
+      source: scriptSource,
+      graph: this.graph,
+      documents: this.documents,
+      catalog: this.catalog,
+    })
+
     this.selection = new SelectionServiceImpl(this.documents.store)
+    this.shellActions = new ShellActions({
+      documents: this.documents,
+      files: this.host.files,
+      host: this.host,
+      router: this.router,
+      preferences: this.preferences,
+      status: this.status,
+      i18n: this.i18n,
+    })
     this.pluginHost = new PluginHostImpl({
       diagnostics: this.diagnostics,
       services: this.serviceRegistry,
@@ -286,7 +328,31 @@ export class WorkbenchApp {
     this.client?.connect()
   }
 
-  /** 释放：插件 → 文档 → 传输 → 布局写盘。 */
+  /**
+   * 开发/端到端夹具：用内存脚本集合替换图来源（真实索引、真实布局、真实写回路径）。
+   *
+   * 只在 `import.meta.env.DEV` 的调试钩子上可触达；生产 UI 没有入口。
+   */
+  debugUseGraphFiles(files: Record<string, JsonValue>): void {
+    const store = new Map(Object.entries(files).map(([path, doc]) => [path, cloneJson(doc)]))
+    this.graph.setSource({
+      connected: () => true,
+      list: async () => [...store.keys()].sort(),
+      load: async (path) => {
+        const doc = store.get(path)
+        if (doc === undefined) {
+          throw new Error(`脚本不存在：${path}`)
+        }
+        return cloneJson(doc)
+      },
+      save: async (path, doc) => {
+        store.set(path, cloneJson(doc))
+      },
+    })
+    this.graph.invalidate('manual')
+    void this.graph.refresh().catch(() => undefined)
+  }
+
   async dispose(): Promise<void> {
     await this.saveLayout()
     this.plugins.dispose()
@@ -321,6 +387,11 @@ export class WorkbenchApp {
     this.serviceRegistry.provide(DOCUMENT_SERVICE, this.documents)
     this.serviceRegistry.provide(DOCUMENT_COMMANDS, this.documents)
     this.serviceRegistry.provide(SELECTION_SERVICE, this.selection)
+    this.serviceRegistry.provide(CATALOG_SERVICE, this.catalog)
+    this.serviceRegistry.provide(GRAPH_SERVICE, this.graph)
+    this.serviceRegistry.provide(GRAPH_LAYOUT_SERVICE, this.graphLayout)
+    this.serviceRegistry.provide(SCRIPT_MUTATION_SERVICE, this.mutations)
+    this.serviceRegistry.provide(SHELL_ACTIONS_SERVICE, this.shellActions)
     if (this.transport !== null) {
       this.serviceRegistry.provide(PREVIEW_SERVICE, this.transport)
     }
@@ -402,7 +473,25 @@ export class WorkbenchApp {
     }
     client.subscribe((connected) => {
       this.documents.setConnected(connected)
+      this.graph.invalidate('reconnect')
+      if (connected) {
+        void this.graph.refresh().catch(() => undefined)
+      }
       this.status.notify(connected ? '已连接游戏 WebUI' : '与游戏 WebUI 断开', connected ? 'info' : 'warning')
+    })
+    client.on(WEBUI_MESSAGE.scriptGraphInvalidated, (data) => {
+      if (typeof data !== 'object' || data === null) {
+        this.graph.invalidate('manual')
+        return
+      }
+      const kind = 'kind' in data && typeof data.kind === 'string' ? data.kind : 'save'
+      const paths = 'paths' in data && Array.isArray(data.paths)
+        ? data.paths.filter((path): path is string => typeof path === 'string')
+        : undefined
+      const mapped = kind === 'save' || kind === 'delete' || kind === 'new' || kind === 'refactor' || kind === 'requires'
+        ? kind
+        : 'manual'
+      this.graph.invalidate(mapped, paths)
     })
   }
 
