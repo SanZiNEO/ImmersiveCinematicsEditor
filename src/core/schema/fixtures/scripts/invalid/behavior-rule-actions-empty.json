@@ -1,0 +1,32 @@
+{
+  "name": "behavior-rule-actions-empty",
+  "expect": ["规则动作为空"],
+  "doc": "规则 actions 是空数组。validateRules 报 RULE_ACTIONS_EMPTY（L53 类，block）：规则至少需要一个动作。",
+  "meta": {
+    "id": "behav_bad_actions",
+    "name": "Behavior Rule Actions Empty",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": [
+    {
+      "id": "rule_no_actions",
+      "condition": { "type": "time", "at": 0.5 },
+      "actions": []
+    }
+  ],
+  "rule_bindings": []
+}

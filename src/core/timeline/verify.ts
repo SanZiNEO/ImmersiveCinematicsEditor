@@ -781,9 +781,10 @@ check('clipEdit：多条波纹删除从后往前累计', JSON.stringify(rippleSh
   }, '命令：requires.add')
   const triggers = store.doc?.meta.triggers
   const login = Array.isArray(triggers) ? triggers[0] as JsonObject : {}
+  // 磁盘扁平形状：`script` 在条目顶层（ScriptValidator.java:2511-2526）。
   check('命令：requires.add 追加对象写法', JSON.stringify(login.requires) === JSON.stringify([
     'other',
-    { type: 'script_started', data: { script: 'third' } },
+    { type: 'script_started', script: 'third' },
   ]))
   commitOk(store, {
     kind: 'trigger.requires.update',
@@ -801,9 +802,10 @@ check('clipEdit：多条波纹删除从后往前累计', JSON.stringify(rippleSh
     requirementType: 'script_completed',
     targetScriptId: 'third2',
   }, '命令：requires.update 内置类型改类型')
+  // 磁盘扁平形状：`script` 在条目顶层（ScriptValidator.java:2511-2526）。
   check('命令：update 写回对象形状', JSON.stringify((login.requires as JsonValue[])[1]) === JSON.stringify({
     type: 'script_completed',
-    data: { script: 'third2' },
+    script: 'third2',
   }))
   commitOk(store, { kind: 'trigger.requires.remove', triggerIdentity: 't_login', index: 1 }, '命令：requires.remove')
   commitOk(store, { kind: 'trigger.requires.remove', triggerIdentity: 't_login', index: 0 }, '命令：requires.remove 最后一个')
@@ -850,8 +852,9 @@ check('clipEdit：多条波纹删除从后往前累计', JSON.stringify(rippleSh
     targetScriptId: 'ghost',
   }, '命令：type#index 身份定位触发器')
   const death = (store.doc?.meta.triggers as JsonValue[])[2] as JsonObject
+  // 磁盘扁平形状：`script` 在条目顶层（ScriptValidator.java:2511-2526）。
   check('命令：type#index 写入成功', JSON.stringify(death.requires) === JSON.stringify([
-    { type: 'script_played', data: { script: 'ghost' } },
+    { type: 'script_played', script: 'ghost' },
   ]))
 }
 

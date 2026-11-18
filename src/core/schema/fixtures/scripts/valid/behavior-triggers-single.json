@@ -1,0 +1,218 @@
+{
+  "name": "behavior-triggers-single",
+  "expect": [],
+  "doc": "25 个单类型触发器各一条，字段面照 behaviorTriggers 目录：必填字段补齐，可选字段取合法取值。组合器 all_of / any 另见 behavior-triggers-combinator.json。",
+  "meta": {
+    "id": "behav_single",
+    "name": "Behavior Triggers Single",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_location",
+        "type": "location",
+        "conditions": {
+          "dimension": "minecraft:overworld",
+          "position": { "x": 0, "y": 64, "z": 0 },
+          "radius": 8
+        }
+      },
+      {
+        "id": "trg_advancement",
+        "type": "advancement",
+        "conditions": {
+          "advancement": "minecraft:story/enter_the_nether"
+        }
+      },
+      {
+        "id": "trg_biome",
+        "type": "biome",
+        "conditions": {
+          "biome": "minecraft:plains"
+        }
+      },
+      {
+        "id": "trg_entity_kill",
+        "type": "entity_kill",
+        "conditions": {
+          "entity": "minecraft:zombie",
+          "dimension": "minecraft:overworld"
+        }
+      },
+      {
+        "id": "trg_entity_interact",
+        "type": "entity_interact",
+        "conditions": {
+          "target": "minecraft:villager",
+          "item": "minecraft:emerald",
+          "target_type": "entity"
+        }
+      },
+      {
+        "id": "trg_dimension_change",
+        "type": "dimension_change",
+        "conditions": {
+          "dimension": "minecraft:the_nether",
+          "from_dimension": "minecraft:overworld"
+        }
+      },
+      {
+        "id": "trg_login",
+        "type": "login",
+        "conditions": {}
+      },
+      {
+        "id": "trg_inventory",
+        "type": "inventory",
+        "conditions": {
+          "items": ["minecraft:apple", "minecraft:bread"],
+          "change": "increase"
+        }
+      },
+      {
+        "id": "trg_item_craft",
+        "type": "item_craft",
+        "conditions": {
+          "item": "minecraft:bread"
+        }
+      },
+      {
+        "id": "trg_structure",
+        "type": "structure",
+        "conditions": {
+          "structure": "minecraft:village",
+          "radius": 32
+        }
+      },
+      {
+        "id": "trg_gamestage",
+        "type": "gamestage",
+        "conditions": {
+          "stage": "chapter_one"
+        }
+      },
+      {
+        "id": "trg_item_use",
+        "type": "item_use",
+        "conditions": {
+          "item": "minecraft:stick"
+        }
+      },
+      {
+        "id": "trg_item_consume",
+        "type": "item_consume",
+        "conditions": {
+          "item": "minecraft:apple"
+        }
+      },
+      {
+        "id": "trg_item_release",
+        "type": "item_release",
+        "conditions": {
+          "item": "minecraft:shield"
+        }
+      },
+      {
+        "id": "trg_item_instant_use",
+        "type": "item_instant_use",
+        "conditions": {
+          "item": "minecraft:ender_pearl"
+        }
+      },
+      {
+        "id": "trg_item_use_interrupt",
+        "type": "item_use_interrupt",
+        "conditions": {
+          "item": "minecraft:bow"
+        }
+      },
+      {
+        "id": "trg_block_interact",
+        "type": "block_interact",
+        "conditions": {
+          "target": "minecraft:crafting_table",
+          "item": "minecraft:stick",
+          "target_type": "block"
+        }
+      },
+      {
+        "id": "trg_item_on_interact",
+        "type": "item_on_interact",
+        "conditions": {
+          "item": "minecraft:shears",
+          "target": "minecraft:sheep",
+          "target_type": "entity"
+        }
+      },
+      {
+        "id": "trg_xp",
+        "type": "xp",
+        "conditions": {
+          "level": 10
+        }
+      },
+      {
+        "id": "trg_dimension",
+        "type": "dimension",
+        "conditions": {
+          "dimension": "minecraft:overworld"
+        }
+      },
+      {
+        "id": "trg_item_pickup",
+        "type": "item_pickup",
+        "conditions": {
+          "item": "minecraft:iron_ingot"
+        }
+      },
+      {
+        "id": "trg_item_drop",
+        "type": "item_drop",
+        "conditions": {
+          "item": "minecraft:dirt"
+        }
+      },
+      {
+        "id": "trg_observation",
+        "type": "observation",
+        "conditions": {
+          "target": "minecraft:armor_stand",
+          "target_type": "entity",
+          "reach": 6.0
+        }
+      },
+      {
+        "id": "trg_facing",
+        "type": "facing",
+        "conditions": {
+          "yaw1": -45,
+          "pitch1": 0,
+          "yaw2": 45,
+          "pitch2": 0
+        }
+      },
+      {
+        "id": "trg_death",
+        "type": "death",
+        "conditions": {
+          "dimension": "minecraft:overworld"
+        }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "fov": { "value": 70 }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

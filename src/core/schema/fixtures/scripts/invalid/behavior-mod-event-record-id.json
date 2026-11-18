@@ -1,0 +1,37 @@
+{
+  "name": "behavior-mod-event-record-id",
+  "expect": ["扩展事件写记录 id"],
+  "doc": "MOD_EVENT 记录体写了 id 键（记录 id 由轨道帧位序确定，不允许记录体声明）。validateModEventRecord 报 L80（block）：MOD_EVENT 记录体禁止写 id。",
+  "meta": {
+    "id": "behav_bad_record_id",
+    "name": "Behavior Mod Event Record Id",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "MOD_EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "mod_event": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": {
+                      "id": "rec_x",
+                      "event_type": "demo:chapter",
+                      "data": { "speed": 1 }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

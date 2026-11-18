@@ -1,0 +1,49 @@
+{
+  "name": "behavior-binding-gate-out-of-bounds",
+  "expect": ["时间门越界"],
+  "doc": "绑定 gate.at=3.0 晚于目标片段 clip_a 时长 2 秒。validateBindings 报 BINDING_GATE_OOB；落盘判定取合同注册表 L56 = block（域内内部码为 error）：时间门必须落在片段时长内。",
+  "meta": {
+    "id": "behav_bad_gate",
+    "name": "Behavior Binding Gate Out Of Bounds",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_a",
+      "track": "CAMERA",
+      "duration": 2,
+      "objects": { "fov": { "value": 70 } }
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule_gate",
+      "condition": { "type": "time", "at": 0.5 },
+      "actions": [
+        { "type": "emit_command", "command": "say gate" }
+      ]
+    }
+  ],
+  "rule_bindings": [
+    {
+      "id": "bind_gate",
+      "rule": "rule_gate",
+      "clip": "clip_a",
+      "gate": { "at": 3.0 }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "behavior-event-type-illegal",
+  "expect": ["事件类型非法"],
+  "doc": "EVENT 轨记录 event_type=movement，不在 EVENT 白名单 command 内。validateEventRecord 报 L74（error）：EVENT 事件类型未知。",
+  "meta": {
+    "id": "behav_bad_event_type",
+    "name": "Behavior Event Type Illegal",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "event": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": { "event_type": "movement" }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

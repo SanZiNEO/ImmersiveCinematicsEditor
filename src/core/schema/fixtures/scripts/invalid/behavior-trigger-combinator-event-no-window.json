@@ -1,0 +1,40 @@
+{
+  "name": "behavior-trigger-combinator-event-no-window",
+  "expect": ["事件类子条件窗口为 0"],
+  "doc": "any 组合器内放事件类子条件 advancement，但顶层 continuity.window 缺失（窗口为 0）。validateTriggerConditions 报 COMBINATOR_EVENT_NO_WINDOW；落盘判定取合同注册表 L47 = block（域内内部码为 error）：事件类条件进组合器必须带非零时间窗口。",
+  "meta": {
+    "id": "behav_bad_window",
+    "name": "Behavior Combinator Event No Window",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_no_window",
+        "type": "any",
+        "conditions": {
+          "list": [
+            {
+              "type": "advancement",
+              "conditions": {
+                "advancement": "minecraft:story/enter_the_nether"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  }
+}

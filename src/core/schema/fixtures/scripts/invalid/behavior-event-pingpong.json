@@ -1,0 +1,31 @@
+{
+  "name": "behavior-event-pingpong",
+  "expect": ["事件轨不支持 pingpong"],
+  "doc": "内联 EVENT 轨片段写 loop_mode=pingpong。事件没有反向时间语义，结构层对内联 AUDIO / EVENT / MOD_EVENT 轨拒绝乒乓，报 L85（error）：事件轨不支持 pingpong。独立片段路径不经该校验，故本件写成 timeline.tracks 内联片段。服务端依据 ObjectValidator.rejectPingpong。",
+  "meta": {
+    "id": "behav_bad_pingpong",
+    "name": "Behavior Event Pingpong",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "loop_mode": "pingpong",
+            "objects": {
+              "event": {
+                "keyframes": [
+                  { "time": 0, "value": { "command": "say pingpong" } }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

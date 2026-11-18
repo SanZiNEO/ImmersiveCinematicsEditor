@@ -868,7 +868,10 @@ async function main(): Promise<void> {
     check('03-06 片段重叠 → 无 issue', issues.length === 0, issues)
   }
   {
-    const names = (await readdir(new URL('invalid/', FIXTURES))).filter((name) => name.endsWith('.json') && name !== 'index.json')
+    // 本套 03-06 非法夹具（非 behavior）；第 11 轮新增的 behavior-* 夹具按合同码逐件核对，
+    // 覆盖在 `src/workbench/verify-11.ts` 与夹具 README 表，不在此循环内做中文子串匹配。
+    const allNames = (await readdir(new URL('invalid/', FIXTURES))).filter((name) => name.endsWith('.json') && name !== 'index.json')
+    const names = allNames.filter((name) => !name.startsWith('behavior-'))
     let matched = 0
     for (const name of names) {
       const text = await readFile(new URL(`invalid/${name}`, FIXTURES), 'utf8')
@@ -884,7 +887,7 @@ async function main(): Promise<void> {
         check(`03-06 invalid/${name} 本地检查命中 [${expectations.join('|')}]`, false, issues)
       }
     }
-    check(`03-06 20 个非法夹具全部命中（${matched}/${names.length}）`, matched === names.length && names.length === 20, { matched, total: names.length })
+    check(`03-06 本套 20 件非法夹具全部命中（${matched}/${names.length}）`, matched === names.length && names.length === 20, { matched, total: names.length })
   }
   {
     const { doc, registry } = makeDoc(objectsDemoRaw, index)

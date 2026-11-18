@@ -1,0 +1,34 @@
+{
+  "name": "behavior-requirement-missing-script",
+  "expect": ["前置目标不存在"],
+  "doc": "内置脚本前置 script_played 指向未加载的脚本 no_such_script。validateRequirementFields 报 REQ_SCRIPT_MISSING_TARGET（L44 类，error）：目标脚本不在已加载集合内。",
+  "meta": {
+    "id": "behav_bad_missing",
+    "name": "Behavior Requirement Missing Script",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "req_missing",
+        "type": "login",
+        "requires": [
+          { "type": "script_played", "script": "no_such_script" }
+        ],
+        "conditions": {}
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  }
+}

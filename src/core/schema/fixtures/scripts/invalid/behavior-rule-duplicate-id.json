@@ -1,0 +1,41 @@
+{
+  "name": "behavior-rule-duplicate-id",
+  "expect": ["规则 id 重复"],
+  "doc": "两条规则定义显式 id 相同（rule_dup）。validateRules 报 RULE_ID_DUPLICATE（L53 类）：规则 id 脚本内必须唯一。",
+  "meta": {
+    "id": "behav_bad_rule_id",
+    "name": "Behavior Rule Duplicate Id",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": [
+    {
+      "id": "rule_dup",
+      "condition": { "type": "time", "at": 0.5 },
+      "actions": [
+        { "type": "emit_command", "command": "say one" }
+      ]
+    },
+    {
+      "id": "rule_dup",
+      "condition": { "type": "time", "at": 1.0 },
+      "actions": [
+        { "type": "emit_command", "command": "say two" }
+      ]
+    }
+  ],
+  "rule_bindings": []
+}

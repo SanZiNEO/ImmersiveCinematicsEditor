@@ -1,0 +1,34 @@
+{
+  "name": "behavior-trigger-poll-interval-on-event",
+  "expect": ["轮询间隔用在事件驱动"],
+  "doc": "poll_interval 写在事件驱动类型 advancement 上。triggerTimingIssues 报 TRIGGER_POLL_INTERVAL_UNSUPPORTED（L49 类）：事件驱动触发器不参与轮询，间隔将被忽略。",
+  "meta": {
+    "id": "behav_bad_poll",
+    "name": "Behavior Poll Interval On Event",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_event_poll",
+        "type": "advancement",
+        "poll_interval": 40,
+        "conditions": {
+          "advancement": "minecraft:story/enter_the_nether"
+        }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "behavior-requirement-self-reference",
+  "expect": ["前置自引用"],
+  "doc": "内置脚本前置指向当前脚本自身（behav_bad_self）。域层内部码 REQ_SELF_REFERENCE 仅作域内标记；落盘判定取合同注册表 L44 = error：脚本不能把自己作为前置。",
+  "meta": {
+    "id": "behav_bad_self",
+    "name": "Behavior Requirement Self Reference",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "req_self",
+        "type": "login",
+        "requires": [
+          { "type": "script_completed", "script": "behav_bad_self" }
+        ],
+        "conditions": {}
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  }
+}

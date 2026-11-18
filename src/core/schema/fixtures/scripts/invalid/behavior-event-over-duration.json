@@ -1,0 +1,30 @@
+{
+  "name": "behavior-event-over-duration",
+  "expect": ["事件超时长"],
+  "doc": "EVENT 记录 time=3 晚于片段时长 2 秒。validateEventRecord 报 L72（warn）：记录时刻超出片段定长范围。",
+  "meta": {
+    "id": "behav_bad_event_time",
+    "name": "Behavior Event Over Duration",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "event": {
+                "keyframes": [
+                  { "time": 3, "value": { "command": "say late" } }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

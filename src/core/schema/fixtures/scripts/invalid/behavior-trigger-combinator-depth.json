@@ -1,0 +1,107 @@
+{
+  "name": "behavior-trigger-combinator-depth",
+  "expect": [
+    "组合器嵌套超 8 层"
+  ],
+  "doc": "all_of 嵌套 9 层（上限 8 层）。validateTriggerConditions 报 COMBINATOR_DEPTH_LIMIT（L46 类，block）：组合器嵌套深度超限。",
+  "meta": {
+    "id": "behav_bad_depth",
+    "name": "Behavior Combinator Depth",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_depth",
+        "type": "all_of",
+        "conditions": {
+          "list": [
+            {
+              "type": "all_of",
+              "conditions": {
+                "list": [
+                  {
+                    "type": "all_of",
+                    "conditions": {
+                      "list": [
+                        {
+                          "type": "all_of",
+                          "conditions": {
+                            "list": [
+                              {
+                                "type": "all_of",
+                                "conditions": {
+                                  "list": [
+                                    {
+                                      "type": "all_of",
+                                      "conditions": {
+                                        "list": [
+                                          {
+                                            "type": "all_of",
+                                            "conditions": {
+                                              "list": [
+                                                {
+                                                  "type": "all_of",
+                                                  "conditions": {
+                                                    "list": [
+                                                      {
+                                                        "type": "all_of",
+                                                        "conditions": {
+                                                          "list": [
+                                                            {
+                                                              "type": "location",
+                                                              "conditions": {
+                                                                "position": {
+                                                                  "x": 0,
+                                                                  "y": 64,
+                                                                  "z": 0
+                                                                },
+                                                                "radius": 8
+                                                              }
+                                                            }
+                                                          ]
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "fov": {
+                "value": 70
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

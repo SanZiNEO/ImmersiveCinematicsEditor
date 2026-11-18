@@ -1,0 +1,36 @@
+{
+  "name": "behavior-mod-event-data-array",
+  "expect": ["扩展事件 data 顶层为数组"],
+  "doc": "MOD_EVENT 记录 data 顶层是数组（扩展数据必须是对象结构）。validateModEventRecord 报 L82（block）：扩展事件 data 必须是对象。",
+  "meta": {
+    "id": "behav_bad_data_array",
+    "name": "Behavior Mod Event Data Array",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "MOD_EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "mod_event": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": {
+                      "event_type": "demo:chapter",
+                      "data": [1, 2, 3]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

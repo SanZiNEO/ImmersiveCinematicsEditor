@@ -1,0 +1,50 @@
+{
+  "name": "behavior-binding-schedule-fact-unknown",
+  "expect": ["事实调度指向未知绑定"],
+  "doc": "fact 调度引用的绑定 bind_missing 不存在。validateBindings 报 BINDING_SCHEDULE_BINDING_UNKNOWN（L56 类，block）：事实调度的来源绑定必须已登记。",
+  "meta": {
+    "id": "behav_bad_schedule",
+    "name": "Behavior Schedule Fact Unknown",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_a",
+      "track": "CAMERA",
+      "duration": 2,
+      "objects": { "fov": { "value": 70 } }
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule_sched",
+      "condition": { "type": "time", "at": 0.5 },
+      "actions": [
+        { "type": "emit_command", "command": "say sched" }
+      ]
+    }
+  ],
+  "rule_bindings": [
+    {
+      "id": "bind_sched",
+      "rule": "rule_sched",
+      "clip": "clip_a",
+      "gate": { "at": 0 },
+      "schedule": { "on": "fact", "binding": "bind_missing", "fact": "succeeded" }
+    }
+  ]
+}

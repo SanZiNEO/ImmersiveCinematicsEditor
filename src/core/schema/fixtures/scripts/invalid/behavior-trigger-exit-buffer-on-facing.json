@@ -1,0 +1,37 @@
+{
+  "name": "behavior-trigger-exit-buffer-on-facing",
+  "expect": ["离开外扩用在朝向"],
+  "doc": "exit_buffer 写在 facing 朝向类型上（朝向没有空间进出区域）。triggerTimingIssues 报 TRIGGER_EXIT_BUFFER_UNSUPPORTED（L48 类）：离开外扩将被忽略。",
+  "meta": {
+    "id": "behav_bad_exit_buffer",
+    "name": "Behavior Exit Buffer On Facing",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_facing_buffer",
+        "type": "facing",
+        "exit_buffer": 2.0,
+        "conditions": {
+          "yaw1": -45,
+          "pitch1": 0,
+          "yaw2": 45,
+          "pitch2": 0
+        }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  }
+}

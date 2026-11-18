@@ -1,0 +1,63 @@
+{
+  "name": "behavior-triggers-requirements",
+  "expect": [],
+  "doc": "前置五种形态：字符串简写（= script_played）、对象形态 script_started、整段省略（无 requires）、自引用（落盘判定 L44 error）、自定义类型（只读，不硬判存在性）。跨脚本目标 demo_other 的解析状态依赖项目图索引；单夹具上下文无已加载脚本集合，降级 unresolved，不记缺失，形态本身合法。",
+  "meta": {
+    "id": "behav_requirements",
+    "name": "Behavior Trigger Requirements",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "req_string",
+        "type": "login",
+        "requires": ["demo_other"],
+        "conditions": {}
+      },
+      {
+        "id": "req_object",
+        "type": "login",
+        "requires": [
+          { "type": "script_started", "script": "demo_other" }
+        ],
+        "conditions": {}
+      },
+      {
+        "id": "req_omitted",
+        "type": "login",
+        "conditions": {}
+      },
+      {
+        "id": "req_self",
+        "type": "login",
+        "requires": [
+          { "type": "script_played", "script": "behav_requirements" }
+        ],
+        "conditions": {}
+      },
+      {
+        "id": "req_custom",
+        "type": "login",
+        "requires": [
+          { "type": "custom_stage", "script": "demo_other", "stage": "chapter_one" }
+        ],
+        "conditions": {}
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "fov": { "value": 70 }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

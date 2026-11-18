@@ -5,7 +5,13 @@
     "step.json",
     "collections.json",
     "seven-tracks.json",
-    "meta.json"
+    "meta.json",
+    "behavior-triggers-single.json",
+    "behavior-triggers-combinator.json",
+    "behavior-triggers-requirements.json",
+    "behavior-triggers-timing.json",
+    "behavior-rules.json",
+    "behavior-events.json"
   ],
   "invalid": [
     "meta-unknown-key.json",
@@ -27,6 +33,26 @@
     "rule-binding-dangling.json",
     "unknown-geometry.json",
     "unknown-timing.json",
-    "unknown-action-type.json"
+    "unknown-action-type.json",
+    "behavior-trigger-duplicate-id.json",
+    "behavior-rule-duplicate-id.json",
+    "behavior-binding-duplicate-id.json",
+    "behavior-requirement-missing-script.json",
+    "behavior-requirement-self-reference.json",
+    "behavior-trigger-combinator-depth.json",
+    "behavior-trigger-combinator-empty.json",
+    "behavior-trigger-combinator-event-no-window.json",
+    "behavior-trigger-exit-buffer-on-facing.json",
+    "behavior-trigger-poll-interval-on-event.json",
+    "behavior-trigger-dwell-on-event.json",
+    "behavior-rule-actions-empty.json",
+    "behavior-binding-gate-out-of-bounds.json",
+    "behavior-binding-schedule-fact-unknown.json",
+    "behavior-event-over-duration.json",
+    "behavior-event-position-mixed.json",
+    "behavior-event-type-illegal.json",
+    "behavior-mod-event-data-array.json",
+    "behavior-mod-event-record-id.json",
+    "behavior-event-pingpong.json"
   ]
 }

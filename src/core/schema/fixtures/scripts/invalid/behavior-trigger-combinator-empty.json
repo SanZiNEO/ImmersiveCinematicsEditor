@@ -1,0 +1,31 @@
+{
+  "name": "behavior-trigger-combinator-empty",
+  "expect": ["组合器列表为空"],
+  "doc": "all_of 的 list 是空数组。validateTriggerConditions 报 COMBINATOR_LIST_EMPTY；落盘判定取合同注册表 L46 = block（域内内部码为 error）：组合器 list 必须是非空数组。",
+  "meta": {
+    "id": "behav_bad_empty",
+    "name": "Behavior Combinator Empty",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_empty",
+        "type": "all_of",
+        "conditions": { "list": [] }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  }
+}

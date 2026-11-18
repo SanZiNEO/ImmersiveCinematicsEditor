@@ -1,0 +1,36 @@
+{
+  "name": "behavior-trigger-duplicate-id",
+  "expect": ["触发器 id 重复"],
+  "doc": "同一脚本内两个触发器显式 id 相同（trg_dup）。结构层 checkTriggers 报 L42 类合同错误：触发器 id 重复。",
+  "meta": {
+    "id": "behav_bad_trigger_id",
+    "name": "Behavior Trigger Duplicate Id",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_dup",
+        "type": "login",
+        "conditions": {}
+      },
+      {
+        "id": "trg_dup",
+        "type": "biome",
+        "conditions": { "biome": "minecraft:plains" }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  }
+}

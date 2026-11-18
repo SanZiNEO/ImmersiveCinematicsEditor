@@ -1,0 +1,55 @@
+{
+  "name": "behavior-binding-duplicate-id",
+  "expect": ["绑定 id 重复"],
+  "doc": "两条规则绑定显式 id 相同（bind_dup）。validateBindings 报 BINDING_ID_DUPLICATE（L56 类）：绑定 id 脚本内必须唯一。",
+  "meta": {
+    "id": "behav_bad_binding_id",
+    "name": "Behavior Binding Duplicate Id",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": { "fov": { "value": 70 } }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_a",
+      "track": "CAMERA",
+      "duration": 2,
+      "objects": { "fov": { "value": 70 } }
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule_one",
+      "condition": { "type": "time", "at": 0.5 },
+      "actions": [
+        { "type": "emit_command", "command": "say one" }
+      ]
+    }
+  ],
+  "rule_bindings": [
+    {
+      "id": "bind_dup",
+      "rule": "rule_one",
+      "clip": "clip_a",
+      "gate": { "at": 0 }
+    },
+    {
+      "id": "bind_dup",
+      "rule": "rule_one",
+      "clip": "clip_a",
+      "gate": { "at": 1 }
+    }
+  ]
+}

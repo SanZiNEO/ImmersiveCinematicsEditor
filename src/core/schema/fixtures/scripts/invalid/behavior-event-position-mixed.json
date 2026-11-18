@@ -1,0 +1,35 @@
+{
+  "name": "behavior-event-position-mixed",
+  "expect": ["位置混写"],
+  "doc": "position 同时出现绝对坐标 x/z 与相对偏移 dx/dz。validateEventRecord 报 L76（block）：绝对与相对位置不得混写。",
+  "meta": {
+    "id": "behav_bad_position",
+    "name": "Behavior Event Position Mixed",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "EVENT",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 2,
+            "objects": {
+              "event": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": {
+                      "position": { "x": 10, "z": 20, "dx": 3, "dz": -4 }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

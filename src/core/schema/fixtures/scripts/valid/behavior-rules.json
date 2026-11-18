@@ -1,0 +1,267 @@
+{
+  "name": "behavior-rules",
+  "expect": [],
+  "doc": "四条规则定义：①时间条件配相机与覆盖层、单次；②位置+相机朝向配跳转，绑定出口 goto 覆盖该分支；③片段事实+规则事实配命令动作，调度用事实；④暂停/恢复/退出/发声/调色，控制持有、无限等待。绑定覆盖时间门在片段中段、持有、五种调度（clip_start/clip_complete/local_time/delay/fact）各一条、五种出口（continue/goto/return/end_execution/end_script）各一条。",
+  "meta": {
+    "id": "behav_rules",
+    "name": "Behavior Rules",
+    "author": "omp"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 6,
+            "objects": {
+              "fov": { "value": 70 }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clips": [
+    {
+      "id": "clip_a",
+      "track": "CAMERA",
+      "duration": 6,
+      "objects": {
+        "fov": { "value": 70 }
+      }
+    },
+    {
+      "id": "clip_b",
+      "track": "CAMERA",
+      "duration": 6,
+      "objects": {
+        "fov": { "value": 70 }
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule_time",
+      "condition": {
+        "type": "time",
+        "at": 1.0
+      },
+      "actions": [
+        {
+          "type": "camera_set",
+          "channels": ["yaw", "pitch"],
+          "yaw": 90,
+          "pitch": 0,
+          "mode": "replace"
+        },
+        {
+          "type": "overlay_set",
+          "layer_type": "fade",
+          "color": "#000000",
+          "opacity": 0.5
+        }
+      ],
+      "policy": {
+        "once": true,
+        "mode": "enter"
+      }
+    },
+    {
+      "id": "rule_goto",
+      "condition": {
+        "type": "all_of",
+        "list": [
+          {
+            "type": "location",
+            "conditions": {
+              "corner1": { "x": -16, "y": 48, "z": -16 },
+              "corner2": { "x": 16, "y": 80, "z": 16 }
+            }
+          },
+          {
+            "type": "camera_facing",
+            "conditions": {
+              "yaw1": -45,
+              "pitch1": 0,
+              "yaw2": 45,
+              "pitch2": 0
+            }
+          }
+        ]
+      },
+      "actions": [
+        {
+          "type": "goto_clip",
+          "clip": "clip_b",
+          "entry_time": 0
+        }
+      ]
+    },
+    {
+      "id": "rule_facts",
+      "condition": {
+        "type": "all_of",
+        "list": [
+          {
+            "type": "clip_fact",
+            "conditions": {
+              "clip": "clip_a",
+              "fact": "started"
+            }
+          },
+          {
+            "type": "rule_fact",
+            "conditions": {
+              "binding": "bind_time",
+              "fact": "succeeded"
+            }
+          }
+        ]
+      },
+      "actions": [
+        {
+          "type": "emit_command",
+          "command": "say facts_ready"
+        }
+      ]
+    },
+    {
+      "id": "rule_hold",
+      "condition": {
+        "type": "time",
+        "at": 0.5
+      },
+      "actions": [
+        { "type": "pause" },
+        { "type": "resume" },
+        { "type": "exit" },
+        {
+          "type": "play_sound",
+          "sound": "minecraft:block.note_block.harp",
+          "volume": 1,
+          "pitch": 1
+        },
+        {
+          "type": "adjust_set",
+          "exposure": 0.5,
+          "saturation": 1
+        }
+      ],
+      "policy": {
+        "once": true,
+        "mode": "enter",
+        "timeout": -1
+      }
+    }
+  ],
+  "rule_bindings": [
+    {
+      "id": "bind_time",
+      "rule": "rule_time",
+      "clip": "clip_a",
+      "gate": { "at": 3.0 },
+      "control": "observe"
+    },
+    {
+      "id": "bind_goto",
+      "rule": "rule_goto",
+      "clip": "clip_a",
+      "gate": { "at": 1.0 },
+      "exit": {
+        "on_complete": "goto",
+        "target": "clip_b",
+        "entry_time": 0
+      }
+    },
+    {
+      "id": "bind_fact",
+      "rule": "rule_facts",
+      "clip": "clip_a",
+      "gate": { "at": 0.5 },
+      "schedule": {
+        "on": "fact",
+        "binding": "bind_time",
+        "fact": "succeeded"
+      }
+    },
+    {
+      "id": "bind_hold",
+      "rule": "rule_hold",
+      "clip": "clip_a",
+      "gate": { "at": 0.5 },
+      "control": "hold"
+    },
+    {
+      "id": "bind_sched_start",
+      "rule": "rule_time",
+      "clip": "clip_b",
+      "gate": { "at": 0 },
+      "schedule": { "on": "clip_start", "clip": "clip_b" }
+    },
+    {
+      "id": "bind_sched_complete",
+      "rule": "rule_time",
+      "clip": "clip_b",
+      "gate": { "at": 0 },
+      "schedule": { "on": "clip_complete", "clip": "clip_b" }
+    },
+    {
+      "id": "bind_sched_local",
+      "rule": "rule_time",
+      "clip": "clip_b",
+      "gate": { "at": 0 },
+      "schedule": { "on": "local_time", "clip": "clip_b", "at": 2.0 }
+    },
+    {
+      "id": "bind_sched_delay",
+      "rule": "rule_time",
+      "clip": "clip_b",
+      "gate": { "at": 0 },
+      "schedule": { "on": "delay", "seconds": 1.5 }
+    },
+    {
+      "id": "bind_sched_fact",
+      "rule": "rule_time",
+      "clip": "clip_b",
+      "gate": { "at": 0 },
+      "schedule": { "on": "fact", "binding": "bind_time", "fact": "action_completed" }
+    },
+    {
+      "id": "bind_exit_continue",
+      "rule": "rule_time",
+      "clip": "clip_a",
+      "gate": { "at": 0 },
+      "exit": { "on_complete": "continue" }
+    },
+    {
+      "id": "bind_exit_goto",
+      "rule": "rule_time",
+      "clip": "clip_a",
+      "gate": { "at": 0 },
+      "exit": { "on_complete": "goto", "target": "clip_b", "entry_time": 0 }
+    },
+    {
+      "id": "bind_exit_return",
+      "rule": "rule_time",
+      "clip": "clip_a",
+      "gate": { "at": 0 },
+      "exit": { "on_complete": "return" }
+    },
+    {
+      "id": "bind_exit_end_execution",
+      "rule": "rule_time",
+      "clip": "clip_a",
+      "gate": { "at": 0 },
+      "exit": { "on_complete": "end_execution" }
+    },
+    {
+      "id": "bind_exit_end_script",
+      "rule": "rule_time",
+      "clip": "clip_a",
+      "gate": { "at": 0 },
+      "exit": { "on_complete": "end_script" }
+    }
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "name": "behavior-triggers-timing",
+  "expect": [],
+  "doc": "时序字段各种合法取值：delay=1.5 秒；location 球形 + on_enter；location 球形 + continuity.sweep=true（扫掠仅 location/structure/facing/observation 支持）；biome dwell=20 tick；all_of 内 window=40 tick；login 整体省略 continuity；location exit_buffer=2 格；biome poll_interval=40 tick；death 事件驱动不带进入/离开/驻留/轮询等边缘字段。",
+  "meta": {
+    "id": "behav_timing",
+    "name": "Behavior Trigger Timing",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_delay",
+        "type": "location",
+        "delay": 1.5,
+        "conditions": {
+          "position": { "x": 0, "y": 64, "z": 0 },
+          "radius": 8
+        }
+      },
+      {
+        "id": "trg_location_on_enter",
+        "type": "location",
+        "on_enter": true,
+        "conditions": {
+          "position": { "x": 10, "y": 64, "z": 20 },
+          "radius": 6
+        }
+      },
+      {
+        "id": "trg_location_sweep",
+        "type": "location",
+        "continuity": {
+          "sweep": true
+        },
+        "conditions": {
+          "corner1": { "x": -20, "y": 48, "z": -20 },
+          "corner2": { "x": 20, "y": 80, "z": 20 }
+        }
+      },
+      {
+        "id": "trg_dwell",
+        "type": "biome",
+        "continuity": {
+          "dwell": 20
+        },
+        "conditions": {
+          "biome": "minecraft:plains"
+        }
+      },
+      {
+        "id": "trg_window",
+        "type": "all_of",
+        "continuity": {
+          "window": 40
+        },
+        "conditions": {
+          "list": [
+            {
+              "type": "location",
+              "conditions": {
+                "position": { "x": 0, "y": 64, "z": 0 },
+                "radius": 8
+              }
+            },
+            {
+              "type": "advancement",
+              "conditions": {
+                "advancement": "minecraft:story/enter_the_nether"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "trg_no_continuity",
+        "type": "login",
+        "conditions": {}
+      },
+      {
+        "id": "trg_exit_buffer",
+        "type": "location",
+        "exit_buffer": 2.0,
+        "conditions": {
+          "corner1": { "x": -16, "y": 48, "z": -16 },
+          "corner2": { "x": 16, "y": 80, "z": 16 }
+        }
+      },
+      {
+        "id": "trg_poll_interval",
+        "type": "biome",
+        "poll_interval": 40,
+        "conditions": {
+          "biome": "minecraft:forest"
+        }
+      },
+      {
+        "id": "trg_death_plain",
+        "type": "death",
+        "conditions": {
+          "dimension": "minecraft:overworld"
+        }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "fov": { "value": 70 }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

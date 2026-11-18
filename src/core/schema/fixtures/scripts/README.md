@@ -114,3 +114,65 @@
   — `rules[]` / `rule_bindings[]` 字段白名单、引用完整性、`gate.at` 范围、出口 / 调度枚举。
 - `.../script/ScriptValidator.java`、`.../script/object/ObjectValidator.java`
   — 未知字段汇总、`base_resolution` / `screen_layers` 语义校验、动作类型白名单、参考系切换对齐。
+
+## 第 11 轮行为域夹具（`behavior-*`）
+
+四组行为域（触发器 / 规则 / 绑定 / 事件）的验收材料：合法件走既有 `parseDoc` + 目录加载，再由对应域校验函数
+（`validateTriggerConditions` / `triggerTimingIssues` / `requirementEntries` + `validateRequirementFields` /
+`validateRules` / `validateBindings` / `validateEventRecord` / `validateModEventRecord`）读出；非法件每个只承载一类判定。
+字段键与取值以 `src/core/schema/catalog/behavior{Triggers,Rules,Events}.ts` 与主模组源码为准。
+
+### 合法夹具（`valid/behavior-*.json`）
+
+| 文件 | 覆盖点 | 允许的附带 issue |
+|---|---|---|
+| `behavior-triggers-single.json` | 25 个叶子触发器类型各一条，必填字段补齐、可选字段取合法取值；组合器另见下一条 | 无 |
+| `behavior-triggers-combinator.json` | `all_of` 含区域 + 群系；`any` 含进度 + 登录（`continuity.window=40`）；三层嵌套 `all_of > any > all_of` | 无 |
+| `behavior-triggers-requirements.json` | 前置五种形态：字符串简写（`script_played`）、对象形态 `script_started`、整段省略、自引用、自定义类型 | 自引用：域层内部码 `REQ_SELF_REFERENCE` 仅作域内标记，落盘判定一律取合同注册表 `L44` = error（`meta.triggers[3].requires[0].script`，单条）。跨脚本目标 `demo_other` 在单夹具无图索引下降级 unresolved，不阻断、不记缺失（见下节说明） |
+| `behavior-triggers-timing.json` | `delay=1.5`；location 球形 + `on_enter`；location 球形 + `continuity.sweep`；`dwell=20`；`window=40` 在 `all_of`；省略 `continuity`；`exit_buffer`；`poll_interval=40`；death 纯事件不带边缘字段 | 无 |
+| `behavior-rules.json` | 四条规则：时间条件配相机 + 覆盖层（单次）；位置 + 相机朝向配跳转；片段事实 + 规则事实配命令动作（事实调度）；暂停 / 恢复 / 退出 / 发声 / 调色（持有、无限等待）。绑定覆盖时间门中段、持有、五种调度各一条、五种出口各一条 | `BINDING_EXIT_SYNONYM_MIX`（L90，info）：同一 `clip_a` 多条绑定混用 `continue` / `return` / `end_execution`，三者当前行为一致，仅提示不阻断 |
+| `behavior-events.json` | 两条 EVENT 轨 + 一条 MOD_EVENT 轨：t=0 空命令占位、多段命令（`&&`）、绝对位置 `{x,z}`、相对位置 `{dx,dz}`、命令加移动；扩展事件对象级缺省、记录继承、记录覆盖、嵌套数据（对象 / 数组 / 字符串 / 有限数 / 布尔 / null） | `L84`（warn）：检测到 2 条 EVENT 轨；既有扫描器把提示池复制到每个记录节点，故同一提示按节点重复下发 |
+
+### 非法夹具（`invalid/behavior-*.json`）
+
+| 文件 | 判定类别 | 内部问题码 | 合同码 | 级别 | 备注 |
+|---|---|---|---|---|---|
+| `behavior-trigger-duplicate-id.json` | 触发器 id 重复 | 触发器 id 重复（结构层身份检查） | `L42` | error | 遗留旧触发器检查并行报一条 `L32`，同语义复检，不算第二类判定 |
+| `behavior-rule-duplicate-id.json` | 规则 id 重复 | `RULE_ID_DUPLICATE` | `L53` | block | 结构层遗留旧规则检查并行报一条 `L29`（同语义复检），不算第二类判定 |
+| `behavior-binding-duplicate-id.json` | 绑定 id 重复 | `BINDING_ID_DUPLICATE` | `L56` | block | 结构层遗留旧绑定检查并行报一条 `L30`（同语义复检），不算第二类判定 |
+| `behavior-requirement-missing-script.json` | 前置指向不存在脚本 | `REQ_SCRIPT_MISSING_TARGET` | `L44` | error | — |
+| `behavior-requirement-self-reference.json` | 前置自引用 | `REQ_SELF_REFERENCE` | `L44` | error | 域层内部码 `REQ_SELF_REFERENCE` 仅作域内标记（域内 warn）；落盘判定取合同注册表 `L44` = error，当前仅一条。夹具只覆盖自引用这一判定 |
+| `behavior-trigger-combinator-depth.json` | 组合器嵌套九层（上限 8 层） | `COMBINATOR_DEPTH_LIMIT` | `L46` | block | — |
+| `behavior-trigger-combinator-empty.json` | 组合器空列表 | `COMBINATOR_LIST_EMPTY` | `L46` | block | — |
+| `behavior-trigger-combinator-event-no-window.json` | 事件类子条件窗口为 0 | `COMBINATOR_EVENT_NO_WINDOW` | `L47` | block | — |
+| `behavior-trigger-exit-buffer-on-facing.json` | 离开外扩用在朝向类型 | `TRIGGER_EXIT_BUFFER_UNSUPPORTED` | `L48` | error | — |
+| `behavior-trigger-poll-interval-on-event.json` | 轮询间隔用在事件驱动类型 | `TRIGGER_POLL_INTERVAL_UNSUPPORTED` | `L49` | error | — |
+| `behavior-trigger-dwell-on-event.json` | 驻留用在事件驱动类型 | `TRIGGER_DWELL_UNSUPPORTED` | `L51` | block | — |
+| `behavior-rule-actions-empty.json` | 规则动作为空 | `RULE_ACTIONS_EMPTY` | `L53` | block | 结构层遗留旧规则检查并行报一条 `L29`（同语义复检），不算第二类判定 |
+| `behavior-binding-gate-out-of-bounds.json` | 时间门越界 | `BINDING_GATE_OOB` | `L56` | block（内部 error） | 结构层遗留旧绑定检查并行报一条 `L30`（同语义复检），不算第二类判定 |
+| `behavior-binding-schedule-fact-unknown.json` | 事实调度指向未知绑定 | `BINDING_SCHEDULE_BINDING_UNKNOWN` | `L56` | block | 结构层遗留事实引用检查并行报一条 `L33`；`L56` 两条为同一未知绑定引用在引用索引与调度事实两处登记，同语义，不算第二类判定 |
+| `behavior-event-over-duration.json` | 事件记录超片段时长 | `L72` | `L72` | warn | — |
+| `behavior-event-position-mixed.json` | 绝对 / 相对位置混写 | `L76` | `L76` | block | 结构层遗留对象成员 / 形态检查并行报一条 `L16`（同语义复检），不算第二类判定 |
+| `behavior-event-type-illegal.json` | EVENT 事件类型非法 | `L74` | `L74` | error | — |
+| `behavior-mod-event-data-array.json` | 扩展事件 `data` 顶层为数组 | `L82` | `L82` | block | 结构层遗留对象成员 / 形态检查并行报一条 `L16`（同语义复检），不算第二类判定 |
+| `behavior-mod-event-record-id.json` | MOD_EVENT 记录体写 `id` | `L80` | `L80` | block | 结构层遗留对象成员 / 形态检查并行报一条 `L16`（同语义复检），不算第二类判定 |
+| `behavior-event-pingpong.json` | 乒乓模式用在事件轨 | 结构层内联片段检查 | `L85` | error | 仅对内联片段（`timeline.tracks[*].clips[*]`）判定；独立片段路径服务端不经 `ObjectValidator.validate`。服务端依据 `ObjectValidator.java:176-183` `rejectPingpong` |
+
+### 无法用夹具表达的判定
+
+本轮 11-16 非法清单的 20 类判定均已落地为夹具；乒乓模式用在事件轨由 `behavior-event-pingpong.json`（`L85`）覆盖。
+服务端 `ObjectValidator.rejectPingpong` 对独立片段路径不经 `ObjectValidator.validate`，
+该路径的乒乓拒绝仍以真游戏实例验收为准。
+
+- **字符串简写前置的目标缺失（`requires: ["no_such_script"]` → `L44`/error）静态夹具无法表达**：该存在性判定只有在调用方提供
+  `knownScriptIds`（项目图脚本索引）时才触发；不传索引时三态降级 unresolved，不报缺失。现有静态加载器
+  （`index.json` 纯字符串清单、`src/core/doc/verify.ts` 的 `localIssues`）均不按件注入脚本索引，夹具 JSON 内也没有可声明已知脚本 id 的通道，
+  故不硬加该件，由 `verify-11` 的构造用例在注入项目图索引后覆盖。同属索引依赖的还有对象形态缺失目标
+  （`behavior-requirement-missing-script.json`）：其 `L44` 命中同样依赖运行时注入索引，单件静态加载下降级 unresolved。
+
+### 上下文性 issue 说明
+
+- 前置目标解析依赖项目图索引（已加载脚本 id 集合）。单份夹具不携带图索引，结构层 `factIndex` 的 `scriptIds` 为空集，
+  指向其他脚本的内置前置降级 unresolved（不阻断、不记缺失）；只有自引用由 `selfScriptId` 直接比对，记 `L44`。
+  真实编辑器由项目图索引解析，Java `validatePrerequisiteRef` 也仅在调用方传入已知脚本集合时才做存在性检查。
+- `behavior-trigger-duplicate-id.json` 除合同 `L42` 外，结构层遗留的旧触发器检查并行报一条 `L32`（同语义复检），属既有双检查并存，不算第二类判定。

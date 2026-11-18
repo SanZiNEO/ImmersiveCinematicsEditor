@@ -1,0 +1,105 @@
+{
+  "name": "behavior-triggers-combinator",
+  "expect": [],
+  "doc": "组合器三类形态：all_of 含区域+群系（轮询子条件）；any 含进度+登录（事件类子条件，需 continuity.window>0）；三层嵌套 all_of > any > all_of。第 9 层嵌套在非法组 behavior-trigger-combinator-depth.json。",
+  "meta": {
+    "id": "behav_combinator",
+    "name": "Behavior Triggers Combinator",
+    "author": "omp",
+    "triggers": [
+      {
+        "id": "trg_all_of_location_biome",
+        "type": "all_of",
+        "conditions": {
+          "list": [
+            {
+              "type": "location",
+              "conditions": {
+                "position": { "x": 0, "y": 64, "z": 0 },
+                "radius": 8
+              }
+            },
+            {
+              "type": "biome",
+              "conditions": {
+                "biome": "minecraft:plains"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "trg_any_advancement_login",
+        "type": "any",
+        "continuity": {
+          "window": 40
+        },
+        "conditions": {
+          "list": [
+            {
+              "type": "advancement",
+              "conditions": {
+                "advancement": "minecraft:story/enter_the_nether"
+              }
+            },
+            {
+              "type": "login",
+              "conditions": {}
+            }
+          ]
+        }
+      },
+      {
+        "id": "trg_nested_three_levels",
+        "type": "all_of",
+        "conditions": {
+          "list": [
+            {
+              "type": "any",
+              "conditions": {
+                "list": [
+                  {
+                    "type": "all_of",
+                    "conditions": {
+                      "list": [
+                        {
+                          "type": "location",
+                          "conditions": {
+                            "corner1": { "x": -16, "y": 48, "z": -16 },
+                            "corner2": { "x": 16, "y": 80, "z": 16 }
+                          }
+                        },
+                        {
+                          "type": "biome",
+                          "conditions": {
+                            "biome": "minecraft:forest"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "start_time": 0,
+            "duration": 1,
+            "objects": {
+              "fov": { "value": 70 }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
