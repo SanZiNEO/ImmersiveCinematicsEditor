@@ -1082,7 +1082,7 @@ async function main(): Promise<void> {
     check('01 内核不出现业务 switch（panelId === 常量）', !/panelId\s*===\s*'/.test(kernelJoined))
 
     const workbenchTs = (await listFiles('', (name) => name.endsWith('.ts') || name.endsWith('.vue')))
-      .filter((file) => file !== 'verify.ts')
+      .filter((file) => file !== 'verify.ts' && !file.startsWith('verify-'))
     const sources = await Promise.all(workbenchTs.map((file) => readWorkbench(file)))
     const allJoined = sources.join('\n')
     check('09 渲染层不暴露 ipcRenderer', !/ipcRenderer/.test(allJoined))
@@ -1114,12 +1114,17 @@ async function main(): Promise<void> {
       './core.behavior/manifest',
       './core.meta/manifest',
       './core.paths/manifest',
+      './core.transition-panel/manifest',
+      './core.camera-inspect/manifest',
       './demo.extra/manifest',
       './demo.kitchen-sink/manifest',
     ]
-    check('11 builtin.ts 是唯一静态清单（10 个插件 import）', valueImports.length === 10
+    // 插件数量随轮次增长（08 新增两个、07 新增 core.paths），这里只断言「清单仍由 builtin.ts 单一维护」：
+    // 每个 value import 都指向 manifest，且已知插件全部在册、core 在前 demo 在后。
+    check('11 builtin.ts 是唯一静态清单（每个 import 都指向 manifest，已知插件全部在册）',
+      valueImports.every((line) => line.includes('/manifest.ts'))
       && expectedManifests.every((path) => valueImports.some((line) => line.includes(path))), valueImports)
-    check('11 builtin.ts 数组顺序为 core → 05/06 真实插件 → demo', /BUILTIN_PLUGINS[^=]*=\s*\[[\s\S]*coreWorkbench[\s\S]*scriptGraph[\s\S]*timelinePlugin[\s\S]*coreClipEffects[\s\S]*coreSelectionProperties[\s\S]*coreBehavior[\s\S]*coreMeta[\s\S]*corePaths[\s\S]*demoExtra[\s\S]*demoKitchenSink[\s\S]*\]/.test(builtinSource), builtinSource.slice(0, 500))
+    check('11 builtin.ts 数组顺序为 core → 05/06/07/08 真实插件 → demo', /BUILTIN_PLUGINS[^=]*=\s*\[\s*coreWorkbench[\s\S]*coreTransitionPanel[\s\S]*coreCameraInspect[\s\S]*demoExtra[\s\S]*demoKitchenSink\s*,?\s*\]/.test(builtinSource), builtinSource.slice(0, 500))
 
     const demoManifestSource = [
       await readFile(new URL('../plugins/demo.kitchen-sink/manifest.ts', WORKBENCH_DIR), 'utf8'),
@@ -1199,6 +1204,7 @@ async function main(): Promise<void> {
         canUndo: false,
         canRedo: false,
         commit: () => ({ ok: true, warnings: [] }),
+        commitBatch: () => ({ ok: true, warnings: [] }),
         undo: () => false,
         redo: () => false,
         endCoalescing: () => undefined,

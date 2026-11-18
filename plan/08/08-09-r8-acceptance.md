@@ -1,6 +1,6 @@
 # 08 轮验收
 
-> 状态：未实现
+> 状态：已实现
 > 范围：08 轮九份任务文档的验收口径——字段面、转场面板、叠化、参数过渡、共存、lane 视图、连续性、玩家移动、回放闭环、面板结构与模组零改动
 > 关联：08-01 至 08-08 全部任务文档、README 的完成定义
 
@@ -105,10 +105,24 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现（结构层自动化验收通过；画面层为人工项，未执行）
 
-尚未开工；验收分组、交叉情形与真游戏冒烟脚本按上述口径执行，无实现偏差可记。
+本轮交付的自动化证据：
+
+- `npm run verify:08` → `08 自检：ok 85 / fail 0`（`src/workbench/verify-08.ts`，真实 Node 入口，覆盖 08-02 / 08-04 / 08-06 / 08-07 / 08-08 与真实 store 的叠化提交）。
+- `npm run verify` → `summary ok=171 fail=0`（`src/workbench/verify.ts`，覆盖插件清单、面板宿主、文档命令面；08 新增的两个插件已纳入清单断言）。
+- `npx vue-tsc --noEmit`：08 全部文件（两个插件、五个模型、`fieldSurface.ts`、`verify-08.ts`、`api/documents.ts`、`DocumentServiceImpl`）无报错；残余错误只在 07 侧（`features/overlay/*`、`core.overlay/*`）。
+- 模组仓库零改动：`ImmersiveCinematics` 的 `git status --porcelain` 为空（HEAD `d4840b1`）。
+
+未执行项（按任务书口径不进入自动化验收，交人工）：3.3 真游戏冒烟与各组「游戏画面」判断需要在游戏实例内逐时间点（2.9 / 3.0 / 4.5 / 5.9 / 6.4 / 7.0 / 10.1 秒）观察真实画面。本记录不冒充该结论。
+
+环境项记录：`npm run build` 当前被 `src/plugins/core.behavior/panels/TriggerPane.vue` 引用的缺失组件 `TriggerRequirementsSection.vue` 阻断（非 08 文件，属并行轮次未完成件）；08 的 SFC 已通过 `vue-tsc` 的模板类型检查，构建阻断不影响本轮的自动化结论。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 3.3 真游戏冒烟逐时间点观察 | 未执行（需要游戏实例与人工观察） | 任务书规定看图/人工操作的验收不做，非静默跳过 |
+| 3.1「结构」组：只新增 `transition.panel` 与 `camera.inspect` 两个插件面板 | 同左（`core.transition-panel` / `core.camera-inspect`） | 无 |
+| 既有 `verify.ts` 断言「builtin 清单 9 个 import」 | 改为「每个 import 都指向 manifest + 已知插件全部在册 + core 在前 demo 在后」 | 08 新增 2 个插件、07 新增 `core.paths`，固定条数断言必然失效；语义断言保留原意 |
+| `core.audio` 两处 `fieldSurface.ts` 相对路径 | 修正为 `../../../workbench/api/` | 原路径少一级，`vue-tsc` 报 TS2307 阻断编译，与 08 无关但阻断全量校验 |
+| 既有 `verify.ts`「09 渲染层不直接用 node fs/path」扫描范围 | 排除 `verify-*.ts`（验证脚本不是渲染层源码） | 07 的 `verify-07.ts` 合法使用 `node:fs` 读夹具，扫描把验证脚本当成渲染层源码导致误报 |
+
