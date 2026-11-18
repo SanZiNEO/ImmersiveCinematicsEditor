@@ -32,7 +32,9 @@ import {
   isKnownTrackType,
   unknownTrackKind,
 } from './keys.ts'
-import { ClipRegistry, PATH_TIME_EPSILON, clipPositionNodes } from './identity.ts'
+import { ClipRegistry, clipPositionNodes } from './identity.ts'
+import { validateGeometry } from '../paths/geometry.ts'
+import { validateTiming } from '../paths/timing.ts'
 import { isValidObjectPath, POSITION_AXIS_PATHS } from './path.ts'
 import type { DocIssue, JsonObject, JsonValue, ScriptDoc, Severity } from './types.ts'
 
@@ -581,11 +583,6 @@ function indexOfTime(times: readonly number[], value: number): number {
       return index
     }
   }
-  for (let index = 0; index < times.length; index += 1) {
-    if (Math.abs(times[index] - value) <= PATH_TIME_EPSILON) {
-      return index
-    }
-  }
   return -1
 }
 
@@ -607,7 +604,7 @@ function checkAxes(
   }
 }
 
-/** `geometry`：必填对象 + 非空字符串 type（未知类型 → error；parser 由曲线注册表拒绝）。 */
+/** `geometry`：必填对象 + 已注册类型；参数数量/范围/非零/非平行由 07-06 校验。 */
 function checkGeometry(
   raw: JsonValue,
   jsonPath: string,
@@ -623,80 +620,23 @@ function checkGeometry(
     add('block', 'L25', 'geometry.type 缺失或不是非空字符串', memberPath(jsonPath, 'type'))
     return
   }
-  if (type === 'line') {
-    for (const key of Object.keys(raw)) {
-      if (key !== 'type') {
-        add('block', 'L25', `line 只接受 type，发现未知参数 ${key}`, memberPath(jsonPath, key))
-      }
-    }
+  if (type !== 'line' && catalog.curveType(type) === undefined) {
+    add('error', 'L25', `未知曲线类型: ${type}（不回落 line）`, memberPath(jsonPath, 'type'))
     return
   }
-  if (catalog.curveType(type) === undefined) {
-    add('error', 'L25', `未知曲线类型: ${type}（不回落 line）`, memberPath(jsonPath, 'type'))
+  for (const issue of validateGeometry(raw, jsonPath)) {
+    add(issue.message.startsWith('未知曲线类型') ? 'error' : 'block', 'L25', issue.message, issue.field)
   }
 }
 
-/** `timing`：`linear` 或 `keyframes`（至少 2 个 `{t,s}`，t 严格递增）。 */
+/** `timing`：`linear` 或 `keyframes`（07-08：首末 (0,0)/(1,1)、非减、[0,1]、相等合法）。 */
 function checkTiming(
   raw: JsonValue,
   jsonPath: string,
   add: (severity: Severity, code: string, message: string, jsonPath: string) => void,
 ): void {
-  if (!isJsonObject(raw)) {
-    add('block', 'L25', 'timing 需要对象 {type: linear | keyframes, ...}', jsonPath)
-    return
-  }
-  const type = raw.type
-  if (type === undefined || type === null) {
-    return
-  }
-  if (type !== 'linear' && type !== 'keyframes') {
-    add('block', 'L25', `未知时间映射类型 ${String(type)}（可选: linear, keyframes）`, memberPath(jsonPath, 'type'))
-    return
-  }
-  if (type === 'linear') {
-    for (const key of Object.keys(raw)) {
-      if (key !== 'type') {
-        add('block', 'L25', `linear 只接受 type，发现未知键 ${key}`, memberPath(jsonPath, key))
-      }
-    }
-    return
-  }
-  for (const key of Object.keys(raw)) {
-    if (key !== 'type' && key !== 'points') {
-      add('block', 'L25', `未知键 ${key}（keyframes 只接受 type / points）`, memberPath(jsonPath, key))
-    }
-  }
-  const points = raw.points
-  if (!Array.isArray(points) || points.length < 2) {
-    add('block', 'L25', 'points 需要至少 2 个点 {t, s}', memberPath(jsonPath, 'points'))
-    return
-  }
-  let previous = Number.NEGATIVE_INFINITY
-  for (let index = 0; index < points.length; index += 1) {
-    const point = points[index]
-    const pointPath = `${memberPath(jsonPath, 'points')}[${index}]`
-    if (!isJsonObject(point)) {
-      add('block', 'L25', '需要对象 {t, s}', pointPath)
-      continue
-    }
-    for (const key of Object.keys(point)) {
-      if (key !== 't' && key !== 's') {
-        add('block', 'L25', `未知键 ${key}（只接受 t / s）`, memberPath(pointPath, key))
-      }
-    }
-    const t = point.t
-    const s = point.s
-    if (typeof t !== 'number' || !Number.isFinite(t)) {
-      add('block', 'L25', 't 需要有限数字', memberPath(pointPath, 't'))
-    } else if (t <= previous) {
-      add('block', 'L25', `t 必须严格递增（前一帧: ${previous}）`, memberPath(pointPath, 't'))
-    } else {
-      previous = t
-    }
-    if (typeof s !== 'number' || !Number.isFinite(s)) {
-      add('block', 'L25', 's 需要有限数字', memberPath(pointPath, 's'))
-    }
+  for (const issue of validateTiming(raw, jsonPath)) {
+    add('block', 'L28', issue.message, issue.field)
   }
 }
 

@@ -45,6 +45,8 @@ import type { BuiltinRequirementType } from '../graph/types.ts'
 import { compactStarts, rippleShift, splitClipObject } from '../timeline/clipEdit.ts'
 import type { AnimObjectShape, JsonObject, JsonValue, ObjectKeyframe, ScriptDoc } from './types.ts'
 import { checkValue } from './value.ts'
+import { PATH_ID_JAVA_PATTERN } from '../paths/types.ts'
+import { validatePathEntry } from '../paths/collection.ts'
 
 /** 命令执行失败（由 `commit` 捕获并回滚）。 */
 export class CommandError extends Error {
@@ -143,6 +145,21 @@ export type DocCommand =
     points: Array<{ time: number; value: JsonValue }>
   }
   | { kind: 'object.remove'; clipKey: string; path: string }
+  /** 07 原子批量帧编辑：一次提交内按顺序 add/set/remove；任一失败整次抛错。 */
+  | {
+    kind: 'object.editKeyframes'
+    clipKey: string
+    ops: Array<
+      | { op: 'add'; path: string; time: number; value: JsonValue }
+      | { op: 'set'; path: string; time: number; value: JsonValue }
+      | { op: 'remove'; path: string; time: number }
+    >
+  }
+  | { kind: 'path.remove'; pathId: string }
+  /** 07 路径集合批量写：先按 id 删除，再按顺序追加（生成器 / diff 替换）。 */
+  | { kind: 'path.writeBatch'; removeIds: string[]; entries: JsonObject[] }
+  /** 07 组合命令：按顺序执行子命令；store 的一次快照保证整体撤销。 */
+  | { kind: 'compound'; commands: DocCommand[] }
   | { kind: 'path.remove'; pathId: string }
   | { kind: 'binding.remove'; bindingId: string }
 
@@ -1354,7 +1371,9 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
         ? []
         : pathIntervalsContaining(ctx.doc, handle.id, command.time)
       if (interruptions.length > 0) {
-        warnings.push(`新帧 t=${command.time} 落在 ${interruptions.join('、')} 的端点区间内，会切断端点相邻性`)
+        throw new CommandError(
+          `新帧 t=${command.time} 落在 ${interruptions.join('、')} 的端点区间内，会切断端点相邻性；请先删除这些路径并继续`,
+        )
       }
       return { warnings }
     }
@@ -1390,6 +1409,16 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
         throw new CommandError(`非法属性路径: ${command.path}`)
       }
       readShape(ctx, handle)
+      if (handle.id !== undefined) {
+        const endpointTimes = pathEndpointsAtTime(ctx.doc, handle.id, command.from)
+        if (endpointTimes.length > 0) {
+          throw new CommandError(`移动的节点是路径端点（${endpointTimes.join('、')}），会断开引用；请先删除这些路径`)
+        }
+        const interruptions = pathIntervalsContaining(ctx.doc, handle.id, command.to)
+        if (interruptions.length > 0) {
+          throw new CommandError(`目标时间 ${command.to} 落在 ${interruptions.join('、')} 的端点区间内；请先删除这些路径`)
+        }
+      }
       const property = propertyOf(handle.clip, command.path)
       const object = animObjectOf(property)
       object.keyframes = moveKeyframe(object.keyframes ?? [], command.from, command.to)
@@ -1465,6 +1494,16 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
         }
         if (!isFiniteNumber(move.to) || move.to < 0) {
           throw new CommandError(`${move.path}: 目标时间必须是非负有限数字（收到 ${String(move.to)}）`)
+        }
+        if (handle.id !== undefined) {
+          const endpointTimes = pathEndpointsAtTime(ctx.doc, handle.id, move.from)
+          if (endpointTimes.length > 0) {
+            throw new CommandError(`移动的节点是路径端点（${endpointTimes.join('、')}）；请先删除这些路径`)
+          }
+          const interruptions = pathIntervalsContaining(ctx.doc, handle.id, move.to)
+          if (interruptions.length > 0) {
+            throw new CommandError(`目标时间 ${move.to} 落在 ${interruptions.join('、')} 的端点区间内；请先删除这些路径`)
+          }
         }
         const current = drafts.get(move.path)
           ?? { def, frames: animObjectOf(existingProperty(handle.clip, move.path)).keyframes ?? [] }
@@ -1582,6 +1621,129 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
         throw new CommandError(`路径不存在: ${command.pathId}`)
       }
       paths.splice(index, 1)
+      return { warnings }
+    }
+    case 'object.editKeyframes': {
+      const handle = requireHandle(ctx, command.clipKey)
+      readShape(ctx, handle)
+      for (const op of command.ops) {
+        if (!isValidObjectPath(op.path)) {
+          throw new CommandError(`非法属性路径: ${op.path}`)
+        }
+        const def = objectDefOf(ctx, handle, op.path)
+        if (op.op !== 'remove') {
+          if (def === undefined && ctx.catalog.track(handle.trackType) !== undefined) {
+            throw new CommandError(`未登记的对象路径: ${op.path}（轨道 ${handle.trackType}）`)
+          }
+          assertKeyframesAllowed(def, op.path)
+          assertValueWritable(def, `${op.path}.keyframes`, op.value, def?.type === 'nullable_float')
+        }
+        if (op.op === 'remove') {
+          const endpoints = handle.id === undefined ? [] : pathEndpointsAtTime(ctx.doc, handle.id, op.time)
+          if (endpoints.length > 0) {
+            throw new CommandError(`该时间是路径端点（${endpoints.join('、')}），删除会断开引用；请先重绑或删除路径`)
+          }
+        }
+        const property = propertyOf(handle.clip, op.path)
+        const object = animObjectOf(property)
+        const frames = object.keyframes ?? []
+        if (op.op === 'add') {
+          if (frameIndexAt(frames, op.time) >= 0) {
+            throw new CommandError(`${op.path}: t=${op.time} 已有关键帧`)
+          }
+          if (handle.id !== undefined) {
+            const interruptions = pathIntervalsContaining(ctx.doc, handle.id, op.time)
+            if (interruptions.length > 0) {
+              throw new CommandError(
+                `新帧 t=${op.time} 落在 ${interruptions.join('、')} 的端点区间内；请先删除这些路径并继续`,
+              )
+            }
+          }
+          object.keyframes = insertKeyframe(frames, op.time, op.value)
+        } else if (op.op === 'set') {
+          const index = frameIndexAt(frames, op.time)
+          if (index < 0) {
+            throw new CommandError(`${op.path}: t=${op.time} 不存在关键帧，无法改值`)
+          }
+          const next = frames.map((frame, frameIndex) => (frameIndex === index
+            ? { time: frame.time, value: cloneJson(op.value) }
+            : { time: frame.time, value: cloneJson(frame.value) }))
+          object.keyframes = next
+        } else {
+          const next = removeKeyframe(frames, op.time)
+          if (def !== undefined && def.mode === 'event' && next.length === 0) {
+            throw new CommandError(`${op.path}: mode=event 必须有 keyframes（不能删除最后一帧）`)
+          }
+          object.keyframes = next
+        }
+        writeProperty(handle.clip, op.path, object)
+      }
+      return { warnings }
+    }
+    case 'path.writeBatch': {
+      let paths = ctx.doc.root.paths
+      if (paths === undefined) {
+        paths = []
+        ctx.doc.root.paths = paths
+      }
+      if (!Array.isArray(paths)) {
+        throw new CommandError('paths 不是数组')
+      }
+      if (command.removeIds.length > 0) {
+        const removeSet = new Set(command.removeIds)
+        const kept = paths.filter((entry) => !(isJsonObject(entry) && typeof entry.id === 'string' && removeSet.has(entry.id)))
+        paths.splice(0, paths.length, ...kept)
+      }
+      const existingIds = new Set<string>()
+      const existingPairs = new Set<string>()
+      for (const entry of paths) {
+        if (isJsonObject(entry)) {
+          if (typeof entry.id === 'string') {
+            existingIds.add(entry.id)
+          }
+          if (typeof entry.clip === 'string' && typeof entry.from === 'number' && typeof entry.to === 'number') {
+            existingPairs.add(`${entry.clip}|${entry.from}|${entry.to}`)
+          }
+        }
+      }
+      for (let index = 0; index < command.entries.length; index += 1) {
+        const entry = command.entries[index]
+        const id = entry.id
+        if (typeof id !== 'string' || !PATH_ID_JAVA_PATTERN.test(id)) {
+          throw new CommandError(`paths[${index}].id 非法: ${String(id)}`)
+        }
+        if (existingIds.has(id)) {
+          throw new CommandError(`路径 id 重复: ${id}`)
+        }
+        const clip = typeof entry.clip === 'string' ? entry.clip : ''
+        if (clip.length === 0) {
+          throw new CommandError(`paths[${index}].clip 缺失`)
+        }
+        const from = entry.from
+        const to = entry.to
+        if (typeof from !== 'number' || !Number.isFinite(from) || typeof to !== 'number' || !Number.isFinite(to) || !(from < to)) {
+          throw new CommandError(`paths[${index}] 的 from/to 非法`)
+        }
+        const pair = `${clip}|${from}|${to}`
+        if (existingPairs.has(pair)) {
+          throw new CommandError(`同一片段的端点对重复: clip=${clip}, from=${from}, to=${to}`)
+        }
+        const entryIssues = validatePathEntry(ctx.doc, entry, paths.length)
+        if (entryIssues.length > 0) {
+          throw new CommandError(entryIssues[0].message)
+        }
+        paths.push(cloneJson(entry))
+        existingIds.add(id)
+        existingPairs.add(pair)
+      }
+      return { warnings }
+    }
+    case 'compound': {
+      for (let index = 0; index < command.commands.length; index += 1) {
+        const sub = command.commands[index]
+        const result = applyCommand(ctx, sub)
+        warnings.push(...result.warnings)
+      }
       return { warnings }
     }
     case 'binding.remove': {

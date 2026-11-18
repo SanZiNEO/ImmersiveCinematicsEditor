@@ -553,8 +553,36 @@ async function main(): Promise<void> {
     const key = store.registry.handles().find((item) => item.id === 'clip_collect')?.key ?? ''
     const removeEndpoint = store.commit({ kind: 'object.removeKeyframe', clipKey: key, path: 'position.x', time: 0 })
     check('03-03 删除路径端点关键帧被阻止', !removeEndpoint.ok && removeEndpoint.error?.includes('路径端点') === true, removeEndpoint)
+    // Java `ScriptValidator.java:757-780`：路径 to 必须与 from 相邻；端点区间内插帧会产生不合法文档，
+    // 编辑器拦截这次编辑（不回退为只警告写入）。断言：拒绝、错误含「端点区间」、文档未变、撤销栈无新增。
+    const rootBefore = store.doc?.root as JsonObject
+    const collectBefore = (Array.isArray(rootBefore.clips) ? rootBefore.clips : []).find(
+      (clip): clip is JsonObject => isJsonObject(clip) && clip.id === 'clip_collect',
+    )
+    const xBefore = collectBefore !== undefined && isJsonObject(collectBefore.objects) && isJsonObject(collectBefore.objects['position.x'])
+      ? collectBefore.objects['position.x'].keyframes
+      : undefined
+    const xFrameCountBefore = Array.isArray(xBefore) ? xBefore.length : -1
+    const pathsBefore = Array.isArray(rootBefore.paths) ? rootBefore.paths.length : -1
+    const undoBefore = store.canUndo()
     const insert = store.commit({ kind: 'object.addKeyframe', clipKey: key, path: 'position.x', time: 1.5, value: 1 })
-    check('03-03 插入端点区间内帧给出提示', insert.ok && insert.warnings.length > 0, insert)
+    const rootAfter = store.doc?.root as JsonObject
+    const collectAfter = (Array.isArray(rootAfter.clips) ? rootAfter.clips : []).find(
+      (clip): clip is JsonObject => isJsonObject(clip) && clip.id === 'clip_collect',
+    )
+    const xAfter = collectAfter !== undefined && isJsonObject(collectAfter.objects) && isJsonObject(collectAfter.objects['position.x'])
+      ? collectAfter.objects['position.x'].keyframes
+      : undefined
+    const xFrameCountAfter = Array.isArray(xAfter) ? xAfter.length : -1
+    check(
+      '03-03 端点区间内插帧被拦截（不写入非法文档）',
+      !insert.ok
+        && insert.error?.includes('端点区间') === true
+        && (Array.isArray(rootAfter.paths) ? rootAfter.paths.length : -1) === pathsBefore
+        && xFrameCountAfter === xFrameCountBefore
+        && store.canUndo() === undoBefore,
+      { insert, pathsBefore, pathsAfter: Array.isArray(rootAfter.paths) ? rootAfter.paths.length : -1, xFrameCountBefore, xFrameCountAfter, undoBefore, undoAfter: store.canUndo() },
+    )
   }
   {
     const { doc } = makeDoc(objectsDemoRaw, index)

@@ -86,6 +86,18 @@ export interface DocumentCommands {
   commitClipAuthoring(clipKey: string, mutate: (state: AuthoringState) => void): CommitOutcome
   /** 读片段级仅内存态（副本；没有返回 `{}`）。 */
   clipAuthoringOf(clipKey: string): AuthoringState
+  /**
+   * 读文档级组合定义（07-01；`doc.authoring.groups` 的副本）。
+   *
+   * 组合定义只活在编辑器内存里：保存 / 推送 / 导出都不含它。
+   */
+  authoringGroups(): JsonObject[]
+  /**
+   * 写文档级组合定义（07-01）：只改 `doc.authoring.groups`，不写盘、不进撤销栈、不置脏。
+   *
+   * 形状校验（id / name / track / members / builtin / source）由文档层负责，失败时返回错误原因。
+   */
+  setAuthoringGroups(groups: readonly JsonObject[]): CommitOutcome
   /** 单主选区；宿主不替面板改选区，只接受请求。 */
   select(selection: Selection): void
   /** 批选：`clipKeys` 为多选集合；空数组 = 清空。 */

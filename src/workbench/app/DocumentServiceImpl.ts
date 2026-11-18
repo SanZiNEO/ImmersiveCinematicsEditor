@@ -173,6 +173,35 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
     return this.store.clipAuthoringOf(clipKey)
   }
 
+  /** 读文档级组合定义（07-01）：副本；无文档或无组时返回空数组。 */
+  authoringGroups(): JsonObject[] {
+    const doc = this.store.doc
+    if (doc === null) {
+      return []
+    }
+    const raw = doc.authoring.groups
+    return Array.isArray(raw) ? (structuredClone(raw) as JsonObject[]) : []
+  }
+
+  /** 写文档级组合定义（07-01）：只改内存、不写盘、不进撤销栈。 */
+  setAuthoringGroups(groups: readonly JsonObject[]): CommitOutcome {
+    const result: CommitResult = this.store.setAuthoringGroups(groups)
+    if (!result.ok) {
+      this.diagnostics.report({
+        severity: 'warning',
+        source: 'document',
+        message: '组合定义写入被拒绝',
+        detail: result.error ?? '',
+      })
+    }
+    this.emit()
+    return {
+      ok: result.ok,
+      warnings: result.warnings,
+      ...(result.error === undefined ? {} : { error: result.error }),
+    }
+  }
+
   undo(): boolean {
     return this.store.undo()
   }

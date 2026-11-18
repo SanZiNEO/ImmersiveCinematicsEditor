@@ -358,6 +358,27 @@ export class DocStore {
     return state === undefined ? {} : structuredClone(state)
   }
 
+  /**
+   * 写入文档级组合定义（07-01）：仅内存、不写盘、不进撤销栈、不置脏。
+   *
+   * 保存 / 推送 / 导出只读 `root`，`doc.authoring.groups` 永远不会进入脚本；
+   * 关闭重开后随文档对象丢弃，默认组由配置重新装载。
+   */
+  setAuthoringGroups(groups: readonly JsonObject[]): CommitResult {
+    const doc = this.current
+    if (doc === null) {
+      return { ok: false, error: '没有打开的文档', warnings: [] }
+    }
+    const invalid = validateAuthoringGroups(groups)
+    if (invalid !== null) {
+      return { ok: false, error: invalid, warnings: [] }
+    }
+    doc.authoring.groups = structuredClone(groups)
+    this.revisionCounter += 1
+    this.emit('authoring')
+    return { ok: true, warnings: [] }
+  }
+
   /** 撤销：快照恢复，只作用 doc；选择按 03-03 修复。 */
   undo(): boolean {
     const doc = this.current
@@ -608,7 +629,11 @@ export class DocStore {
       throw new Error(`快照无法恢复为文档: ${parsed.issues.map((issue) => issue.message).join('；')}`)
     }
     const doc = parsed.doc
+    const currentGroups = this.current?.authoring.groups
     doc.authoring = snapshot.authoring
+    if (currentGroups !== undefined) {
+      doc.authoring.groups = currentGroups
+    }
     doc.clipAuthoring = snapshot.clipAuthoring
     this.current = doc
     const preferred = new Map(snapshot.keys.map((entry) => [entry.location, entry.key]))
@@ -630,15 +655,61 @@ export class DocStore {
   }
 }
 
+/**
+ * 组合定义校验（07-01）。文档级状态不进写盘，但仍拒绝会破坏 UI 的重复 id / 形状错误。
+ * `source` / `builtin` 是编辑器语义，允许缺省。
+ */
+function validateAuthoringGroups(groups: readonly JsonObject[]): string | null {
+  const ids = new Set<string>()
+  const idPattern = /^[A-Za-z][A-Za-z0-9_.-]{1,63}$/
+  for (const [index, group] of groups.entries()) {
+    if (!isJsonObject(group)) {
+      return `authoring.groups[${index}] 需要对象`
+    }
+    const id = group.id
+    if (typeof id !== 'string' || !idPattern.test(id)) {
+      return `authoring.groups[${index}].id 非法: ${String(id)}`
+    }
+    if (ids.has(id)) {
+      return `authoring.groups[${index}].id 重复: ${id}`
+    }
+    ids.add(id)
+    if (typeof group.name !== 'string' || group.name.length === 0) {
+      return `authoring.groups[${index}].name 需要非空字符串`
+    }
+    if (typeof group.track !== 'string' || group.track.length === 0) {
+      return `authoring.groups[${index}].track 需要非空字符串`
+    }
+    if (!Array.isArray(group.members)) {
+      return `authoring.groups[${index}].members 需要字符串数组`
+    }
+    for (const member of group.members) {
+      if (typeof member !== 'string' || member.length === 0) {
+        return `authoring.groups[${index}].members 含非法项: ${String(member)}`
+      }
+    }
+    if (group.builtin !== undefined && typeof group.builtin !== 'boolean') {
+      return `authoring.groups[${index}].builtin 需要布尔值`
+    }
+    if (group.source !== undefined && typeof group.source !== 'string') {
+      return `authoring.groups[${index}].source 需要字符串`
+    }
+  }
+  return null
+}
+
 /** 文档快照：`structuredClone` 保留 `undefined` 字段（03-05 验收）。 */
 function snapshotOf(doc: ScriptDoc, registry: ClipRegistry): DocSnapshot {
   const keys = registry.handles().map((handle) => ({
     location: locationKey(handle.inline, handle.trackIndex, handle.clipIndex),
     key: handle.key,
   }))
+  const authoring = structuredClone(doc.authoring)
+  // 07-01：组合定义不参与撤销栈；快照只保留文档数据侧的 authoring。
+  delete authoring.groups
   return structuredClone({
     root: doc.root,
-    authoring: doc.authoring,
+    authoring,
     clipAuthoring: doc.clipAuthoring,
     keys,
   })
