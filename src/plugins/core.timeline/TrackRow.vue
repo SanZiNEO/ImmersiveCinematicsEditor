@@ -80,6 +80,10 @@ const overlapBands = computed(() => {
 
 const selectedSet = computed(() => new Set(props.selection))
 
+/** 09-07：OVERLAY / LETTERBOX 同轨只取第一个活跃片段，后一个在该重叠区不成层。 */
+const singleActiveTrack = computed(() => props.track.type === 'OVERLAY' || props.track.type === 'LETTERBOX')
+const overlapHint = '同轨只取文档顺序里的第一个活跃片段：此重叠区里顺序靠后的片段不会成层。可拖动片段到另一条轨道，或调整起始时间；编辑器不会自动拆分。'
+
 function widthOf(clip: ClipViewEntry): number {
   return clipWidthPx(clip, props.pxPerSecond, props.displayRange.end)
 }
@@ -123,9 +127,14 @@ const rowStyle = computed(() => ({
       v-for="band in overlapBands"
       :key="`overlap-${band.start}-${band.end}`"
       class="track-row__overlap"
+      :class="{ 'track-row__overlap--single-active': singleActiveTrack }"
       :style="bandStyle(band.start, band.end)"
-      aria-hidden="true"
-    ></div>
+      :aria-hidden="singleActiveTrack ? undefined : 'true'"
+    >
+      <span v-if="singleActiveTrack" class="track-row__overlap-label" :title="overlapHint">
+        后者不成层 · 拖到另一轨 / 改起始
+      </span>
+    </div>
     <ClipBlock
       v-for="clip in visibleClips"
       :key="clip.clipKey"
@@ -205,6 +214,28 @@ const rowStyle = computed(() => ({
     transparent 2px,
     transparent 7px
   );
+}
+
+.track-row__overlap--single-active {
+  opacity: 0.65;
+}
+
+.track-row__overlap-label {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  max-width: calc(100% - 8px);
+  overflow: hidden;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+  transform: translateY(-50%);
 }
 
 .track-row__empty {

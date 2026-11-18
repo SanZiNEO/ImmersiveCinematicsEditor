@@ -149,6 +149,7 @@ const rows = computed<PropertyRow[]>(() => {
     trackType: found.trackType,
     objects: currentObjects,
     catalog,
+    panel: 'properties',
   })
   // 片段时间几何（`playControl`）由主时间轴编辑：属性面板不提供值控件，
   // 只由片段头给一个"在时间轴编辑"的跳转（06-09 §4.4）。这里把它们从行集合里剔除，
@@ -874,6 +875,8 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
               :key="group.key"
               :group="group"
               :timing="timing"
+              :objects="objects ?? {}"
+              :panel="'properties'"
               :playhead="playhead"
               :collapsed="isCollapsed(group.key)"
               :effect-count="effectCountByGroup.get(group.key) ?? 0"

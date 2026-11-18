@@ -22,6 +22,7 @@ import type { ServiceToken } from './services.ts'
 import { createServiceToken } from './services.ts'
 import type { I18nApi, StatusApi } from './context.ts'
 import type { PreviewServicePort } from './preview.ts'
+import type { ResourceServicePort } from './resources.ts'
 import type { ThemeApi, ThemeControllerPort, ThemeRegistryPort } from './theme.ts'
 import type { GraphLayoutServicePort, GraphServicePort, ScriptMutationServicePort } from './graph.ts'
 import type { ShellActionsPort } from './actions.ts'
@@ -116,3 +117,6 @@ export const SHELL_ACTIONS_SERVICE: ServiceToken<ShellActionsPort> = createServi
 
 /** 02 字段目录（面板只读查询；不复制字段表）。 */
 export const CATALOG_SERVICE: ServiceToken<CatalogIndex> = createServiceToken('字段目录')
+
+/** 资源列举（09：resource.list 的既有消息）。 */
+export const RESOURCE_SERVICE: ServiceToken<ResourceServicePort> = createServiceToken('资源列举')

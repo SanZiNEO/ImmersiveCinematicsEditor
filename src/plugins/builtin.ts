@@ -15,6 +15,7 @@ import coreMeta from './core.meta/manifest.ts'
 import coreTransitionPanel from './core.transition-panel/manifest.ts'
 import coreCameraInspect from './core.camera-inspect/manifest.ts'
 import corePaths from './core.paths/manifest.ts'
+import coreOverlay from './core.overlay/manifest.ts'
 import demoExtra from './demo.extra/manifest.ts'
 import demoKitchenSink from './demo.kitchen-sink/manifest.ts'
 
@@ -30,6 +31,7 @@ export const BUILTIN_PLUGINS: PluginManifest[] = [
   coreTransitionPanel,
   coreCameraInspect,
   corePaths,
+  coreOverlay,
   demoExtra,
   demoKitchenSink,
 ]

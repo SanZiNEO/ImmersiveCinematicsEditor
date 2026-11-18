@@ -139,7 +139,7 @@ const allRows = computed<PropertyRow[]>(() => {
   if (clipKey === null || objects === null || catalog === undefined || type === '') {
     return []
   }
-  return propertyRowsFor({ clipKey, trackType: type, objects, catalog })
+  return propertyRowsFor({ clipKey, trackType: type, objects, catalog, panel: 'effects' })
 })
 
 const timing = computed<ClipTiming>(() => {

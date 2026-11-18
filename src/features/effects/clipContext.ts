@@ -9,6 +9,8 @@ import type { JsonObject } from '../../core/doc/types.ts'
 import type { ClipViewEntry, ScriptView } from '../../workbench/api/documents.ts'
 import type { ClipTiming } from './rows.ts'
 import { buildPropertyRows } from './rows.ts'
+import { applyRowFilters } from './rowFilters.ts'
+import type { RowFilterContext, RowPanel } from './rowFilters.ts'
 import type { PropertyRow } from './types.ts'
 
 /** 一个片段在只读视图里的定位结果。 */
@@ -49,13 +51,21 @@ export function propertyRowsFor(input: {
   trackType: string
   objects: JsonObject
   catalog: CatalogIndex
+  /** 面板身份（09 的行过滤钩子用；省略按 properties）。 */
+  panel?: RowPanel
 }): PropertyRow[] {
-  return buildPropertyRows({
+  const rows = buildPropertyRows({
     clipKey: input.clipKey,
     clip: { objects: input.objects },
     trackType: input.trackType,
     catalog: input.catalog,
   })
+  const context: RowFilterContext = {
+    trackType: input.trackType,
+    objects: input.objects,
+    panel: input.panel ?? 'properties',
+  }
+  return applyRowFilters(rows, context).rows
 }
 
 /**

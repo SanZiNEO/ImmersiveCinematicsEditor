@@ -12,7 +12,8 @@
  */
 import { computed, ref, watch } from 'vue'
 import { isJsonObject } from '../../../core/doc/json.ts'
-import type { JsonValue } from '../../../core/doc/types.ts'
+import type { DocCommand } from '../../../core/doc/commands.ts'
+import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 import { segmentIndexAt, sampleValue } from '../easing.ts'
 import { easingKey, readEasingTable } from '../easingStore.ts'
 import { PLAYHEAD_EPSILON } from '../geometry.ts'
@@ -30,6 +31,8 @@ import {
 } from '../valueControls.ts'
 import type { CommitTarget } from '../types.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
+import { DOCUMENT_SERVICE } from '../../../workbench/api/tokens.ts'
+import { commitPrefixFor } from '../customFields.ts'
 import StructTreeEditor from './StructTreeEditor.vue'
 import AnimationControls from './AnimationControls.vue'
 import type { AddKeyframePayload, SetValuePayload } from './effectRowEvents.ts'
@@ -55,6 +58,8 @@ const props = defineProps<{
    * 又不把固定行高撑开、不打乱关键帧组的纵向对齐。
    */
   compact?: boolean
+  /** 片段对象（09 提交前缀用；省略时按 `DOCUMENT_SERVICE.clipObjects` 取）。 */
+  objects?: JsonObject
 }>()
 
 const emit = defineEmits<{
@@ -69,6 +74,20 @@ const emit = defineEmits<{
 }>()
 
 const ctx = usePanelContext()
+const documentService = ctx.services.get(DOCUMENT_SERVICE)
+
+/**
+ * 09 提交前缀：例如首次改 fade 字段前补写显式 `layer_type: "fade"`。
+ * 前缀为空时保持 06 的 `commit(..., coalesceKey)` 行为；非空时用 `commitBatch` 组成一次撤销。
+ */
+const ensureCommands = computed<DocCommand[]>(() => {
+  const trackType = props.row.def?.scope[0]
+  if (trackType === undefined) {
+    return []
+  }
+  const objects = props.objects ?? documentService?.clipObjects(props.row.clipKey) ?? {}
+  return commitPrefixFor(trackType, props.row.path, props.row.clipKey, objects)
+})
 
 const kind = computed(() => controlKindOf(props.row))
 const hasKeyframes = computed(() => props.rowHasKeyframes ?? props.row.keyframes.length > 0)
@@ -343,15 +362,16 @@ function submitValue(value: JsonValue): boolean {
     applied.value = '草稿已就绪：点"添加帧"在播放头建帧。'
     return false
   }
-  const outcome = targetValue.kind === 'static'
-    ? ctx.commands.commit(
-      { kind: 'object.setValue', clipKey: targetValue.clipKey, path: targetValue.path, value: normalized },
-      `setStatic:${targetValue.clipKey}:${targetValue.path}`,
-    )
-    : ctx.commands.commit(
-      { kind: 'object.setKeyframeValue', clipKey: targetValue.clipKey, path: targetValue.path, time: targetValue.time, value: normalized },
-      `setValue:${targetValue.clipKey}:${targetValue.path}:${targetValue.time}`,
-    )
+  const write: DocCommand = targetValue.kind === 'static'
+    ? { kind: 'object.setValue', clipKey: targetValue.clipKey, path: targetValue.path, value: normalized }
+    : { kind: 'object.setKeyframeValue', clipKey: targetValue.clipKey, path: targetValue.path, time: targetValue.time, value: normalized }
+  const coalesceKey = targetValue.kind === 'static'
+    ? `setStatic:${targetValue.clipKey}:${targetValue.path}`
+    : `setValue:${targetValue.clipKey}:${targetValue.path}:${targetValue.time}`
+  const prefix = ensureCommands.value
+  const outcome = prefix.length > 0
+    ? ctx.commands.commitBatch([...prefix, write], coalesceKey)
+    : ctx.commands.commit(write, coalesceKey)
   if (outcome.ok) {
     clearError()
     applied.value = targetValue.kind === 'static' ? '已写入静态值。' : `已写入节点值 t=${targetValue.time}。`

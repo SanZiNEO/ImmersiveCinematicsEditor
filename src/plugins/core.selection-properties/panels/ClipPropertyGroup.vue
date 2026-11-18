@@ -12,6 +12,8 @@
 import { computed } from 'vue'
 import type { ClipTiming } from '../../../features/effects/rows.ts'
 import type { EffectDiagnostic, EffectGroup, PropertyRow } from '../../../features/effects/types.ts'
+import type { RowPanel } from '../../../features/effects/rowFilters.ts'
+import type { JsonObject } from '../../../core/doc/types.ts'
 import ClipPropertyRow from './ClipPropertyRow.vue'
 import { propertyRowHeight, rowOffsets, visibleRowRange } from './rowLayout.ts'
 
@@ -19,6 +21,8 @@ const props = defineProps<{
   group: EffectGroup
   timing: ClipTiming
   playhead: number
+  objects: JsonObject
+  panel: RowPanel
   collapsed: boolean
   /** 该组在效果面板里的叶子数（0 表示整组都在属性面板）。 */
   effectCount: number
@@ -142,6 +146,8 @@ function jumpToEffects(): void {
           <ClipPropertyRow
             :row="row"
             :timing="timing"
+            :objects="objects"
+            :panel="panel"
             :playhead="playhead"
             :diagnostics="rowDiagnostics(row.path)"
             :focused="focusedPath === row.path"

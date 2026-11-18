@@ -12,13 +12,14 @@
  * 所有写入走 `ctx.commands.commit`（值控件与时钟内部完成），本组件只组合与显示。
  */
 import { computed, ref } from 'vue'
-import type { JsonValue } from '../../../core/doc/types.ts'
+import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 import { eventDefinition, readRecordBody, seedRecordBody } from '../../../features/effects/eventRecords.ts'
 import { effectiveStaticValue, isRequiredMissing } from '../../../features/effects/rows.ts'
 import type { ClipTiming } from '../../../features/effects/rows.ts'
 import type { EffectDiagnostic, PropertyRow } from '../../../features/effects/types.ts'
 import { rangeHint, unitSuffix } from '../../../features/effects/valueControls.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
+import { customFieldFor, customFieldsRevision } from '../../../features/effects/customFields.ts'
 import PropertyValueForm from '../../../features/effects/panels/PropertyValueForm.vue'
 import AnimationClock from './AnimationClock.vue'
 
@@ -26,6 +27,10 @@ const props = defineProps<{
   row: PropertyRow
   timing: ClipTiming
   playhead: number
+  /** 当前片段的对象（09 自定义字段控件只读入参）。 */
+  objects?: JsonObject
+  /** 面板身份：09 的 OVERLAY / LETTERBOX 有帧行在属性面板只指路效果面板。 */
+  panel?: 'properties' | 'effects'
   /** 本行诊断（最高级别用于边框与文案）。 */
   diagnostics: readonly EffectDiagnostic[]
   /** 由外壳决定的高亮（选中叶子 / 定位目标）。 */
@@ -47,6 +52,23 @@ const emit = defineEmits<{
 }>()
 
 const ctx = usePanelContext()
+/** 09：命中插件自定义字段时，用专用控件替代默认值控件。 */
+const trackType = computed(() => props.row.def?.scope[0] ?? '')
+const customField = computed(() => {
+  void customFieldsRevision.value
+  if (trackType.value === '') return undefined
+  return customFieldFor(trackType.value, props.row.path)
+})
+const rowObjects = computed<JsonObject>(() => props.objects ?? {})
+/**
+ * 09 用户裁决：属性面板保留全部 OVERLAY / LETTERBOX 行；有帧行的值控件改为
+ * “在效果面板编辑”指路，不再重复提供值控件。
+ */
+const framedInEffects = computed(() => {
+  if (props.row.keyframes.length === 0) return false
+  const panel = props.panel ?? 'properties'
+  return panel === 'properties' && (trackType.value === 'OVERLAY' || trackType.value === 'LETTERBOX')
+})
 const error = ref('')
 const notice = ref('')
 
@@ -241,27 +263,44 @@ function onFailed(payload: { clipKey: string; path: string; message: string }): 
 
       <!-- 值 / 结构：全部行都给值控件（有帧时控件显示并编辑播放头处的帧值） -->
       <template v-else>
-        <PropertyValueForm
-          :row="row"
-          panel="properties"
-          :playhead="playhead"
-          :timing="timing"
-          :row-has-keyframes="row.keyframes.length > 0"
-          :disabled="blocked || unavailable !== undefined"
-          @toggle-keyframe="onToggleKeyframe"
-          @toggle-animation="onToggleAnimation"
-          @jump-keyframe="onJumpKeyframe"
-        />
-        <span v-if="hasFrames" class="prop-row__count">{{ row.keyframes.length }} 帧</span>
-        <AnimationClock
-          v-if="isAnimated && !isStruct && row.keyframes.length === 0"
-          :row="row"
-          :playhead="playhead"
-          :disabled-reason="unavailable"
-          @enabled="onEnabled"
-          @failed="onFailed"
-        />
-        <span v-else-if="isAnimated && isStruct" class="prop-row__readonly-note">结构类型静态保存，没有时钟。</span>
+        <template v-if="framedInEffects">
+          <span class="prop-row__readonly-note">有 {{ row.keyframes.length }} 帧 · 值在效果面板编辑</span>
+          <button type="button" class="prop-row__link" @click.stop="revealEffects">在效果面板</button>
+        </template>
+        <template v-else>
+          <component
+            :is="customField"
+            v-if="customField !== undefined"
+            :row="row"
+            :objects="rowObjects"
+            :timing="timing"
+            :playhead="playhead"
+            :disabled="blocked || unavailable !== undefined"
+          />
+          <PropertyValueForm
+            v-else
+            :row="row"
+            panel="properties"
+            :objects="rowObjects"
+            :playhead="playhead"
+            :timing="timing"
+            :row-has-keyframes="row.keyframes.length > 0"
+            :disabled="blocked || unavailable !== undefined"
+            @toggle-keyframe="onToggleKeyframe"
+            @toggle-animation="onToggleAnimation"
+            @jump-keyframe="onJumpKeyframe"
+          />
+          <span v-if="hasFrames" class="prop-row__count">{{ row.keyframes.length }} 帧</span>
+          <AnimationClock
+            v-if="isAnimated && !isStruct && row.keyframes.length === 0"
+            :row="row"
+            :playhead="playhead"
+            :disabled-reason="unavailable"
+            @enabled="onEnabled"
+            @failed="onFailed"
+          />
+          <span v-else-if="isAnimated && isStruct" class="prop-row__readonly-note">结构类型静态保存，没有时钟。</span>
+        </template>
       </template>
 
       <span v-if="hint !== ''" class="prop-row__hint">{{ hint }}</span>
