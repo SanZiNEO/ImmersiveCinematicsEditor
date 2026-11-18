@@ -1,6 +1,6 @@
 # 转场面板
 
-> 状态：未实现
+> 状态：已实现
 > 范围：以 A→B 片段交界为编辑对象的独立面板，承载叠化、参数过渡与共存处理
 > 关联：08-02 叠化与参数过渡模型、08-01 字段归属、06 属性/效果面板、04 面板宿主
 
@@ -135,10 +135,15 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-尚未开工；面板外壳、交界列表、叠化与参数过渡详情、共存处理按上述设计执行，无实现偏差可记。
+实现落在 `src/plugins/core.transition-panel/`：插件 `core.transition-panel`、面板 `transition.panel`、槽 `document.right`、order 30、`singleton` / `keepAlive` / `closable`，`available = pageId==='document' && documentOpen`。面板内含：统计行 + 六个过滤器（全部/叠化/参数过渡/共存/无效果/异常）、交界列表（A→B、轨道、交界时刻、叠化时长、参数有效时长、状态徽标、提示、定位 A/B）、布局条（A 上 B 下、重叠实色块）、叠化卡（时长三态输入 + 上限提示、不透明度摘要、应用/重新应用、移除叠化门禁）、参数过渡卡（类型开关立即提交、时长、曲线摘要、打断、六行通道表）、共存卡（三个显式动作）、底部校验条。写入全部走 `documents.commit` / `commitBatch`，一次应用一次提交；草稿按交界 id 保存，修订号变化时清空并重建。
+
+验证：`verify-08.ts` 的真实 store 提交段验证了应用叠化后可撤销的单批命令结果；`vue-tsc` 对该插件无报错。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 插件 ID `core.transition-panel` | 同左（README 指定；此前误用 `core.camera-transition` 已改名） | 以 README 的插件清单为准 |
+| 「编辑模型」打开 07 的曲线编辑器 | 已接入 `src/features/paths/CurveEditor.vue`（`value` / `change` 受控契约）：片段级与每个通道各有一个「编辑模型」，编辑结果只改草稿，随「应用参数过渡」一次提交 | 07 交付后按其 README 的接口约定接线，无遗留占位 |
+| 面板打开/聚焦走命令 | `LAYOUT_SERVICE.showPanel('document', { pluginId, panelId })` | 工作台没有专门的 focus-panel 命令入口，按布局服务既有能力实现 |
+
