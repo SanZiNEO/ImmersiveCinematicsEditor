@@ -223,12 +223,18 @@ function buildDocumentTree(shape: PresetShape, panels?: PanelSlotSource): Layout
   const center = slotGroup('document', 'document.center', shape, panels)
   const right = slotGroup('document', 'document.right', shape, panels)
   const bottom = slotGroup('document', 'document.bottom', shape, panels)
-  // 抽屉内容来自 drawerTab 注册表，布局里保持空 panels；默认关闭、高度 280。
-  const drawer = createGroup(DRAWER_GROUP_ID, [], {
-    visible: false,
-    collapsed: true,
-    lastSize: DEFAULT_DRAWER_HEIGHT,
-  })
+  // 抽屉内容有两个来源：`drawerTab` 注册表（DrawerGroup 负责补在前面）与布局树里的普通面板节点。
+  // 默认树按注册表把 `defaultSlot = document.drawer` 的面板放进抽屉组（07-05 的 `paths.collection`），
+  // 这样“默认停在抽屉”与“拖到任意合法 slot”都成立；抽屉默认关闭、高度 280。
+  const drawer = createGroup(
+    DRAWER_GROUP_ID,
+    resolveSlotPanels('document', DRAWER_GROUP_ID, panels).map((entry) => entry.node),
+    {
+      visible: false,
+      collapsed: true,
+      lastSize: DEFAULT_DRAWER_HEIGHT,
+    },
+  )
   const main = createSplit(
     'document.main',
     'horizontal',

@@ -12,6 +12,7 @@ import coreClipEffects from './core.clip-effects/manifest.ts'
 import coreSelectionProperties from './core.selection-properties/manifest.ts'
 import coreBehavior from './core.behavior/manifest.ts'
 import coreMeta from './core.meta/manifest.ts'
+import corePaths from './core.paths/manifest.ts'
 import demoExtra from './demo.extra/manifest.ts'
 import demoKitchenSink from './demo.kitchen-sink/manifest.ts'
 
@@ -24,6 +25,7 @@ export const BUILTIN_PLUGINS: PluginManifest[] = [
   coreSelectionProperties,
   coreBehavior,
   coreMeta,
+  corePaths,
   demoExtra,
   demoKitchenSink,
 ]
