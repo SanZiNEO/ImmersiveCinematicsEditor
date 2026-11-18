@@ -1,0 +1,16 @@
+{
+  "groups": [
+    {
+      "id": "position.xyz",
+      "name": "位置 XYZ",
+      "track": "CAMERA",
+      "members": ["position.x", "position.y", "position.z"]
+    },
+    {
+      "id": "orientation.ypr",
+      "name": "朝向 YPR",
+      "track": "CAMERA",
+      "members": ["yaw", "pitch", "roll"]
+    }
+  ]
+}
