@@ -84,6 +84,8 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
   private readonly onSaved: (() => void) | undefined
   private readonly listeners = new Set<(summary: DocumentSummary) => void>()
   private dirtyTimer: ReturnType<typeof setTimeout> | undefined = undefined
+  /** 批量提交串序号（08-02：每次批量用新串身份，保证一个撤销项且不与旧串合并）。 */
+  private batchSequence = 0
 
   constructor(options: DocumentServiceImplOptions) {
     this.diagnostics = options.diagnostics
@@ -151,6 +153,43 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
   /** 显式结束连续编辑串（失焦 / 回车 / 切换记录）。 */
   endCoalescing(): void {
     this.store.endCoalescing()
+  }
+
+  /**
+   * 批量提交（08-02 / 08-03）：同一操作的多条命令合成一个撤销项。
+   *
+   * 共用同一条合并串身份提交；任一命令失败时撤销整串（回到批前快照），不留半截写入。
+   */
+  commitBatch(commands: readonly DocCommand[], coalesceWith?: string): CommitOutcome {
+    if (commands.length === 0) {
+      return { ok: true, warnings: [] }
+    }
+    this.batchSequence += 1
+    const key = coalesceWith ?? `batch#${this.batchSequence}`
+    const warnings: string[] = []
+    for (const command of commands) {
+      const result: CommitResult = this.store.commit(command, key)
+      if (!result.ok) {
+        if (this.store.canUndo()) {
+          this.store.undo()
+        }
+        this.store.endCoalescing()
+        this.diagnostics.report({
+          severity: 'warning',
+          source: 'document',
+          message: '批量文档命令被拒绝（整批已回滚）',
+          detail: result.error ?? '',
+        })
+        return {
+          ok: false,
+          warnings: [],
+          ...(result.error === undefined ? {} : { error: result.error }),
+        }
+      }
+      warnings.push(...result.warnings)
+    }
+    this.store.endCoalescing()
+    return { ok: true, warnings }
   }
 
   /** 写片段级仅内存态（06-06）：进撤销栈、不写盘、不推送。 */
@@ -361,6 +400,7 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
           ? rawClip.loop_count
           : undefined
         const infinite = duration < 0 || (loop && (loopCount ?? -1) < 0)
+        const loopMode = typeof rawClip.loop_mode === 'string' ? rawClip.loop_mode : undefined
         const id = typeof rawClip.id === 'string' ? rawClip.id : undefined
         const label = readClipLabel(rawClip, id)
         const references = id === undefined ? 0 : referenceCounts.get(id) ?? 0
@@ -371,6 +411,7 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
           duration,
           loop,
           ...(loopCount === undefined ? {} : { loopCount }),
+          ...(loopMode === undefined ? {} : { loopMode }),
           infinite,
           label,
           references,
@@ -578,6 +619,10 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
     }
   }
 
+  localIssues(): DocIssue[] {
+    return [...this.store.derived.localIssues]
+  }
+
   serialize(): string {
     const doc = this.store.doc
     if (doc === null) {
@@ -596,6 +641,10 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
       return
     }
     await this.transport.seek(Math.max(0, time))
+  }
+
+  previewConnected(): boolean {
+    return this.store.transport.connected
   }
 
   async revert(): Promise<OpenOutcome> {

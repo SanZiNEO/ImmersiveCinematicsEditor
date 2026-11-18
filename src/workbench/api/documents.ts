@@ -73,6 +73,12 @@ export interface DocumentCommands {
    * 连续提交只产生一个撤销项（撤销一次回到该串开始之前）。省略 = 每次独立撤销项。
    */
   commit(command: DocCommand, coalesceWith?: string): CommitOutcome
+  /**
+   * 批量提交（08-02 / 08-03）：同一操作的多条命令合成**一个**撤销项。
+   *
+   * 全部成功才返回 `ok`；任一命令失败时整批回滚（撤销回批前状态），不留半截写入。
+   */
+  commitBatch(commands: readonly DocCommand[], coalesceWith?: string): CommitOutcome
   undo(): boolean
   redo(): boolean
   /** 显式结束当前连续编辑串（失焦 / 回车 / 切换记录）。 */
@@ -139,6 +145,8 @@ export interface ClipViewEntry {
   duration: number
   loop: boolean
   loopCount?: number
+  /** 片段内循环模式（`repeat` / `pingpong`）；字段缺失为 `undefined`，不补默认值。 */
+  loopMode?: string
   infinite: boolean
   /** 显示名：`clip.label` / `clip.name` / `clip.id` / `未命名片段`。 */
   label: string
@@ -233,12 +241,20 @@ export interface DocumentService {
   save(): Promise<SaveOutcome>
   /** 立即跑一次 `script.validate`（除 400ms 防抖外的显式入口）。 */
   validate(): Promise<ValidateOutcome>
-  /** 当前文档的序列化文本（内存中派生，不写盘、不烘焙）。 */
+  /** 当前本地结构检查结果（不发服务端请求；回放检查的第一道门用）。 */
+  localIssues(): DocIssue[]
+  /**
+   * 当前文档的序列化文本（内存中派生，不写盘、不烘焙）。
+   *
+   * 回放检查推送时用它；无文档返回空串。
+   */
   serialize(): string
   /** 立即推送当前脚本（`editor.pushScript`）；ack 只表示「已发出」。 */
   pushPreview(): Promise<{ ok: boolean; reason?: string }>
   /** 让游戏把预览跳到指定时间。 */
   seekPreview(time: number): Promise<void>
+  /** 预览通道是否连通（宿主 WS 连接状态）。 */
+  previewConnected(): boolean
   /** 从磁盘重载（外壳必须先做二次确认）。 */
   revert(): Promise<OpenOutcome>
   close(): void
