@@ -233,6 +233,12 @@ export interface DocumentService {
   save(): Promise<SaveOutcome>
   /** 立即跑一次 `script.validate`（除 400ms 防抖外的显式入口）。 */
   validate(): Promise<ValidateOutcome>
+  /** 当前文档的序列化文本（内存中派生，不写盘、不烘焙）。 */
+  serialize(): string
+  /** 立即推送当前脚本（`editor.pushScript`）；ack 只表示「已发出」。 */
+  pushPreview(): Promise<{ ok: boolean; reason?: string }>
+  /** 让游戏把预览跳到指定时间。 */
+  seekPreview(time: number): Promise<void>
   /** 从磁盘重载（外壳必须先做二次确认）。 */
   revert(): Promise<OpenOutcome>
   close(): void

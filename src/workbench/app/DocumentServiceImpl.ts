@@ -8,6 +8,7 @@
  */
 import type { CatalogIndex } from '../../core/schema/index.ts'
 import { DocIo } from '../../core/doc/io.ts'
+import { serializeDoc } from '../../core/doc/serialize.ts'
 import type { DocTransport, OpenResult, SaveResult } from '../../core/doc/io.ts'
 import { collectClipReferences, liveClipKeys } from '../../core/doc/identity.ts'
 import type { ClipRegistry } from '../../core/doc/identity.ts'
@@ -78,6 +79,7 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
   readonly bridge: ValidationBridge
 
   private readonly diagnostics: DiagnosticSink
+  private readonly transport: DocTransport & ValidationTransport
   private readonly onDirty: ((payload: string, revision: number) => void) | undefined
   private readonly onSaved: (() => void) | undefined
   private readonly listeners = new Set<(summary: DocumentSummary) => void>()
@@ -85,6 +87,7 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
 
   constructor(options: DocumentServiceImplOptions) {
     this.diagnostics = options.diagnostics
+    this.transport = options.transport
     this.onDirty = options.onDirty
     this.onSaved = options.onSaved
     const keys = metaKeys(options.catalog)
@@ -573,6 +576,26 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
       issues,
       stale: this.store.derived.serverIssuesStale,
     }
+  }
+
+  serialize(): string {
+    const doc = this.store.doc
+    if (doc === null) {
+      return ''
+    }
+    return JSON.stringify(serializeDoc(doc))
+  }
+
+  async pushPreview(): Promise<{ ok: boolean; reason?: string }> {
+    const result = await this.io.push()
+    return result.ok ? { ok: true } : { ok: false, ...(result.reason === undefined ? {} : { reason: result.reason }) }
+  }
+
+  async seekPreview(time: number): Promise<void> {
+    if (!Number.isFinite(time)) {
+      return
+    }
+    await this.transport.seek(Math.max(0, time))
   }
 
   async revert(): Promise<OpenOutcome> {

@@ -405,7 +405,7 @@ export function runAuthoringChecks(check: SliceCheck): void {
   // ── 位置行装饰器：base 标签 / 过滤 / 不读取原因 ────────────────────────────
   {
     const { store, doc, clipKey, objects } = openStore(catalog, baseObjects)
-    const rows = propertyRowsFor({ clipKey, trackType: 'CAMERA', objects, catalog, panel: 'properties' })
+    const rows = propertyRowsFor({ clipKey, trackType: 'CAMERA', objects, catalog })
     const baseRows = { ...objects, position_space: { value: 'base' } }
     const decorated = decoratePositionRows(rows, { trackType: 'CAMERA', objects: baseRows, catalog })
     const byPath = Object.fromEntries(decorated.rows.map((row) => [row.path, row]))
@@ -476,7 +476,7 @@ export function runAuthoringChecks(check: SliceCheck): void {
     check('角度不归一化：720 原样', manualAngle(null, 0, 720) === 720)
     check('角度不归一化：-540 原样', manualAngle(null, 0, -540) === -540)
 
-    const orientedRows = propertyRowsFor({ clipKey: 'cam1', trackType: 'CAMERA', objects: baseObjects, catalog, panel: 'properties' })
+    const orientedRows = propertyRowsFor({ clipKey: 'cam1', trackType: 'CAMERA', objects: baseObjects, catalog })
     const decorated = decorateOrientationRows(orientedRows, { trackType: 'CAMERA', objects: { orient: { value: 'tangent' } }, catalog, flags: { hasTangent: false } })
     const yawRow = decorated.rows.find((row) => row.path === 'yaw')
     check('tangent 无切线：角度行标注回退说明', yawRow?.unavailableReason?.includes('切线缺失') === true, yawRow?.unavailableReason)
@@ -486,7 +486,7 @@ export function runAuthoringChecks(check: SliceCheck): void {
 
   // ── motion_* 不误入作者组合面板 ────────────────────────────────────────────
   {
-    const rows = propertyRowsFor({ clipKey: 'cam1', trackType: 'CAMERA', objects: baseObjects, catalog, panel: 'properties' })
+    const rows = propertyRowsFor({ clipKey: 'cam1', trackType: 'CAMERA', objects: baseObjects, catalog })
     const motionRows = rows.filter((row) => row.path.startsWith('motion_'))
     check('motion_* 不进效果面板', motionRows.every((row) => row.def === undefined || panelOf(row.def) === 'properties'), rowPaths(rows))
     const orientRow = rows.find((row) => row.path === 'orient')
