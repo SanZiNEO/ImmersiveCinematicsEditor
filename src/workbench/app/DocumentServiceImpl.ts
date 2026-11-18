@@ -16,7 +16,7 @@ import { metaKeys } from '../../core/doc/keys.ts'
 import { DocStore } from '../../core/doc/store.ts'
 import type { CommitResult } from '../../core/doc/store.ts'
 import type { DocCommand } from '../../core/doc/commands.ts'
-import type { DocIssue, JsonObject, Selection } from '../../core/doc/types.ts'
+import type { AuthoringState, DocIssue, JsonObject, Selection } from '../../core/doc/types.ts'
 import { ValidationBridge } from '../../core/doc/validate.ts'
 import type { ValidationTransport } from '../../core/doc/validate.ts'
 import type {
@@ -128,8 +128,8 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
     return this.store.canRedo()
   }
 
-  commit(command: DocCommand): CommitOutcome {
-    const result: CommitResult = this.store.commit(command)
+  commit(command: DocCommand, coalesceWith?: string): CommitOutcome {
+    const result: CommitResult = this.store.commit(command, coalesceWith)
     if (!result.ok) {
       this.diagnostics.report({
         severity: 'warning',
@@ -143,6 +143,34 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
       warnings: result.warnings,
       ...(result.error === undefined ? {} : { error: result.error }),
     }
+  }
+
+  /** 显式结束连续编辑串（失焦 / 回车 / 切换记录）。 */
+  endCoalescing(): void {
+    this.store.endCoalescing()
+  }
+
+  /** 写片段级仅内存态（06-06）：进撤销栈、不写盘、不推送。 */
+  commitClipAuthoring(clipKey: string, mutate: (state: AuthoringState) => void): CommitOutcome {
+    const result: CommitResult = this.store.commitClipAuthoring(clipKey, mutate)
+    if (!result.ok) {
+      this.diagnostics.report({
+        severity: 'warning',
+        source: 'document',
+        message: '作者态写入被拒绝',
+        detail: result.error ?? '',
+      })
+    }
+    return {
+      ok: result.ok,
+      warnings: result.warnings,
+      ...(result.error === undefined ? {} : { error: result.error }),
+    }
+  }
+
+  /** 读片段级仅内存态（副本）。 */
+  clipAuthoringOf(clipKey: string): AuthoringState {
+    return this.store.clipAuthoringOf(clipKey)
   }
 
   undo(): boolean {

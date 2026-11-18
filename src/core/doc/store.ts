@@ -52,7 +52,15 @@ interface DocSnapshot {
 }
 
 /** 变更事件（订阅者用于调度预览推送 / script.validate）。 */
-export type StoreEvent = 'open' | 'commit' | 'undo' | 'redo' | 'reset' | 'external'
+export type StoreEvent =
+  | 'open'
+  | 'commit'
+  | 'undo'
+  | 'redo'
+  | 'reset'
+  | 'external'
+  /** 仅内存态变化（06-06 作者态缓动）：不推送、不触发服务端校验，但刷新面板与撤销。 */
+  | 'authoring'
 
 export interface DocStoreOptions {
   catalog: CatalogIndex
@@ -60,6 +68,15 @@ export interface DocStoreOptions {
   metaKeys: readonly string[]
   /** 撤销上限（默认 200，沿用旧编辑器值）。 */
   snapshotLimit?: number
+  /**
+   * 连续编辑合并窗口（毫秒，默认 400）。
+   *
+   * 同一 `coalesceWith` 身份在此窗口内连续提交时只保留一个撤销项；
+   * 判据取自成熟文本编辑器做法（窗口 + 串身份 + 打断条件），见 06-05。
+   */
+  coalesceWindowMs?: number
+  /** 时钟（测试注入）。 */
+  now?: () => number
   /** 提交 / 撤销 / 重做 / 打开后的通知（防抖推送、服务端校验由调用方接）。 */
   onEvent?: (event: StoreEvent, store: DocStore) => void
 }
@@ -90,11 +107,18 @@ export class DocStore {
   private dirtyFlag = false
   /** 文档修订号：commit / undo / redo / open 后递增（04-05 `PanelContext.docRevision`）。 */
   private revisionCounter = 0
+  /** 连续编辑合并：当前串身份 / 上次提交时刻 / 窗口毫秒。 */
+  private coalesceKey: string | null = null
+  private coalesceAt = 0
+  private readonly coalesceWindowMs: number
+  private readonly now: () => number
 
   constructor(options: DocStoreOptions) {
     this.catalog = options.catalog
     this.metaKeys = options.metaKeys
     this.snapshotLimit = options.snapshotLimit ?? 200
+    this.coalesceWindowMs = options.coalesceWindowMs ?? 400
+    this.now = options.now ?? (() => Date.now())
     if (options.onEvent !== undefined) {
       this.listeners.add(options.onEvent)
     }
@@ -137,6 +161,7 @@ export class DocStore {
     this.session.previewRange = null
     this.session.loopRange = null
     this.revisionCounter += 1
+    this.breakCoalescing()
     this.resetHistory()
     this.recomputeDerived()
     this.emit('open')
@@ -173,6 +198,7 @@ export class DocStore {
     this.undoStack = []
     this.redoStack = []
     this.dirtyFlag = false
+    this.breakCoalescing()
     this.revisionCounter += 1
     this.emit('reset')
   }
@@ -204,6 +230,7 @@ export class DocStore {
     const previousSelection = this.session.selection
     this.session.selection = repairSelection(doc, this.registry, previousSelection)
     this.syncSelectionState(previousSelection)
+    this.breakCoalescing()
     this.revisionCounter += 1
     if (options.markClean === true) {
       this.dirtyFlag = false
@@ -231,8 +258,14 @@ export class DocStore {
     })
   }
 
-  /** 唯一的写入口：命令对象 + 快照 + 回滚 + 结构不变式。 */
-  commit(command: DocCommand): CommitResult {
+  /**
+   * 唯一的写入口：命令对象 + 快照 + 回滚 + 结构不变式。
+   *
+   * 撤销合并（06-05：连续改同一节点多次只产生一个撤销项）：由 `coalesceWith` 声明本命令
+   * 属于哪一串连续编辑；同一串在 `coalesceWindowMs` 内连续提交时**不推新快照**，
+   * 因此撤销一次回到该串开始之前。窗口外、串身份变化、撤销/重做/打开都会打断合并。
+   */
+  commit(command: DocCommand, coalesceWith?: string): CommitResult {
     const doc = this.current
     if (doc === null) {
       return { ok: false, error: '没有打开的文档', warnings: [] }
@@ -255,7 +288,19 @@ export class DocStore {
     }
 
     this.registry.sync(doc)
-    this.pushUndo(snapshot)
+    const now = this.now()
+    const canCoalesce = coalesceWith !== undefined
+      && this.coalesceKey === coalesceWith
+      && now - this.coalesceAt <= this.coalesceWindowMs
+      && this.undoStack.length > 0
+    if (canCoalesce) {
+      // 栈顶快照已代表这串编辑开始之前的状态；只刷新窗口，不推新快照。
+      this.coalesceAt = now
+    } else {
+      this.pushUndo(snapshot)
+      this.coalesceKey = coalesceWith ?? null
+      this.coalesceAt = now
+    }
     this.redoStack = []
     this.dirtyFlag = true
     const previousSelection = this.session.selection
@@ -265,6 +310,52 @@ export class DocStore {
     this.recomputeDerived()
     this.emit('commit')
     return { ok: true, warnings: result.warnings }
+  }
+
+  /**
+   * 写片段级仅内存态（06-06 作者态缓动）：进撤销栈、不写盘、不进预览推送。
+   *
+   * `mutate` 在片段作者态副本上就地修改；抛错则整次回滚且不进撤销栈。
+   * 文档关闭后这些状态随快照一起丢弃（`close` 清空）。
+   */
+  commitClipAuthoring(clipKey: string, mutate: (state: AuthoringState) => void): CommitResult {
+    const doc = this.current
+    if (doc === null) {
+      return { ok: false, error: '没有打开的文档', warnings: [] }
+    }
+    if (this.registry.handle(clipKey) === undefined) {
+      return { ok: false, error: `片段不存在: ${clipKey}`, warnings: [] }
+    }
+    const snapshot = snapshotOf(doc, this.registry)
+    try {
+      const current = doc.clipAuthoring[clipKey]
+      const draft: AuthoringState = current === undefined ? {} : structuredClone(current)
+      mutate(draft)
+      doc.clipAuthoring[clipKey] = draft
+    } catch (error) {
+      this.restore(snapshot)
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        warnings: [],
+      }
+    }
+    this.pushUndo(snapshot)
+    this.redoStack = []
+    this.breakCoalescing()
+    this.revisionCounter += 1
+    this.emit('authoring')
+    return { ok: true, warnings: [] }
+  }
+
+  /** 读片段级仅内存态（副本；没有返回 `{}`）。 */
+  clipAuthoringOf(clipKey: string): AuthoringState {
+    const doc = this.current
+    if (doc === null) {
+      return {}
+    }
+    const state = doc.clipAuthoring[clipKey]
+    return state === undefined ? {} : structuredClone(state)
   }
 
   /** 撤销：快照恢复，只作用 doc；选择按 03-03 修复。 */
@@ -278,6 +369,7 @@ export class DocStore {
     this.redoStack.push(snapshotOf(doc, this.registry))
     this.restore(snapshot)
     this.syncSelectionState(previousSelection)
+    this.breakCoalescing()
     this.revisionCounter += 1
     this.dirtyFlag = true
     this.recomputeDerived()
@@ -296,6 +388,7 @@ export class DocStore {
     this.undoStack.push(snapshotOf(doc, this.registry))
     this.restore(snapshot)
     this.syncSelectionState(previousSelection)
+    this.breakCoalescing()
     this.revisionCounter += 1
     this.dirtyFlag = true
     this.recomputeDerived()
@@ -308,7 +401,26 @@ export class DocStore {
     this.undoStack = []
     this.redoStack = []
     this.dirtyFlag = false
+    this.breakCoalescing()
     this.emit('reset')
+  }
+
+  /**
+   * 打断连续编辑合并（06-05）：撤销 / 重做 / 打开 / 关闭 / 外部同步后，
+   * 下一串编辑必须重新获得自己的撤销项。
+   */
+  private breakCoalescing(): void {
+    this.coalesceKey = null
+    this.coalesceAt = 0
+  }
+
+  /**
+   * 显式结束当前合并串（失焦、回车、切换记录等 UI 事件调用）。
+   *
+   * 与 `breakCoalescing` 同义；单独命名是因为 UI 侧语义是"结束一次连续输入"。
+   */
+  endCoalescing(): void {
+    this.breakCoalescing()
   }
 
   canUndo(): boolean {

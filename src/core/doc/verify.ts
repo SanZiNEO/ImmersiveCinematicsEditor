@@ -686,6 +686,57 @@ async function main(): Promise<void> {
     check('03-05 带 undefined 的 authoring 可提交', committed.ok, committed)
     check('03-05 undo 恢复 authoring', store.undo() && Object.prototype.hasOwnProperty.call(store.doc!.authoring, 'undefinedField'))
   }
+  // ── 5b. 06-05 连续编辑合并（同一串只产生一个撤销项） ─────────────────────
+  {
+    const { doc } = makeDoc(objectsDemoRaw, index)
+    let clock = 1000
+    const store = new DocStore({
+      catalog: index,
+      metaKeys: keys,
+      coalesceWindowMs: 400,
+      now: () => clock,
+    })
+    store.open(doc, 'objects-demo.json')
+    const handle = store.registry.handles()[0]
+    store.commit({ kind: 'object.addKeyframe', clipKey: handle.key, path: 'yaw', time: 1, value: 0 })
+    const baseline = store.undoDepth()
+    const before = JSON.stringify(serializeDoc(store.doc as ScriptDoc))
+
+    // 窗口内同一串：3 次改同一节点值只产生 1 个撤销项。
+    for (const value of [10, 20, 30]) {
+      clock += 100
+      const result = store.commit(
+        { kind: 'object.setKeyframeValue', clipKey: handle.key, path: 'yaw', time: 1, value },
+        `yaw@1`,
+      )
+      check(`06-05 同串第 ${value} 次提交成功`, result.ok, result)
+    }
+    check('06-05 窗口内同串只加 1 个撤销项', store.undoDepth() === baseline + 1, store.undoDepth())
+    const yaw = (store.registry.handles()[0].clip.objects as JsonObject).yaw as JsonObject
+    const frames = yaw.keyframes as JsonValue[]
+    check('06-05 同串编辑后值是最后一次输入', isJsonObject(frames[0]) && frames[0].value === 30, frames[0])
+
+    // 撤销一次回到该串开始之前（值仍是 0），不是回到上一次输入。
+    check('06-05 撤销一次回到串开始前', store.undo())
+    check('06-05 撤销后文档等于串开始前', JSON.stringify(serializeDoc(store.doc as ScriptDoc)) === before)
+    check('06-05 撤销后撤销栈回到基线', store.undoDepth() === baseline, store.undoDepth())
+
+    // 窗口外：新串必须有自己的撤销项。
+    store.redo()
+    clock += 1000
+    store.commit({ kind: 'object.setKeyframeValue', clipKey: handle.key, path: 'yaw', time: 1, value: 40 }, 'yaw@1')
+    check('06-05 窗口外另起一个撤销项', store.undoDepth() === baseline + 2, store.undoDepth())
+
+    // 串身份变化：立刻打断合并。
+    store.commit({ kind: 'object.setKeyframeValue', clipKey: handle.key, path: 'yaw', time: 1, value: 50 }, 'yaw@2')
+    check('06-05 串身份变化另起一个撤销项', store.undoDepth() === baseline + 3, store.undoDepth())
+
+    // 撤销本身打断合并：撤销后再提交必须新开一个串。
+    store.undo()
+    clock += 100
+    store.commit({ kind: 'object.setKeyframeValue', clipKey: handle.key, path: 'yaw', time: 1, value: 60 }, 'yaw@2')
+    check('06-05 撤销后重新开串', store.undoDepth() === baseline + 3, store.undoDepth())
+  }
   {
     const sources = await readdir(DOC_DIR)
     let offender = ''

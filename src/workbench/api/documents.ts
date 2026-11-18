@@ -5,7 +5,7 @@
  * 校验只走 `ValidationBridge`。本文件只声明面板与外壳可用的只读/写端口。
  */
 import type { DocCommand } from '../../core/doc/commands.ts'
-import type { DocIssue, JsonObject, Selection } from '../../core/doc/types.ts'
+import type { DocIssue, JsonObject, Selection, AuthoringState } from '../../core/doc/types.ts'
 import type { GraphRequirement } from '../../core/graph/types.ts'
 
 /** `commit` 结果（透传 03 `CommitResult`）。 */
@@ -66,9 +66,26 @@ export interface DocumentCommands {
   readonly dirty: boolean
   readonly canUndo: boolean
   readonly canRedo: boolean
-  commit(command: DocCommand): CommitOutcome
+  /**
+   * 提交一条文档命令。
+   *
+   * `coalesceWith`（06-05）：声明本命令属于哪一串连续编辑；同一串在合并窗口内
+   * 连续提交只产生一个撤销项（撤销一次回到该串开始之前）。省略 = 每次独立撤销项。
+   */
+  commit(command: DocCommand, coalesceWith?: string): CommitOutcome
   undo(): boolean
   redo(): boolean
+  /** 显式结束当前连续编辑串（失焦 / 回车 / 切换记录）。 */
+  endCoalescing(): void
+  /**
+   * 写片段级仅内存态（06-06 作者态缓动）。
+   *
+   * 进撤销栈、不写盘、不进预览推送；`mutate` 在片段作者态副本上就地修改，
+   * 抛错则整次回滚且不进撤销栈。
+   */
+  commitClipAuthoring(clipKey: string, mutate: (state: AuthoringState) => void): CommitOutcome
+  /** 读片段级仅内存态（副本；没有返回 `{}`）。 */
+  clipAuthoringOf(clipKey: string): AuthoringState
   /** 单主选区；宿主不替面板改选区，只接受请求。 */
   select(selection: Selection): void
   /** 批选：`clipKeys` 为多选集合；空数组 = 清空。 */

@@ -101,6 +101,47 @@ export type DocCommand =
   | { kind: 'object.addKeyframe'; clipKey: string; path: string; time: number; value: JsonValue }
   | { kind: 'object.removeKeyframe'; clipKey: string; path: string; time: number }
   | { kind: 'object.moveKeyframe'; clipKey: string; path: string; from: number; to: number }
+  /** 开启动画（06-03）：在给定时间建首帧；初值取显式值 → 同属性最近节点 → 静态值 → 目录默认。 */
+  | {
+    kind: 'object.enableAnimation'
+    clipKey: string
+    path: string
+    time: number
+    /** 显式初值；缺省时按回退链取值。 */
+    value?: JsonValue
+  }
+  /** 关闭动画（06-02 / 06-05）：删该叶子全部帧，保留确定的值；事件叶子拒绝。 */
+  | { kind: 'object.disableAnimation'; clipKey: string; path: string }
+  /** 改某个已存在节点的值（06-05）：不动时间、不动其他节点、不动插值。 */
+  | { kind: 'object.setKeyframeValue'; clipKey: string; path: string; time: number; value: JsonValue }
+  /** 批量移动（06-05）：跨属性共用同一偏移，任一冲突整次拒绝。 */
+  | {
+    kind: 'object.moveKeyframes'
+    clipKey: string
+    moves: Array<{ path: string; from: number; to: number }>
+  }
+  /** 批量删除（06-05）：跨属性原子提交；删空事件行拒绝。 */
+  | { kind: 'object.removeKeyframes'; clipKey: string; targets: Array<{ path: string; time: number }> }
+  /** 粘贴节点（06-05）：按锚点 + 偏移插入；合并模式同刻冲突整次拒绝，替换模式先清空再插入。 */
+  | {
+    kind: 'object.pasteKeyframes'
+    clipKey: string
+    path: string
+    mode: 'merge' | 'replace'
+    /** 剪贴板记录的类型；给了就做类型匹配校验。 */
+    type?: string
+    anchor: number
+    points: Array<{ offset: number; value: JsonValue }>
+  }
+  /** 烘焙（06-06）：把作者态采样结果落成普通节点；起止节点保留，中间插入采样点。 */
+  | {
+    kind: 'object.bakeEasing'
+    clipKey: string
+    path: string
+    fromTime: number
+    toTime: number
+    points: Array<{ time: number; value: JsonValue }>
+  }
   | { kind: 'object.remove'; clipKey: string; path: string }
   | { kind: 'path.remove'; pathId: string }
   | { kind: 'binding.remove'; bindingId: string }
@@ -431,6 +472,110 @@ function assertKeyframesWritable(
   if (def !== undefined && def.mode === 'event' && keyframes.length === 0) {
     throw new CommandError(`${path}: mode=event 必须有 keyframes`)
   }
+}
+
+/** 关键帧时间容差（秒）：与 03 编辑器内部查找同一口径（`object.ts` 的 `KEYFRAME_EPSILON`）。 */
+const FRAME_EPSILON = 1e-6
+
+/** 找到与 `time` 匹配的关键帧下标；未命中返回 `-1`。 */
+function frameIndexAt(frames: readonly ObjectKeyframe[], time: number): number {
+  let best = -1
+  let bestDelta = Number.POSITIVE_INFINITY
+  for (let index = 0; index < frames.length; index += 1) {
+    const delta = Math.abs(frames[index].time - time)
+    if (delta <= FRAME_EPSILON && delta < bestDelta) {
+      best = index
+      bestDelta = delta
+    }
+  }
+  return best
+}
+
+/** 读属性对象的当前值（只认 `value` 键；缺失返回 `undefined`）。 */
+function valueOfProperty(property: JsonObject): JsonValue | undefined {
+  return Object.prototype.hasOwnProperty.call(property, 'value') ? property.value : undefined
+}
+
+/**
+ * 开启动画的初值回退链（06-03 §三）：同属性最近节点 → 当前静态值 → 目录默认值。
+ *
+ * 三者都没有 → 抛错，由调用方提示"先输入静态值"。
+ */
+function animationSeed(
+  def: FieldEntry | undefined,
+  path: string,
+  object: AnimObjectShape,
+  staticValue: JsonValue | undefined,
+  time: number,
+): JsonValue {
+  const frames = object.keyframes ?? []
+  if (frames.length > 0) {
+    let nearest = frames[0]
+    let bestDelta = Math.abs(nearest.time - time)
+    for (const frame of frames) {
+      const delta = Math.abs(frame.time - time)
+      if (delta < bestDelta) {
+        nearest = frame
+        bestDelta = delta
+      }
+    }
+    return cloneJson(nearest.value)
+  }
+  if (staticValue !== undefined) {
+    return cloneJson(staticValue)
+  }
+  if (def !== undefined && def.hasDefault && def.default !== null) {
+    return cloneJson(def.default as JsonValue)
+  }
+  throw new CommandError(`${path}: 没有可用的初值（无节点、无静态值、目录无默认值），请先输入静态值`)
+}
+
+/** 关闭动画后的静态值（06-02 §三）：最后一个节点的值 → 原静态值 → 目录默认值。 */
+function closingStaticValue(
+  def: FieldEntry | undefined,
+  path: string,
+  object: AnimObjectShape,
+  staticValue: JsonValue | undefined,
+): JsonValue {
+  const frames = object.keyframes ?? []
+  if (frames.length > 0) {
+    return cloneJson(frames[frames.length - 1].value)
+  }
+  if (staticValue !== undefined) {
+    return cloneJson(staticValue)
+  }
+  if (def !== undefined && def.hasDefault && def.default !== null) {
+    return cloneJson(def.default as JsonValue)
+  }
+  throw new CommandError(`${path}: 关闭动画后没有可保留的值（无节点、无静态值、目录无默认值）`)
+}
+
+/** 读已存在的属性对象（不创建）；缺失时按空对象处理，由后续命令抛"不存在"。 */
+function existingProperty(clip: JsonObject, path: string): JsonObject {
+  const objects = clip.objects
+  if (!isJsonObject(objects)) {
+    return {}
+  }
+  const existing = objects[path]
+  return isJsonObject(existing) ? existing : {}
+}
+
+/** 读 / 建属性对象并返回其编辑视图；路径未登记时按调用方要求拒绝。 */
+function propertyForWrite(
+  ctx: ApplyContext,
+  handle: ClipHandle,
+  path: string,
+): { property: JsonObject; object: AnimObjectShape; def: FieldEntry | undefined } {
+  if (!isValidObjectPath(path)) {
+    throw new CommandError(`非法属性路径: ${path}`)
+  }
+  readShape(ctx, handle)
+  const def = objectDefOf(ctx, handle, path)
+  if (def === undefined && ctx.catalog.track(handle.trackType) !== undefined) {
+    throw new CommandError(`未登记的对象路径: ${path}（轨道 ${handle.trackType}）`)
+  }
+  const property = propertyOf(handle.clip, path)
+  return { property, object: animObjectOf(property), def }
 }
 
 /** 删除数组元素（从后往前调用，避免索引漂移）。 */
@@ -1249,6 +1394,173 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
       const object = animObjectOf(property)
       object.keyframes = moveKeyframe(object.keyframes ?? [], command.from, command.to)
       writeProperty(handle.clip, command.path, object)
+      return { warnings }
+    }
+    case 'object.enableAnimation': {
+      const handle = requireHandle(ctx, command.clipKey)
+      const { property, object, def } = propertyForWrite(ctx, handle, command.path)
+      assertKeyframesAllowed(def, command.path)
+      const existing = object.keyframes ?? []
+      if (frameIndexAt(existing, command.time) >= 0) {
+        throw new CommandError(`${command.path}: t=${command.time} 已有关键帧（同属性时间必须严格递增）`)
+      }
+      const seed = command.value === undefined
+        ? animationSeed(def, command.path, object, valueOfProperty(property), command.time)
+        : cloneJson(command.value)
+      assertValueWritable(def, `${command.path}.keyframes`, seed, def?.type === 'nullable_float')
+      object.keyframes = insertKeyframe(existing, command.time, seed)
+      writeProperty(handle.clip, command.path, object)
+      return { warnings }
+    }
+    case 'object.disableAnimation': {
+      const handle = requireHandle(ctx, command.clipKey)
+      if (!isValidObjectPath(command.path)) {
+        throw new CommandError(`非法属性路径: ${command.path}`)
+      }
+      readShape(ctx, handle)
+      const def = objectDefOf(ctx, handle, command.path)
+      if (def !== undefined && def.mode === 'event') {
+        throw new CommandError(`${command.path}: 事件叶子不能关闭动画（记录必须非空）`)
+      }
+      const objects = handle.clip.objects
+      if (!isJsonObject(objects) || !Object.prototype.hasOwnProperty.call(objects, command.path)) {
+        throw new CommandError(`属性不存在: ${command.path}`)
+      }
+      const property = propertyOf(handle.clip, command.path)
+      const object = animObjectOf(property)
+      const staticValue = valueOfProperty(property)
+      const keep = closingStaticValue(def, command.path, object, staticValue)
+      writeProperty(handle.clip, command.path, { value: keep, keyframes: [] })
+      return { warnings }
+    }
+    case 'object.setKeyframeValue': {
+      const handle = requireHandle(ctx, command.clipKey)
+      const { object, def } = propertyForWrite(ctx, handle, command.path)
+      assertValueWritable(def, `${command.path}.keyframes`, command.value, def?.type === 'nullable_float')
+      const frames = object.keyframes ?? []
+      const index = frameIndexAt(frames, command.time)
+      if (index < 0) {
+        throw new CommandError(`${command.path}: 关键帧不存在 t=${command.time}`)
+      }
+      object.keyframes = frames.map((frame, current) =>
+        current === index ? { time: frame.time, value: cloneJson(command.value) } : frame)
+      writeProperty(handle.clip, command.path, object)
+      return { warnings }
+    }
+    case 'object.moveKeyframes': {
+      const handle = requireHandle(ctx, command.clipKey)
+      if (command.moves.length === 0) {
+        return { warnings }
+      }
+      readShape(ctx, handle)
+      // 先在内存副本上全部试算；任一冲突整次拒绝，不写文档。
+      const drafts = new Map<string, { def: FieldEntry | undefined; frames: ObjectKeyframe[] }>()
+      for (const move of command.moves) {
+        if (!isValidObjectPath(move.path)) {
+          throw new CommandError(`非法属性路径: ${move.path}`)
+        }
+        const def = objectDefOf(ctx, handle, move.path)
+        if (def === undefined && ctx.catalog.track(handle.trackType) !== undefined) {
+          throw new CommandError(`未登记的对象路径: ${move.path}（轨道 ${handle.trackType}）`)
+        }
+        if (!isFiniteNumber(move.to) || move.to < 0) {
+          throw new CommandError(`${move.path}: 目标时间必须是非负有限数字（收到 ${String(move.to)}）`)
+        }
+        const current = drafts.get(move.path)
+          ?? { def, frames: animObjectOf(existingProperty(handle.clip, move.path)).keyframes ?? [] }
+        drafts.set(move.path, { def: current.def, frames: moveKeyframe(current.frames, move.from, move.to) })
+      }
+      for (const [path, draft] of drafts) {
+        assertKeyframesWritable(draft.def, path, draft.frames)
+      }
+      for (const [path, draft] of drafts) {
+        const object = animObjectOf(existingProperty(handle.clip, path))
+        writeProperty(handle.clip, path, { ...object, keyframes: draft.frames })
+      }
+      return { warnings }
+    }
+    case 'object.removeKeyframes': {
+      const handle = requireHandle(ctx, command.clipKey)
+      if (command.targets.length === 0) {
+        return { warnings }
+      }
+      readShape(ctx, handle)
+      const drafts = new Map<string, { def: FieldEntry | undefined; frames: ObjectKeyframe[] }>()
+      for (const target of command.targets) {
+        if (!isValidObjectPath(target.path)) {
+          throw new CommandError(`非法属性路径: ${target.path}`)
+        }
+        const endpoints = handle.id === undefined
+          ? []
+          : pathEndpointsAtTime(ctx.doc, handle.id, target.time)
+        if (endpoints.length > 0) {
+          throw new CommandError(
+            `该时间是路径端点（${endpoints.join('、')}），删除会断开引用；请先重绑或删除路径`,
+          )
+        }
+        const def = objectDefOf(ctx, handle, target.path)
+        const current = drafts.get(target.path)
+          ?? { def, frames: animObjectOf(existingProperty(handle.clip, target.path)).keyframes ?? [] }
+        drafts.set(target.path, { def: current.def, frames: removeKeyframe(current.frames, target.time) })
+      }
+      for (const [path, draft] of drafts) {
+        if (draft.def !== undefined && draft.def.mode === 'event' && draft.frames.length === 0) {
+          throw new CommandError(`${path}: mode=event 必须有 keyframes（不能删除最后一帧）`)
+        }
+        assertKeyframesWritable(draft.def, path, draft.frames)
+      }
+      for (const [path, draft] of drafts) {
+        const object = animObjectOf(existingProperty(handle.clip, path))
+        writeProperty(handle.clip, path, { ...object, keyframes: draft.frames })
+      }
+      return { warnings }
+    }
+    case 'object.pasteKeyframes': {
+      const handle = requireHandle(ctx, command.clipKey)
+      const { object, def } = propertyForWrite(ctx, handle, command.path)
+      assertKeyframesAllowed(def, command.path)
+      if (def !== undefined && command.type !== undefined && def.type !== command.type) {
+        throw new CommandError(`${command.path}: 类型不匹配（目标 ${def.type}，剪贴板 ${command.type}）`)
+      }
+      if (!isFiniteNumber(command.anchor)) {
+        throw new CommandError('粘贴锚点必须是有限数字')
+      }
+      let frames = command.mode === 'replace' ? [] : (object.keyframes ?? [])
+      for (const point of command.points) {
+        const time = command.anchor + point.offset
+        if (!isFiniteNumber(time) || time < 0) {
+          throw new CommandError(`粘贴时间非法: ${String(time)}（必须非负有限数字）`)
+        }
+        assertValueWritable(def, `${command.path}.keyframes`, point.value, def?.type === 'nullable_float')
+        frames = insertKeyframe(frames, time, point.value)
+      }
+      writeProperty(handle.clip, command.path, { ...object, keyframes: frames })
+      return { warnings }
+    }
+    case 'object.bakeEasing': {
+      const handle = requireHandle(ctx, command.clipKey)
+      const { object, def } = propertyForWrite(ctx, handle, command.path)
+      if (def !== undefined && def.mode === 'event') {
+        throw new CommandError(`${command.path}: 事件行没有段缓动`)
+      }
+      if (!(command.toTime > command.fromTime)) {
+        throw new CommandError(`烘焙区间非法: ${command.fromTime} → ${command.toTime}`)
+      }
+      const existing = object.keyframes ?? []
+      // 保留区间外的节点；区间内的起止节点由采样点自带（`points` 必须含起止）。
+      let frames = existing.filter((frame) => frame.time < command.fromTime || frame.time > command.toTime)
+      for (const point of command.points) {
+        if (!isFiniteNumber(point.time) || point.time < 0) {
+          throw new CommandError(`烘焙采样时间非法: ${String(point.time)}`)
+        }
+        assertValueWritable(def, `${command.path}.keyframes`, point.value, def?.type === 'nullable_float')
+        if (frameIndexAt(frames, point.time) >= 0) {
+          throw new CommandError(`${command.path}: 烘焙采样与既有节点同刻 t=${point.time}`)
+        }
+        frames = insertKeyframe(frames, point.time, point.value)
+      }
+      assertKeyframesWritable(def, command.path, frames)
+      writeProperty(handle.clip, command.path, { ...object, keyframes: frames })
       return { warnings }
     }
     case 'object.remove': {
