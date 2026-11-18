@@ -42,6 +42,7 @@ import {
   PANEL_REGISTRY,
   PREFERENCES_SERVICE,
   PREVIEW_SERVICE,
+  RESOURCE_SERVICE,
   SCRIPT_MUTATION_SERVICE,
   SELECTION_SERVICE,
   SETTINGS_REGISTRY,
@@ -78,6 +79,7 @@ import { createHost } from '../host/createHost.ts'
 import { WebUiClient } from '../host/webui/WebUiClient.ts'
 import { WebUiTransport } from '../host/webui/WebUiTransport.ts'
 import { DocumentServiceImpl } from './DocumentServiceImpl.ts'
+import { ResourceServiceImpl } from './ResourceServiceImpl.ts'
 import { SelectionServiceImpl } from './SelectionServiceImpl.ts'
 import { StatusServiceImpl } from './StatusServiceImpl.ts'
 import { DialogStackImpl } from './DialogStackImpl.ts'
@@ -163,6 +165,8 @@ export class WorkbenchApp {
   readonly plugins: PluginRegistry
   readonly transport: WebUiTransport | null
   readonly client: WebUiClient | null
+  /** 10 轮：资源列举 / registry 查询。 */
+  readonly resources: ResourceServiceImpl
   /** 脚本来源：直接读写工作区（不经模组）。 */
   readonly scriptSource: WorkspaceScriptSource
   /** 文档传输：文件走工作区，预览/播放走模组。 */
@@ -251,6 +255,7 @@ export class WorkbenchApp {
     const client = new WebUiClient({ token: () => token })
     this.client = client
     this.transport = new WebUiTransport({ client })
+    this.resources = new ResourceServiceImpl({ client })
     // 脚本读写直接走工作区（`<gameDir>/immersive_cinematics/scripts`），不经模组：
     // 一次目录扫描 + mtime 增量，10 万脚本也不必等 N 次往返。
     const scriptSource = new WorkspaceScriptSource({ workspace: this.host.workspace })
@@ -428,6 +433,7 @@ export class WorkbenchApp {
     this.serviceRegistry.provide(DOCUMENT_COMMANDS, this.documents)
     this.serviceRegistry.provide(SELECTION_SERVICE, this.selection)
     this.serviceRegistry.provide(CATALOG_SERVICE, this.catalog)
+    this.serviceRegistry.provide(RESOURCE_SERVICE, this.resources)
     this.serviceRegistry.provide(GRAPH_SERVICE, this.graph)
     this.serviceRegistry.provide(GRAPH_LAYOUT_SERVICE, this.graphLayout)
     this.serviceRegistry.provide(SCRIPT_MUTATION_SERVICE, this.mutations)

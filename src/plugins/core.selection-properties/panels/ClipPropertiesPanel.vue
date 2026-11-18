@@ -10,11 +10,17 @@
  *
  * 所有写入走 `ctx.commands.commit`；行集合每次按文档修订号重算，不缓存文档对象。
  */
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
+import type { Component } from 'vue'
 import type { DocCommand } from '../../../core/doc/commands.ts'
 import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 import { isJsonObject } from '../../../core/doc/json.ts'
 import type { ClipSelectionState } from '../../../workbench/api/context.ts'
+import {
+  displayGroupFor,
+  hiddenRowsFor,
+  panelBannerFor,
+} from '../../../workbench/api/fieldSurface.ts'
 import {
   clipTimingOf,
   findClipContext,
@@ -173,11 +179,53 @@ const rows = computed<PropertyRow[]>(() => {
     catalog,
     flags: {},
   })
-  const hiddenSet = new Set(positionDecored.hidden)
+  // 10 轮：合并行（矩阵 / 六段 / 曲线定义）只在承载行显示；贡献自行判断是否静态。
+  const hidden = hiddenRowsFor(found.trackType, currentObjects)
+  const hiddenSet = new Set([...hidden, ...positionDecored.hidden])
   return orientationDecored.rows.filter((row) => !hiddenSet.has(row.path))
 })
 
-const allGroups = computed<EffectGroup[]>(() => buildGroups(rows.value, timing.value))
+/**
+ * 10 轮显示分组：把字段面的组键/标签套到行上，再由 `buildGroups` 真正合并。
+ * 只改显示归属，不改行里的值、帧与命令；没有贡献时原样返回。
+ */
+const rowsForDisplayGroups = computed<PropertyRow[]>(() => {
+  const found = clipContext.value
+  if (found === null) return rows.value
+  return rows.value.map((row) => {
+    const group = displayGroupFor(found.trackType, row.path)
+    if (group === null || (row.groupKey === group.key && row.groupLabel === group.label)) {
+      return row
+    }
+    return { ...row, groupKey: group.key, groupLabel: group.label }
+  })
+})
+
+const allGroups = computed<EffectGroup[]>(() => buildGroups(rowsForDisplayGroups.value, timing.value))
+/** 10 轮显示分组顺序（缺省保持首次出现顺序）。 */
+const displayGroupOrder = computed<Map<string, number>>(() => {
+  const order = new Map<string, number>()
+  const found = clipContext.value
+  if (found === null) return order
+  for (const row of rows.value) {
+    const group = displayGroupFor(found.trackType, row.path)
+    if (group !== null && !order.has(group.key)) order.set(group.key, group.order)
+  }
+  return order
+})
+const orderedGroups = computed<EffectGroup[]>(() => {
+  const order = displayGroupOrder.value
+  if (order.size === 0) return allGroups.value
+  return [...allGroups.value].sort((left, right) => {
+    const leftOrder = order.get(left.key)
+    const rightOrder = order.get(right.key)
+    if (leftOrder === undefined && rightOrder === undefined) return left.order - right.order
+    if (leftOrder === undefined) return 1
+    if (rightOrder === undefined) return -1
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder
+    return left.order - right.order
+  })
+})
 /**
  * 属性面板显示**全部适用行**（含已有关键帧的），不做 leaf 过滤。
  *
@@ -185,7 +233,17 @@ const allGroups = computed<EffectGroup[]>(() => buildGroups(rows.value, timing.v
  * 「精细化的多属性对照与曲线」。同一个对象在两边都能看到，但操作粒度不同。
  * `partitionGroups` 只用来算「有多少项同时也在效果面板」，供组头提示，不用于过滤行。
  */
-const propertyGroups = computed<EffectGroup[]>(() => allGroups.value)
+const propertyGroups = computed<EffectGroup[]>(() => orderedGroups.value)
+/** 07 位置/朝向控制条只在确有位置组或朝向组的轨道显示；AUDIO/ADJUST 不显示。 */
+const hasPositionBars = computed(() => propertyGroups.value.some(
+  (group) => group.key === 'position' || group.key === 'orientation',
+))
+/** 07-09：六个 `motion_*` 模型通道只属于 CAMERA；AUDIO/ADJUST 不显示模型区。 */
+const hasMotionModels = computed(() => {
+  const found = clipContext.value
+  if (found === null || catalog === undefined) return false
+  return catalog.objectDef(found.trackType, 'motion_position') !== undefined
+})
 const partition = computed(() => partitionGroups(allGroups.value, 'leaf', timing.value))
 const effectGroups = computed(() => partition.value.effectGroups)
 
@@ -267,6 +325,18 @@ watch(
     collapsed.value = new Set(saved.collapsed)
     focusedPath.value = null
     void nextTick(() => {
+      // 10-05：CAMERA / ADJUST 首次选中时只展开“基础校色”，其余组折叠；
+      // 这是会话默认，不写文档，之后用户的展开/折叠选择覆盖它。
+      if (saved.initialized !== true) {
+        saved.initialized = true
+        const trackType = clipContext.value?.trackType
+        if ((trackType === 'CAMERA' || trackType === 'ADJUST') && collapsed.value.size === 0) {
+          const keys = orderedGroups.value.map((group) => group.key)
+          if (keys.length > 1) {
+            collapsed.value = new Set(keys.slice(1))
+          }
+        }
+      }
       if (scrollRef.value !== null) {
         scrollRef.value.scrollTop = saved.scrollTop
         scrollTop.value = saved.scrollTop
@@ -798,6 +868,15 @@ function runUndo(): void {
 
 const hasGroups = computed(() => filteredGroups.value.length > 0)
 const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum + group.rows.length, 0))
+
+/** 10 轮面板横幅（音频约束 / 调色层覆盖提示）；没有贡献就是 null。 */
+const bannerComponent = computed<Component | null>(() => {
+  const found = clipContext.value
+  if (found === null) return null
+  const banner = panelBannerFor(found.trackType)
+  if (banner === null) return null
+  return defineAsyncComponent(banner.component as () => Promise<Component>)
+})
 </script>
 
 <template>
@@ -819,6 +898,12 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
             @toggle-only-unset="onlyUnset = !onlyUnset"
             @collapse-all="collapseAll"
             @clear="clearFilters"
+          />
+
+          <component
+            :is="bannerComponent"
+            v-if="bannerComponent !== null"
+            :clip-key="clipKey"
           />
 
           <!-- 07-05 §四：节点编辑打断路径时的「阻止 + 处理选项」 -->

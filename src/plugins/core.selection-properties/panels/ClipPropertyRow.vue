@@ -11,7 +11,8 @@
  *
  * 所有写入走 `ctx.commands.commit`（值控件与时钟内部完成），本组件只组合与显示。
  */
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
+import type { Component } from 'vue'
 import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 import { eventDefinition, readRecordBody, seedRecordBody } from '../../../features/effects/eventRecords.ts'
 import { effectiveStaticValue, isRequiredMissing } from '../../../features/effects/rows.ts'
@@ -20,6 +21,7 @@ import type { EffectDiagnostic, PropertyRow } from '../../../features/effects/ty
 import { rangeHint, unitSuffix } from '../../../features/effects/valueControls.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
 import { customFieldFor, customFieldsRevision } from '../../../features/effects/customFields.ts'
+import { fieldSurfaceFor, hideWhenFramed } from '../../../workbench/api/fieldSurface.ts'
 import { DOCUMENT_SERVICE } from '../../../workbench/api/tokens.ts'
 import PropertyValueForm from '../../../features/effects/panels/PropertyValueForm.vue'
 import AnimationClock from './AnimationClock.vue'
@@ -66,6 +68,16 @@ const rowObjects = computed<JsonObject>(() => {
   if (props.objects !== undefined) return props.objects
   return documentService?.clipObjects(props.row.clipKey) ?? {}
 })
+/** 10 轮：只有注册过的 trackType + path 才替换默认值控件。 */
+const fieldSurface = computed(() => {
+  if (trackType.value === '') return null
+  return fieldSurfaceFor(trackType.value, props.row.path)
+})
+const fieldSurfaceComponent = computed<Component | null>(() => {
+  const surface = fieldSurface.value
+  if (surface === null || surface.component === undefined) return null
+  return defineAsyncComponent(surface.component as () => Promise<Component>)
+})
 /**
  * 09 用户裁决：属性面板保留全部 OVERLAY / LETTERBOX 行；有帧行的值控件改为
  * “在效果面板编辑”指路，不再重复提供值控件。
@@ -73,7 +85,11 @@ const rowObjects = computed<JsonObject>(() => {
 const framedInEffects = computed(() => {
   if (props.row.keyframes.length === 0) return false
   const panel = props.panel ?? 'properties'
-  return panel === 'properties' && (trackType.value === 'OVERLAY' || trackType.value === 'LETTERBOX')
+  if (panel === 'properties' && (trackType.value === 'OVERLAY' || trackType.value === 'LETTERBOX')) {
+    return true
+  }
+  if (trackType.value === '') return false
+  return hideWhenFramed(trackType.value, props.row.path)
 })
 const error = ref('')
 const notice = ref('')
@@ -281,6 +297,15 @@ function onFailed(payload: { clipKey: string; path: string; message: string }): 
             :objects="rowObjects"
             :timing="timing"
             :playhead="playhead"
+            :disabled="blocked || unavailable !== undefined"
+          />
+          <component
+            :is="fieldSurfaceComponent"
+            v-else-if="fieldSurfaceComponent !== null"
+            :row="row"
+            :objects="rowObjects"
+            :playhead="playhead"
+            :timing="timing"
             :disabled="blocked || unavailable !== undefined"
           />
           <PropertyValueForm

@@ -5,10 +5,12 @@
  * 按目录 `type` 分派控件：bool 开关、enum 下拉、int/float/number 数字、string 文本。
  * 写入走 `meta.set`；失败保留原值并显示命令层给的原因。
  */
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
+import type { Component } from 'vue'
 import type { JsonValue } from '../../../core/doc/types.ts'
 import { checkValue } from '../../../core/doc/value.ts'
 import type { FieldEntry } from '../../../core/schema/types.ts'
+import { metaFieldSurfaceFor } from '../../../workbench/api/fieldSurface.ts'
 
 const props = defineProps<{
   field: FieldEntry
@@ -40,6 +42,13 @@ const numberValue = computed(() =>
   (typeof current.value === 'number' && Number.isFinite(current.value) ? String(current.value) : ''))
 
 const enumValues = computed<string[]>(() => props.field.enumValues ?? [])
+
+/** 10 轮 meta 字段面（当前仅 listener 专用卡）；没有贡献时走通用控件。 */
+const customSurface = computed<Component | null>(() => {
+  const surface = metaFieldSurfaceFor(props.field.key)
+  if (surface === null) return null
+  return defineAsyncComponent(surface.component as () => Promise<Component>)
+})
 
 function submit(next: JsonValue): void {
   const check = checkValue(props.field, next)
@@ -88,6 +97,14 @@ void draft
     </label>
 
     <div class="meta-row__control">
+      <component
+        :is="customSurface"
+        v-if="customSurface !== null"
+        :field="field"
+        :value="current"
+        @commit="emit('commit', $event)"
+      />
+      <template v-else>
       <input
         v-if="isBool"
         type="checkbox"
@@ -125,6 +142,7 @@ void draft
         :aria-label="field.key"
         @change="onText"
       >
+      </template>
     </div>
 
     <p v-if="error !== ''" class="meta-row__error" role="alert">{{ error }}</p>

@@ -357,4 +357,6 @@ export interface PropertiesPanelSession {
   search: string
   onlyUnset: boolean
   scrollTop: number
+  /** 10 轮按片段首次装载时应用默认折叠；用户之后的选择原样保留。 */
+  initialized?: boolean
 }
