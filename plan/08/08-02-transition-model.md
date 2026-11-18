@@ -1,6 +1,6 @@
 # 叠化与参数过渡模型
 
-> 状态：未实现
+> 状态：已实现
 > 范围：A→B 片段交界上的两类操作——画面叠化（crossfade）与相机六参数过渡（morph），以及二者共存时的执行顺序
 > 关联：08-03 转场面板、08-04 lane 视图、08-08 回放检查、模组 `plans/0.3.6/D-transition` 与 `F-playback`
 
@@ -141,10 +141,13 @@ B 在 `(0, D)` 内原有的不透明度帧在应用时替换为 0/1 两端，区
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-尚未开工；交界派生、叠化落盘规则、参数过渡窗口与共存判定按上述设计执行，无实现偏差可记。
+实现落在 `src/features/camera/transition/model.ts`：交界按轨道数组顺序取相邻对派生（不按开始时间重排）；叠化识别（重叠、A 不透明度恒 1、B 两端帧 0→1、两段有限、全屏、B 遮罩 full、非片段内循环）；叠化落盘为 `clip.setStart` + `object.setKeyframes`（`mergeCrossfadeFrames` 保留区间外帧、插入 0→1 两端帧）；移除叠化；参数过渡六通道视图（`readChannelDeclarations` 读 `transition_params.value` 内的 `mode/duration/curve`，缺省取片段级 `transition_duration`）；窗口 `buildWindow`（整宽 = 非 cut 通道最大有效时长，以交界为中心前后各半）；共存与遮蔽判定。
+
+验证：`verify-08.ts` 覆盖交界 2 条、叠化识别与重叠 0.5s、窗口 0.5s 居中于 3.25–3.75、`cut` 仍给六通道、时长 0 无窗口、提交后 B 前移到 `A.end - D` 且 opacity 两端帧 0→1、区间外帧保留。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| — | 无实现偏差 | — |
+
