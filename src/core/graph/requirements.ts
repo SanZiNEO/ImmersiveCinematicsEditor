@@ -1,10 +1,12 @@
 /**
  * 触发器 / 前置条目的纯函数：身份、解析、指纹、定位。
  *
- * 事实基准（02-05 / 05-01）：
- * - `requires` 元素是字符串或 `{type, data}`；
- * - 字符串等价于 `{type:"script_played", data:{script:"<id>"}}`；
- * - 内置三种只读 `data.script`；自定义类型只读保留。
+ * 磁盘事实基准（`ScriptParser.java:1031-1046`、`ScriptValidator.java:2072,2511-2526`）：
+ * - `requires` 元素是字符串或扁平对象 `{type, script, ...其它键}`；
+ * - 字符串等价于 `{type:"script_played", script:"<id>"}`；
+ * - 视图模型里的 `data` 只是「除 `type` 外键的浅拷贝」；磁盘上 `script` 在条目顶层；
+ * - 老版本嵌套写法 `{type, data:{script}}` 读侧容忍降级（取不到时回退 custom/不可解析，不崩），
+ *   写侧一律落扁平形状，不回写嵌套 `data`。
  */
 import { isJsonObject } from '../doc/json.ts'
 import type { JsonObject, JsonValue } from '../doc/types.ts'
@@ -55,6 +57,28 @@ export function requiresArrayOf(trigger: JsonObject): JsonValue[] {
   return Array.isArray(trigger.requires) ? trigger.requires : []
 }
 
+/** 视图 data：除 `type` 外的顶层键浅拷贝；老嵌套 `data` 并入（扁平键优先）。 */
+function viewData(entry: JsonObject): Record<string, JsonValue> {
+  const data: Record<string, JsonValue> = {}
+  for (const [key, value] of Object.entries(entry)) {
+    if (key !== 'type' && key !== 'data') data[key] = value
+  }
+  if (isJsonObject(entry.data)) {
+    for (const [key, value] of Object.entries(entry.data)) {
+      if (!(key in data)) data[key] = value
+    }
+  }
+  return data
+}
+
+/** 取条目目标脚本 id：顶层 `script` 优先，老嵌套 `data.script` 降级回退。 */
+function readEntryScript(entry: JsonObject): string | undefined {
+  const top = readString(entry.script)
+  if (top !== undefined) return top
+  if (isJsonObject(entry.data)) return readString(entry.data.script)
+  return undefined
+}
+
 /** 解析一条前置条目；不做目标解析（resolved/editable 由索引填）。 */
 export function parseRequirement(entry: JsonValue, index: number): GraphRequirement {
   if (typeof entry === 'string') {
@@ -69,9 +93,9 @@ export function parseRequirement(entry: JsonValue, index: number): GraphRequirem
   }
   if (isJsonObject(entry)) {
     const type = typeof entry.type === 'string' ? entry.type : ''
-    const data = isJsonObject(entry.data) ? cloneObject(entry.data) : {}
+    const data = viewData(entry)
     if (isBuiltinRequirementType(type)) {
-      const scriptId = readString(data.script)
+      const scriptId = readEntryScript(entry)
       return {
         index,
         type,
@@ -100,15 +124,6 @@ export function parseRequirement(entry: JsonValue, index: number): GraphRequirem
   }
 }
 
-/** 浅拷贝 JSON 对象（前置 data 原样透传用）。 */
-function cloneObject(value: JsonObject): Record<string, JsonValue> {
-  const copy: Record<string, JsonValue> = {}
-  for (const [key, entry] of Object.entries(value)) {
-    copy[key] = entry
-  }
-  return copy
-}
-
 /** 一条前置的目标脚本 id（仅内置）。 */
 export function requirementScriptId(entry: JsonValue): string | undefined {
   if (typeof entry === 'string') {
@@ -117,7 +132,7 @@ export function requirementScriptId(entry: JsonValue): string | undefined {
   if (!isJsonObject(entry) || !isBuiltinRequirementType(typeof entry.type === 'string' ? entry.type : '')) {
     return undefined
   }
-  return isJsonObject(entry.data) ? readString(entry.data.script) : undefined
+  return readEntryScript(entry)
 }
 
 /** 稳定 JSON 表示：对象键排序、字符串原样、数字按 JSON 表示。 */
@@ -181,7 +196,10 @@ export function findTriggerIndex(
   return -1
 }
 
-/** 写入一条内置前置（保留原条目形状）。 */
+/**
+ * 写入一条内置前置（扁平磁盘形状 `{type, script, ...其它键}`）。
+ * 保留条目上既存的顶层额外键（自定义前置参数原样留在顶层）；老嵌套 `data` 里的额外键并入顶层。
+ */
 export function writeRequirement(
   entry: JsonValue | undefined,
   type: BuiltinRequirementType,
@@ -190,16 +208,25 @@ export function writeRequirement(
   if (typeof entry === 'string' && type === 'script_played') {
     return targetScriptId
   }
-  const data: Record<string, JsonValue> = isJsonObject(entry) && isJsonObject(entry.data)
-    ? cloneObject(entry.data)
-    : {}
-  data.script = targetScriptId
-  return { type, data }
+  const out: Record<string, JsonValue> = {}
+  if (isJsonObject(entry)) {
+    for (const [key, value] of Object.entries(entry)) {
+      if (key !== 'type' && key !== 'data' && key !== 'script') out[key] = value
+    }
+    if (isJsonObject(entry.data)) {
+      for (const [key, value] of Object.entries(entry.data)) {
+        if (!(key in out)) out[key] = value
+      }
+    }
+  }
+  out.type = type
+  out.script = targetScriptId
+  return out
 }
 
-/** 追加一条内置前置（对象写法）。 */
+/** 追加一条内置前置（扁平对象写法，无嵌套 `data` 键）。 */
 export function newRequirement(type: BuiltinRequirementType, targetScriptId: string): JsonValue {
-  return { type, data: { script: targetScriptId } }
+  return { type, script: targetScriptId }
 }
 
 /** 内置类型列表（UI 下拉用）。 */

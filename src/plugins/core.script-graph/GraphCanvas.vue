@@ -451,11 +451,6 @@ function escapeGraph(): void {
   }
 }
 
-function closeCard(): void {
-  controller.closeDetail()
-  controller.clearHover()
-}
-
 function canvasPoint(event: { clientX: number; clientY: number }): { x: number; y: number } {
   const rect = viewportEl.value?.getBoundingClientRect()
   return rect === undefined
@@ -1057,11 +1052,9 @@ onBeforeUnmount(() => {
         :node="hoverSource"
         :pinned="hoverPinned"
         :focus-trigger="hoverPinned ? state.detail?.triggerIdentity ?? null : null"
-        :focus-requirement="hoverPinned ? state.detail?.requirementIndex ?? null : null"
         :left="hoverPlacement.left"
         :top="hoverPlacement.top"
         :max-height="hoverPlacement.maxHeight"
-        @close="closeCard"
       />
     </div>
 

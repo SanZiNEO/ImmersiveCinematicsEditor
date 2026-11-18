@@ -27,10 +27,16 @@ import {
   FILE_DIALOG_PORT,
   GRAPH_LAYOUT_SERVICE,
   GRAPH_SERVICE,
+  HOST_SERVICE,
   PAGE_ROUTER,
   SCRIPT_MUTATION_SERVICE,
   SHELL_ACTIONS_SERVICE,
 } from '../../workbench/api/tokens.ts'
+import type { RequirementContext } from '../../features/behavior/requirements.ts'
+import { requestFocus } from '../../features/behavior/focus.ts'
+import { isJsonObject } from '../../core/doc/json.ts'
+import { buildHoverSummary, type HoverSummaryOutcome } from './hoverSummary.ts'
+import { HoverScriptCache } from './hoverScriptCache.ts'
 import {
   clampScale,
   computeGraphLayout,
@@ -303,6 +309,8 @@ export class GraphController {
     collapsed: () => this.state.collapsed,
     onError: (message) => this.reportLayoutError(message),
   })
+  /** 悬停卡脚本摘要缓存：按「路径 + stamp」复用；图失效时整表丢弃。 */
+  private readonly hoverCache = new HoverScriptCache()
 
   // ---------- 派生数据 ----------
 
@@ -778,6 +786,8 @@ export class GraphController {
     this.state.stale = true
     this.state.lastInvalidation = event.kind
     this.state.connected = this.service?.connected() ?? false
+    // 图失效对应脚本内容可能已变：悬停卡摘要缓存整表丢弃，下次悬停回源重读。
+    this.hoverCache.clear()
     if (!this.mountedFlag) {
       return
     }
@@ -1197,6 +1207,99 @@ export class GraphController {
 
   closeDetail(): void {
     this.state.detail = null
+  }
+
+  // ---------- 悬停卡只读摘要 ----------
+
+  /** 前置解析上下文：从当前图快照收集自脚本 id / 已知 id / 重复 id。 */
+  private requirementContext(node: GraphNode): RequirementContext {
+    const knownScriptIds: string[] = []
+    const counts = new Map<string, number>()
+    for (const candidate of this.graph.value?.nodes ?? []) {
+      const id = candidate.scriptId
+      if (typeof id === 'string' && id !== '') {
+        knownScriptIds.push(id)
+        counts.set(id, (counts.get(id) ?? 0) + 1)
+      }
+    }
+    const ambiguousScriptIds = [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([id]) => id)
+    return {
+      selfScriptId: node.scriptId === undefined || node.scriptId === null ? undefined : node.scriptId,
+      knownScriptIds,
+      ambiguousScriptIds,
+    }
+  }
+
+  /**
+   * 读取并构建悬停卡摘要（11-02）。
+   *
+   * 缓存键 = 路径 + stamp；读取 / 解析失败返回 `ok: false`，卡片退回节点摘要，
+   * 不弹窗、不抛错。缓存只在图失效事件时整表清空。
+   */
+  async hoverSummaryFor(node: GraphNode): Promise<HoverSummaryOutcome> {
+    const host = this.services?.get(HOST_SERVICE)
+    if (host === undefined) {
+      return { ok: false, summary: null, reason: '宿主端口未接线（HOST_SERVICE）' }
+    }
+    let read: { text: string; stamp: string } | null
+    try {
+      read = await host.workspace.readScript(node.path)
+    } catch (error) {
+      return { ok: false, summary: null, reason: messageOf(error) }
+    }
+    if (read === null) {
+      return { ok: false, summary: null, reason: '脚本文件不存在或不可读' }
+    }
+    const cached = this.hoverCache.get(node.path, read.stamp)
+    if (cached !== undefined) {
+      return cached
+    }
+    let root: unknown
+    try {
+      root = JSON.parse(read.text)
+    } catch (error) {
+      const outcome: HoverSummaryOutcome = { ok: false, summary: null, reason: messageOf(error) }
+      this.hoverCache.set(node.path, read.stamp, outcome)
+      return outcome
+    }
+    if (!isJsonObject(root)) {
+      const outcome: HoverSummaryOutcome = { ok: false, summary: null, reason: '脚本根节点不是 JSON 对象' }
+      this.hoverCache.set(node.path, read.stamp, outcome)
+      return outcome
+    }
+    const summary = buildHoverSummary(root, this.requirementContext(node))
+    const outcome: HoverSummaryOutcome = { ok: true, summary, reason: null }
+    this.hoverCache.set(node.path, read.stamp, outcome)
+    return outcome
+  }
+
+  /**
+   * 「定位到触发器」：打开脚本 → 切文档页 → 经窄通道把触发器身份交给右栏行为面板。
+   *
+   * 通道语义（`features/behavior/focus.ts`）：只传记录身份、一次性消费、不写
+   * `state.selection`，不构成第二套编辑通路。不在图上写选区、不播放、不 seek；
+   * 目标身份在当前脚本对不上时明确提示，不伪造选中。
+   */
+  async locateTrigger(path: string, identity: string): Promise<void> {
+    await this.openScript(path)
+    const documents = this.services?.get(DOCUMENT_SERVICE)
+    if (documents === undefined || documents.summary().path !== path) {
+      this.notify('原目标已删除', 'warning')
+      return
+    }
+    const view = documents.view()
+    const exists = view?.triggers.some((trigger) => trigger.identity === identity) ?? false
+    if (!exists) {
+      this.notify('原目标已删除', 'warning')
+      return
+    }
+    requestFocus({
+      target: { kind: 'trigger', identity },
+      surface: 'right-panel',
+      origin: 'script-graph.hover',
+    })
   }
 
   // ---------- 打开 / 新建 / 复制 ----------

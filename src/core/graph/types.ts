@@ -2,8 +2,8 @@
  * 05-01 脚本关系图数据契约（编辑器侧唯一形状）。
  *
  * 事实基准：`requires` 是触发器自己的字段（`meta.triggers[i].requires[]`），
- * 前置对象写法为 `{type, data:{script}}`，字符串写法等价于 `script_played`。
- * 本模块只描述数据，不解析脚本；解析在 `index.ts`，布局在 `layout.ts`。
+ * 前置对象磁盘写法为扁平 `{type, script, ...其它键}`（`data` 仅为视图模型），
+ * 字符串写法等价于 `script_played`。本模块只描述数据，不解析脚本；解析在 `index.ts`，布局在 `layout.ts`。
  */
 import type { JsonValue } from '../doc/types.ts'
 

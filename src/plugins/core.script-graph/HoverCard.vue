@@ -1,343 +1,365 @@
 <script setup lang="ts">
 /**
- * 悬停 / 定位卡片（05-03）。
+ * 脚本节点悬停卡（11-02 升级为只读全量摘要）。
  *
- * 速览：名称与元信息、全部触发器、条件摘要（索引带条件时）、前置列表。
- * 唯一写操作是「换目标 / 删除 / 加前置」→ DependencyEditor；不改触发器本身。
+ * 卡片内容：全部触发器 + 每条完整条件树（任意深度组合器）+ 全部前置；
+ * 条件文案只复用 `describeTriggerCondition`（纯函数层唯一摘要生成处），
+ * 前置状态复用 `resolveRequirement`。卡片内选中只是临时态，不写 `state.selection`；
+ * 没有任何输入控件、没有编辑入口。读取失败退回节点摘要并提示条件暂不可用。
  */
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { GraphNode, GraphRequirement, GraphTrigger } from '../../core/graph/types.ts'
 import {
-  canEditRequirement,
   conditionSummary,
-  hasConditionData,
+  continuitySummary,
+  delayLabel,
   requirementStatusLabel,
   requirementStatusOf,
   requirementTargetLabel,
   requirementTypeLabel,
-  triggerMetaLine,
+  repeatableLabel,
+  triggerTypeLabel,
 } from './labels.ts'
+import {
+  HOVER_REQUIREMENT_STATUS_LABELS,
+  hoverRequirementStatusKind,
+  triggerMetaParts,
+  type HoverSummaryOutcome,
+  type HoverTriggerView,
+} from './hoverSummary.ts'
+import ConditionTreeView from './ConditionTreeView.vue'
 import { useGraphController } from './state.ts'
 
 const props = defineProps<{
   node: GraphNode
   pinned: boolean
-  focusTrigger: string | null
-  focusRequirement: number | null
   left: number
   top: number
   maxHeight: number
+  /** 诊断定位带来的触发器身份（仅用于卡片内临时预选，不写选区）。 */
+  focusTrigger?: string | null
 }>()
 
-const emit = defineEmits<{ close: [] }>()
-
 const controller = useGraphController()
-const focusedTriggerEl = ref<HTMLElement | null>(null)
 
-const degree = computed(() => controller.degrees.value.get(props.node.path) ?? { requirements: 0, dependents: 0 })
-const metaParts = computed(() => {
-  const parts: string[] = []
-  if (props.node.author !== '') {
-    parts.push(`作者 ${props.node.author}`)
-  }
-  if (props.node.dimension !== '') {
-    parts.push(`维度 ${props.node.dimension}`)
-  }
-  if (props.node.priority !== 0) {
-    parts.push(`优先级 ${props.node.priority}`)
-  }
-  return parts
-})
-const duration = computed(() => (props.node.infinite ? '无限' : `${props.node.duration.toFixed(1)}s`))
-const canAdd = computed(() => props.node.scriptId !== null && props.node.scriptId !== undefined && props.node.scriptId !== '')
+/** 读取结果；`null` 表示正在读取。 */
+const summary = ref<HoverSummaryOutcome | null>(null)
+/** 卡片内临时选中的触发器身份；离开卡片即失效，不落 `state.selection`。 */
+const selectedIdentity = ref<string | null>(null)
+/** 异步竞态序号：节点切换后旧响应不回写。 */
+let loadSeq = 0
 
-const triggerRows = computed(() => props.node.triggers.map((trigger) => ({
-  trigger,
-  meta: triggerMetaLine(trigger),
-  conditions: conditionSummary(trigger),
-  hasConditions: hasConditionData(trigger),
-  requirements: trigger.requirements.map((requirement) => ({
-    requirement,
-    status: requirementStatusLabel(requirementStatusOf(requirement)),
-    statusKind: requirementStatusOf(requirement),
-    target: requirementTargetLabel(requirement),
-    editable: canEditRequirement(requirement, props.node),
-  })),
-})))
+watch(
+  () => props.node.path,
+  () => {
+    void load()
+  },
+  { immediate: true },
+)
 
-function isFocusedTrigger(trigger: GraphTrigger): boolean {
-  return props.focusTrigger !== null && props.focusTrigger === trigger.identity
-}
-
-function isFocusedRequirement(trigger: GraphTrigger, requirement: GraphRequirement): boolean {
-  return isFocusedTrigger(trigger) && props.focusRequirement === requirement.index
-}
-
-function setTriggerRef(trigger: GraphTrigger, element: unknown): void {
-  if (!isFocusedTrigger(trigger)) {
+async function load(): Promise<void> {
+  const seq = ++loadSeq
+  selectedIdentity.value = props.focusTrigger ?? null
+  summary.value = null
+  const outcome = await controller.hoverSummaryFor(props.node)
+  if (seq !== loadSeq) {
     return
   }
-  focusedTriggerEl.value = element instanceof HTMLElement ? element : null
+  summary.value = outcome
+  if (outcome.ok && props.focusTrigger !== null) {
+    const hit = outcome.summary?.triggers.find((trigger) => trigger.identity === props.focusTrigger)
+    if (hit !== undefined) {
+      selectedIdentity.value = hit.identity
+    }
+  }
 }
 
-function editRequirement(trigger: GraphTrigger, requirement: GraphRequirement, intent: 'update' | 'delete'): void {
-  controller.openDependencyEditor(props.node.path, trigger.identity, requirement.index, intent)
+const fallbackTriggers = computed<GraphTrigger[]>(() => props.node.triggers)
+
+function toggleSelect(identity: string): void {
+  selectedIdentity.value = selectedIdentity.value === identity ? null : identity
 }
 
-function addRequirement(trigger: GraphTrigger): void {
-  controller.openDependencyEditor(props.node.path, trigger.identity, null)
+function isSelected(identity: string): boolean {
+  return selectedIdentity.value === identity
 }
 
-/** Enter 只在该触发器块本身聚焦时「加前置」；内部按钮的 Enter 交给按钮自己处理。 */
-function onTriggerEnter(event: KeyboardEvent, trigger: GraphTrigger): void {
-  const target = event.target
-  if (target instanceof HTMLElement && target !== event.currentTarget) {
+function statusLabel(status: HoverTriggerView['requirements'][number]['status']): string {
+  return HOVER_REQUIREMENT_STATUS_LABELS[status]
+}
+
+function badgeKind(status: HoverTriggerView['requirements'][number]['status']): string {
+  return hoverRequirementStatusKind(status)
+}
+
+function locate(): void {
+  if (selectedIdentity.value === null) {
     return
   }
-  event.preventDefault()
-  event.stopPropagation()
-  addRequirement(trigger)
+  void controller.locateTrigger(props.node.path, selectedIdentity.value)
 }
 
 function openScript(): void {
   void controller.openScript(props.node.path)
 }
 
-function copyPath(): void {
-  void controller.copyPath(props.node.path)
+// ── 读取失败时的节点摘要回退（图索引既有一层信息；条件区明示暂不可用）─────────────
+
+function fallbackCondition(trigger: GraphTrigger): string | null {
+  return conditionSummary(trigger)
 }
 
-onMounted(() => {
-  void nextTick(() => {
-    if (props.focusTrigger === null) {
-      return
-    }
-    focusedTriggerEl.value?.focus({ preventScroll: true })
-    focusedTriggerEl.value?.scrollIntoView({ block: 'nearest' })
-  })
-})
+function fallbackStatusLabel(requirement: GraphRequirement): string {
+  return requirementStatusLabel(requirementStatusOf(requirement))
+}
+
+function fallbackRequirementLabel(requirement: GraphRequirement): string {
+  return requirementTypeLabel(requirement.type)
+}
+
+function fallbackRequirementTarget(requirement: GraphRequirement): string {
+  return requirementTargetLabel(requirement)
+}
+
+function fallbackRepeatable(trigger: GraphTrigger): string {
+  return repeatableLabel(trigger)
+}
+
+function fallbackDelay(trigger: GraphTrigger): string | null {
+  return delayLabel(trigger)
+}
+
+function fallbackContinuity(trigger: GraphTrigger): string | null {
+  return continuitySummary(trigger)
+}
+
+function fallbackTypeLabel(trigger: GraphTrigger): string {
+  return triggerTypeLabel(trigger.type)
+}
 </script>
 
 <template>
-  <section
-    id="script-graph-hover-card"
+  <aside
     class="hover-card"
     :class="{ 'hover-card--pinned': pinned }"
-    role="tooltip"
     :style="{ left: `${left}px`, top: `${top}px`, maxHeight: `${maxHeight}px` }"
-    data-hover-card="true"
-    tabindex="-1"
-    @keydown.esc.stop.prevent="emit('close')"
-    @focusin="controller.hoverKeep()"
-    @pointerenter="controller.hoverKeep()"
-    @pointerleave="controller.hoverLeave()"
+    role="dialog"
+    :aria-label="`脚本 ${node.name} 的只读摘要`"
   >
     <header class="hover-card__head">
-      <h3 class="hover-card__title">{{ node.name }}</h3>
-      <span v-if="pinned" class="hover-card__pin">已定位</span>
-      <button type="button" class="hover-card__close" aria-label="关闭详情" @click="emit('close')">✕</button>
+      <div class="hover-card__title">{{ node.name }}</div>
+      <div class="hover-card__path" :title="node.path">{{ node.path }}</div>
     </header>
-    <p class="hover-card__path">{{ node.path }}</p>
-    <p class="hover-card__id">id={{ node.scriptId ?? '缺失' }}</p>
-    <p v-if="metaParts.length > 0" class="hover-card__meta">{{ metaParts.join(' · ') }}</p>
-    <p class="hover-card__meta">
-      时长：{{ duration }} · 前置 {{ degree.requirements }} 条 / 依赖方 {{ degree.dependents }} 个
-    </p>
-    <p v-if="!node.valid" class="hover-card__error">问题：{{ node.error ?? '脚本无效' }}</p>
 
-    <div class="hover-card__triggers">
-      <p class="hover-card__section">触发器（{{ node.triggers.length }}）</p>
-      <p v-if="node.triggers.length === 0" class="hover-card__empty">
-        该脚本没有触发器；本卡片不新建触发器。
-      </p>
+    <div class="hover-card__body">
+      <!-- 读取中 -->
+      <p v-if="summary === null" class="hover-card__note">读取中…</p>
 
-      <article
-        v-for="(row, index) in triggerRows"
-        :key="row.trigger.identity"
-        :ref="(element) => setTriggerRef(row.trigger, element)"
-        class="trigger-block"
-        :class="{ 'trigger-block--focused': isFocusedTrigger(row.trigger) }"
-        tabindex="0"
-        :aria-label="`触发器 ${row.trigger.type}（${row.trigger.identity}）展开加前置`"
-        @keydown.enter="onTriggerEnter($event, row.trigger)"
-      >
-        <header class="trigger-block__head">
-          <span class="trigger-block__type">{{ row.trigger.type }}</span>
-          <span class="trigger-block__meta">{{ row.meta }}</span>
-          <span class="trigger-block__index">#{{ index + 1 }}</span>
-        </header>
-        <p class="trigger-block__identity">identity={{ row.trigger.identity }}</p>
-        <p class="trigger-block__conditions" :class="{ 'trigger-block__conditions--missing': !row.hasConditions }">
-          {{ row.conditions ?? '条件摘要不可用（索引未提供 conditions）' }}
-        </p>
-
-        <p class="trigger-block__label">前置：</p>
-        <p v-if="row.requirements.length === 0" class="trigger-block__empty">无</p>
-        <ul v-else class="requirement-list">
-          <li
-            v-for="item in row.requirements"
-            :key="`${row.trigger.identity}-${item.requirement.index}`"
-            class="requirement-row"
-            :class="{ 'requirement-row--focused': isFocusedRequirement(row.trigger, item.requirement) }"
-          >
-            <span class="requirement-row__index">[{{ item.requirement.index }}]</span>
-            <span class="requirement-row__type">{{ requirementTypeLabel(item.requirement.type) }}</span>
-            <span class="requirement-row__arrow">→</span>
-            <span class="requirement-row__target" :title="item.target">{{ item.target }}</span>
-            <span class="requirement-row__status" :data-status="item.statusKind">{{ item.status }}</span>
-            <span v-if="item.editable" class="requirement-row__actions">
-              <button
-                type="button"
-                class="mini-button"
-                :aria-label="`替换第 ${item.requirement.index + 1} 条前置（${item.target}）`"
-                @click="editRequirement(row.trigger, item.requirement, 'update')"
-              >换目标</button>
-              <button
-                type="button"
-                class="mini-button mini-button--danger"
-                :aria-label="`删除第 ${item.requirement.index + 1} 条前置（${item.target}）`"
-                @click="editRequirement(row.trigger, item.requirement, 'delete')"
-              >删除</button>
+      <!-- 读取失败：退回节点摘要，条件区明示暂不可用（不弹窗、不空白） -->
+      <template v-else-if="!summary.ok">
+        <p class="hover-card__note hover-card__note--error">读取失败，条件暂不可用</p>
+        <section v-if="fallbackTriggers.length === 0" class="hover-card__empty">没有触发器。</section>
+        <section v-for="trigger in fallbackTriggers" :key="trigger.identity" class="hover-trigger hover-trigger--fallback">
+          <div class="hover-trigger__head">
+            <span class="hover-trigger__label">{{ fallbackTypeLabel(trigger) }}</span>
+            <span class="hover-trigger__identity">{{ trigger.identity }}</span>
+            <span class="hover-trigger__meta">
+              {{ fallbackRepeatable(trigger) }}<template v-if="fallbackDelay(trigger) !== null"> · {{ fallbackDelay(trigger) }}</template><template v-if="fallbackContinuity(trigger) !== null"> · {{ fallbackContinuity(trigger) }}</template>
             </span>
-          </li>
-        </ul>
-        <button
-          v-if="canAdd"
-          type="button"
-          class="trigger-block__add"
-          :aria-label="`为触发器 ${row.trigger.type} 加前置`"
-          @click="addRequirement(row.trigger)"
-        >+ 加前置</button>
-        <p v-else class="trigger-block__note">当前脚本没有 meta.id：先设置脚本 id 后才能加前置。</p>
-      </article>
+          </div>
+          <div class="hover-trigger__body">
+            <p v-if="fallbackCondition(trigger) !== null" class="hover-trigger__condition">{{ fallbackCondition(trigger) }}</p>
+            <ul v-if="trigger.requirements.length > 0" class="hover-reqs">
+              <li v-for="requirement in trigger.requirements" :key="requirement.index" class="hover-req">
+                <span class="hover-req__type">{{ fallbackRequirementLabel(requirement) }}</span>
+                <span class="hover-req__target">{{ fallbackRequirementTarget(requirement) }}</span>
+                <span class="hover-req__status">{{ fallbackStatusLabel(requirement) }}</span>
+              </li>
+            </ul>
+          </div>
+        </section>
+      </template>
+
+      <!-- 读取成功：全部触发器 + 完整条件树 + 全部前置 -->
+      <template v-else>
+        <section v-if="summary.summary!.triggers.length === 0" class="hover-card__empty">没有触发器。</section>
+        <section
+          v-for="view in summary.summary!.triggers"
+          :key="view.identity"
+          class="hover-trigger"
+          :class="{ 'hover-trigger--selected': isSelected(view.identity) }"
+        >
+          <button
+            type="button"
+            class="hover-trigger__head"
+            :aria-pressed="isSelected(view.identity)"
+            @click="toggleSelect(view.identity)"
+          >
+            <span class="hover-trigger__label">{{ view.label }}</span>
+            <span class="hover-trigger__identity">{{ view.identity }}</span>
+            <span class="hover-trigger__meta">{{ triggerMetaParts(view).join(' · ') }}</span>
+          </button>
+
+          <div class="hover-trigger__body">
+            <div class="hover-trigger__block">
+              <p class="hover-trigger__block-title">条件</p>
+              <ConditionTreeView v-if="view.conditionTree !== null" :node="view.conditionTree" />
+              <p v-else class="hover-card__note">无场景条件</p>
+            </div>
+
+            <div class="hover-trigger__block">
+              <p class="hover-trigger__block-title">前置</p>
+              <ul v-if="view.requirements.length > 0" class="hover-reqs">
+                <li v-for="requirement in view.requirements" :key="requirement.index" class="hover-req" :title="requirement.message">
+                  <span class="hover-req__type">{{ requirement.typeLabel }}</span>
+                  <span v-if="requirement.target !== undefined" class="hover-req__target">→ {{ requirement.target }}</span>
+                  <span class="hover-req__status" :class="`hover-req__status--${badgeKind(requirement.status)}`">
+                    {{ statusLabel(requirement.status) }}
+                  </span>
+                  <span v-if="requirement.rawText !== ''" class="hover-req__raw">{{ requirement.rawText }}</span>
+                </li>
+              </ul>
+              <p v-else class="hover-card__note">无前置</p>
+            </div>
+          </div>
+        </section>
+      </template>
     </div>
 
-    <footer class="hover-card__footer">
-      <button type="button" class="card-button" @click="openScript">打开脚本</button>
-      <button type="button" class="card-button" @click="copyPath">复制路径</button>
+    <footer class="hover-card__foot">
+      <button
+        type="button"
+        class="hover-card__action"
+        :disabled="selectedIdentity === null"
+        :title="selectedIdentity === null ? '先在卡片内选中一条触发器' : '打开脚本并定位到该触发器（不播放、不 seek）'"
+        @click="locate"
+      >
+        定位到触发器
+      </button>
+      <button type="button" class="hover-card__action" @click="openScript">打开脚本</button>
     </footer>
-  </section>
+  </aside>
 </template>
 
 <style scoped>
 .hover-card {
   position: absolute;
   z-index: 30;
-  width: 420px;
+  width: 320px;
+  max-width: calc(100vw - 16px);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel);
   color: var(--text);
-  box-shadow: 0 8px 24px var(--shadow);
+  box-shadow: 0 10px 30px var(--shadow);
+  overflow: hidden;
+}
+.hover-card--pinned { border-color: var(--focus); }
+
+.hover-card__head {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.hover-card__title { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.hover-card__path { margin: 2px 0 0; color: var(--text-muted); font-size: 10.5px; overflow-wrap: anywhere; }
+
+/* 卡片内部滚动：条件树 / 前置任意长，不折叠、不截断。 */
+.hover-card__body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
-  pointer-events: auto;
-  user-select: text;
-}
-.hover-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.hover-card--pinned { border-color: var(--selection-outline); }
-.hover-card__head { display: flex; align-items: center; gap: 8px; }
-.hover-card__title { margin: 0; font-size: 14px; font-weight: 600; flex: 1 1 auto; min-width: 0; }
-.hover-card__pin { color: var(--accent); font-size: 11px; }
-.hover-card__close {
-  background: transparent;
-  border: 0;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 2px 4px;
-  border-radius: 3px;
-}
-.hover-card__path, .hover-card__id, .hover-card__meta {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-.hover-card__error { margin: 0; color: var(--error); font-size: 11px; }
-.hover-card__triggers { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-.hover-card__section { margin: 0; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
-.hover-card__empty { margin: 0; color: var(--text-muted); font-size: 11px; }
-.trigger-block {
+  padding: 6px 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 6px 8px;
+  gap: 8px;
+}
+.hover-card__note { margin: 0; color: var(--text-muted); font-size: 11px; }
+.hover-card__note--error { color: var(--warning); }
+.hover-card__empty { margin: 0; color: var(--text-muted); font-size: 11.5px; }
+
+.hover-trigger {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-raised);
+  padding: 6px 8px;
 }
-.trigger-block:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.trigger-block--focused { border-color: var(--accent); }
-.trigger-block__head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.trigger-block__type { font-size: 12px; font-weight: 600; }
-.trigger-block__meta { color: var(--text-secondary); font-size: 11px; }
-.trigger-block__index { margin-left: auto; color: var(--text-muted); font-size: 10px; }
-.trigger-block__identity { margin: 0; color: var(--text-muted); font-size: 10px; }
-.trigger-block__conditions { margin: 0; font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.trigger-block__conditions--missing { color: var(--text-muted); font-style: italic; }
-.trigger-block__label { margin: 2px 0 0; font-size: 10.5px; color: var(--text-secondary); }
-.trigger-block__empty { margin: 0; font-size: 10.5px; color: var(--text-muted); }
-.requirement-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
-.requirement-row {
+.hover-trigger--selected { border-color: var(--focus); }
+.hover-trigger--fallback { background: transparent; }
+
+.hover-trigger__head {
   display: flex;
-  align-items: center;
-  gap: 4px;
   flex-wrap: wrap;
-  padding: 2px 4px;
-  border-radius: 3px;
-  font-size: 11px;
-}
-.requirement-row--focused { background: var(--bg-hover); outline: 1px solid var(--accent); }
-.requirement-row__index { color: var(--text-muted); font-size: 10px; }
-.requirement-row__type { color: var(--text); }
-.requirement-row__arrow { color: var(--text-muted); }
-.requirement-row__target { color: var(--text-secondary); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.requirement-row__status { padding: 0 4px; border-radius: 3px; border: 1px solid var(--border-strong); font-size: 10px; color: var(--text-secondary); }
-.requirement-row__status[data-status="resolved"] { color: var(--success); border-color: var(--success); }
-.requirement-row__status[data-status="missing"] { color: var(--error); border-color: var(--error); }
-.requirement-row__status[data-status="self"] { color: var(--warning); border-color: var(--warning); }
-.requirement-row__status[data-status="duplicate"] { color: var(--warning); border-color: var(--warning); }
-.requirement-row__status[data-status="custom"] { color: var(--text-muted); }
-.requirement-row__actions { display: inline-flex; gap: 4px; margin-left: auto; }
-.mini-button {
-  padding: 1px 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  background: var(--bg-panel);
-  color: var(--text);
-  font-size: 10px;
-  cursor: pointer;
-}
-.mini-button:hover { background: var(--bg-hover); }
-.mini-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.mini-button--danger { color: var(--error); }
-.trigger-block__add {
-  align-self: flex-start;
-  padding: 2px 8px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 4px;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
+  color: var(--text);
+  text-align: left;
   cursor: pointer;
+  font: inherit;
 }
-.trigger-block__add:hover { background: var(--bg-hover); color: var(--text); }
-.trigger-block__add:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.trigger-block__note { margin: 0; color: var(--text-muted); font-size: 10.5px; }
-.hover-card__footer { display: flex; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
-.card-button {
+.hover-trigger__head:hover { color: var(--text-secondary); }
+.hover-trigger__head:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.hover-trigger__label { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.hover-trigger__identity { color: var(--text-muted); font-size: 10.5px; overflow-wrap: anywhere; }
+.hover-trigger__meta { margin-left: auto; color: var(--text-secondary); font-size: 10.5px; }
+
+.hover-trigger__body { display: flex; flex-direction: column; gap: 6px; }
+.hover-trigger__block { display: flex; flex-direction: column; gap: 3px; }
+.hover-trigger__block-title {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.hover-trigger__condition { margin: 0; font-size: 11.5px; overflow-wrap: anywhere; }
+
+.hover-reqs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.hover-req {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.hover-req__type { color: var(--text-secondary); }
+.hover-req__target { overflow-wrap: anywhere; }
+.hover-req__status {
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.hover-req__status--success { color: var(--success); border-color: var(--success); }
+.hover-req__status--error { color: var(--error); border-color: var(--error); }
+.hover-req__status--warning { color: var(--warning); border-color: var(--warning); }
+.hover-req__status--muted { color: var(--text-muted); border-color: var(--border); }
+.hover-req__raw { flex-basis: 100%; color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+
+.hover-card__foot {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--border);
+}
+.hover-card__action {
   padding: 4px 10px;
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   background: var(--bg-raised);
   color: var(--text);
-  font-size: 11px;
+  font-size: 11.5px;
   cursor: pointer;
 }
-.card-button:hover { background: var(--bg-hover); }
-.card-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.hover-card__action:hover:not(:disabled) { background: var(--bg-hover); }
+.hover-card__action:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.hover-card__action:disabled { color: var(--text-muted); cursor: default; }
 </style>

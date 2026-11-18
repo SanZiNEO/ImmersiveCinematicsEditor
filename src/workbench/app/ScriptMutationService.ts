@@ -608,6 +608,24 @@ function readMetaId(doc: JsonObject): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
+/** 读前置条目目标脚本 id：扁平顶层 `script` 优先，老嵌套 `data.script` 降级回退。 */
+function entryScriptId(entry: JsonValue): string | undefined {
+  if (typeof entry === 'string') {
+    return entry
+  }
+  if (!isJsonObject(entry)) {
+    return undefined
+  }
+  const top = typeof entry.script === 'string' ? entry.script : undefined
+  if (top !== undefined) {
+    return top
+  }
+  if (isJsonObject(entry.data)) {
+    return typeof entry.data.script === 'string' ? entry.data.script : undefined
+  }
+  return undefined
+}
+
 /** 统计一个脚本里指向 `from` 的 requires 条数。 */
 function countReferences(doc: JsonObject, from: string): number {
   const meta = isJsonObject(doc.meta) ? doc.meta : {}
@@ -618,11 +636,7 @@ function countReferences(doc: JsonObject, from: string): number {
       continue
     }
     for (const entry of trigger.requires) {
-      if (typeof entry === 'string' && entry === from) {
-        count += 1
-        continue
-      }
-      if (isJsonObject(entry) && isJsonObject(entry.data) && entry.data.script === from) {
+      if (entryScriptId(entry) === from) {
         count += 1
       }
     }
@@ -630,7 +644,7 @@ function countReferences(doc: JsonObject, from: string): number {
   return count
 }
 
-/** 只替换 requires 里的脚本 id，保留其他字段与数组顺序。 */
+/** 只替换 requires 里的脚本 id，保留其他字段与数组顺序；落扁平形状，不回写嵌套 `data`。 */
 function replaceReferences(root: JsonObject, from: string, to: string): void {
   const meta = isJsonObject(root.meta) ? root.meta : undefined
   if (meta === undefined) {
@@ -647,15 +661,20 @@ function replaceReferences(root: JsonObject, from: string, to: string): void {
         next.push(entry === from ? to : entry)
         continue
       }
-      if (isJsonObject(entry) && isJsonObject(entry.data) && entry.data.script === from) {
-        const copy = cloneJson(entry) as JsonObject
-        const data = isJsonObject(copy.data) ? copy.data : {}
-        data.script = to
-        copy.data = data
-        next.push(copy)
+      if (!isJsonObject(entry) || entryScriptId(entry) !== from) {
+        next.push(entry)
         continue
       }
-      next.push(entry)
+      const copy = cloneJson(entry) as JsonObject
+      // 老嵌套条目升级为扁平：嵌套 data 里的额外键并入顶层，再删除嵌套 data。
+      if (isJsonObject(copy.data)) {
+        for (const [key, value] of Object.entries(copy.data)) {
+          if (!(key in copy)) copy[key] = value
+        }
+      }
+      delete copy.data
+      copy.script = to
+      next.push(copy)
     }
     trigger.requires = next
   }
