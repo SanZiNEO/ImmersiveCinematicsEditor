@@ -135,19 +135,50 @@ export function segmentIndexAt(frames: readonly ObjectKeyframe[], time: number):
 }
 
 /**
- * 采样一个属性在 `time` 的值。
+ * 按片段时长过滤出「范围内」关键帧（`object-model.md` §3.4 第 1 步）。
  *
- * 返回 `{ ok: false }` 表示不可采样（没有节点）；调用方显示"无节点"，不显示零。
+ * 有限片段 `0 <= time <= duration`；无限执行 `time >= 0`。
+ * 越界帧**保留在文档里但不参与采样**（§3.5：这是正常语义，不是错误）。
+ */
+export function framesInRange(
+  frames: readonly ObjectKeyframe[],
+  timing: { duration: number; infinite: boolean },
+): ObjectKeyframe[] {
+  if (timing.infinite) {
+    return frames.filter((frame) => frame.time >= 0)
+  }
+  return frames.filter((frame) => frame.time >= 0 && frame.time <= timing.duration)
+}
+
+/**
+ * 采样一个属性在 `time` 的值（`object-model.md` §3.4 同口径）。
+ *
+ * 顺序固定：
+ * 1. 取**范围内**关键帧（越界帧不参与，见 `framesInRange`）；
+ * 2. 没有范围内帧 → 返回 `{ ok: false }`，由调用方回落到 `value` / 目录默认值；
+ * 3. 只有一帧 → 整段恒值；
+ * 4. `t` 在首帧前取首值、末帧后取末值；
+ * 5. 否则按 `interp` 插值。
+ *
+ * 返回 `{ ok: false }` 表示"没有可用帧"，不是"值为零"。
  */
 export function sampleValue(input: {
   frames: readonly ObjectKeyframe[]
   interp: FieldInterp
   time: number
+  /** 片段时长上下文；省略表示不做范围过滤（烘焙等内部场景）。 */
+  timing?: { duration: number; infinite: boolean }
   easing?: AuthoringEasing
 }): { ok: true; value: unknown } | { ok: false } {
-  const { frames, interp, time, easing } = input
+  const { interp, time, easing } = input
+  const frames = input.timing === undefined
+    ? input.frames
+    : framesInRange(input.frames, input.timing)
   if (frames.length === 0) {
     return { ok: false }
+  }
+  if (frames.length === 1) {
+    return { ok: true, value: frames[0].value }
   }
   if (time <= frames[0].time) {
     return { ok: true, value: frames[0].value }

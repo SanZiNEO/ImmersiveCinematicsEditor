@@ -193,6 +193,21 @@ function onAddKeyframe(payload: AddKeyframePayload): void {
   emit('add-keyframe', payload)
 }
 
+/** 菱形建/删帧：转发给外壳（外壳走 addKeyframe / removeKeyframe 命令）。 */
+function onToggleKeyframe(payload: { clipKey: string; path: string; time: number; create: boolean }): void {
+  emit('toggle-keyframe', payload)
+}
+
+/** 时钟开关动画：转发给外壳（外壳走 enableAnimation / disableAnimation）。 */
+function onToggleAnimation(payload: { clipKey: string; path: string; time: number; enable: boolean }): void {
+  emit('toggle-animation', payload)
+}
+
+/** 前后帧跳转：外壳只移播放头（会话写入，不进文档）。 */
+function onJumpKeyframe(payload: { clipKey: string; path: string; time: number }): void {
+  emit('jump-keyframe', payload)
+}
+
 /** 事件节点点击 / 双击：转发为 `open-event-editor`（记录编辑器由切片 C 提供）。 */
 function onOpenEvent(payload: { clipKey: string; path: string; time: number }): void {
   emit('open-event-editor', payload)
@@ -248,11 +263,15 @@ const valueFormKey = computed(() => props.row.path)
         :row="row"
         :panel="hasKeyframes ? 'effects' : 'properties'"
         :playhead="playhead"
+        :timing="timing"
         :row-has-keyframes="hasKeyframes"
         :disabled="readOnly === true"
         compact
         @commit="onSetValue"
         @add-keyframe="onAddKeyframe"
+        @toggle-keyframe="onToggleKeyframe"
+        @toggle-animation="onToggleAnimation"
+        @jump-keyframe="onJumpKeyframe"
       />
 
       <button

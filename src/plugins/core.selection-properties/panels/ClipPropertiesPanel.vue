@@ -11,6 +11,7 @@
  * 所有写入走 `ctx.commands.commit`；行集合每次按文档修订号重算，不缓存文档对象。
  */
 import { computed, nextTick, ref, watch } from 'vue'
+import type { DocCommand } from '../../../core/doc/commands.ts'
 import type { JsonObject } from '../../../core/doc/types.ts'
 import type { ClipSelectionState } from '../../../workbench/api/context.ts'
 import {
@@ -23,6 +24,14 @@ import {
 import { buildDiagnosticIndex } from '../../../features/effects/diagnostics.ts'
 import { buildGroups, partitionGroups } from '../../../features/effects/membership.ts'
 import type { ClipTiming } from '../../../features/effects/rows.ts'
+import {
+  addKeyframeCommand,
+  disableAnimationCommand,
+  enableAnimationCommand,
+  removeKeyframeCommands,
+} from '../../../features/effects/keyframeOps.ts'
+import { sampleValue } from '../../../features/effects/easing.ts'
+import { seedForNewNode } from '../../../features/effects/valueControls.ts'
 import type {
   DiagnosticIndex,
   EffectDiagnostic,
@@ -129,8 +138,15 @@ const rows = computed<PropertyRow[]>(() => {
 })
 
 const allGroups = computed<EffectGroup[]>(() => buildGroups(rows.value, timing.value))
+/**
+ * 属性面板显示**全部适用行**（含已有关键帧的），不做 leaf 过滤。
+ *
+ * 与效果面板的分工（用户裁决）：属性面板是「对象的值 + 菱形建帧」，效果面板是
+ * 「精细化的多属性对照与曲线」。同一个对象在两边都能看到，但操作粒度不同。
+ * `partitionGroups` 只用来算「有多少项同时也在效果面板」，供组头提示，不用于过滤行。
+ */
+const propertyGroups = computed<EffectGroup[]>(() => allGroups.value)
 const partition = computed(() => partitionGroups(allGroups.value, 'leaf', timing.value))
-const propertyGroups = computed(() => partition.value.propertyGroups)
 const effectGroups = computed(() => partition.value.effectGroups)
 
 /** 组键 → 该组在效果面板的叶子数。 */
@@ -187,6 +203,9 @@ const scrollTop = ref(0)
 const viewportHeight = ref(480)
 const scrollRef = ref<HTMLElement | null>(null)
 const focusedPath = ref<string | null>(null)
+/** 菱形/时钟操作的反馈（成功与失败都给真实结果，不静默）。 */
+const focusMessage = ref('')
+const focusMessageKind = ref<'info' | 'error'>('info')
 
 /** 片段切换时恢复该片段自己的折叠 / 过滤 / 滚动。 */
 watch(
@@ -477,6 +496,73 @@ function onFailed(payload: { clipKey: string; path: string; message: string }): 
   focusedPath.value = payload.path
 }
 
+/**
+ * 菱形：播放头有帧 → 删该帧；无帧 → 建帧。
+ *
+ * 初值按 06-05 的回退链（播放头采样 → 静态值 → 目录默认值）；都没有则提示先输入静态值。
+ * 与效果面板同一套命令，保证两个面板行为一致。
+ */
+function onToggleKeyframe(payload: { clipKey: string; path: string; time: number; create: boolean }): void {
+  const row = rows.value.find((item) => item.path === payload.path)
+  if (row === undefined) {
+    return
+  }
+  if (!payload.create) {
+    commitKeyframeCommand(removeKeyframeCommands(payload.clipKey, [{ path: payload.path, time: payload.time }]),
+      `已删除 ${payload.path} 在 ${payload.time.toFixed(2)}s 的关键帧。`)
+    return
+  }
+  const sampled = sampleValue({
+    frames: row.keyframes,
+    interp: row.interp,
+    time: payload.time,
+    timing: timing.value,
+  })
+  const seed = seedForNewNode(row, sampled.ok ? sampled.value : undefined, payload.time)
+  if (!seed.ok || seed.value === undefined) {
+    focusedPath.value = payload.path
+    return
+  }
+  commitKeyframeCommand(addKeyframeCommand(payload.clipKey, row, payload.time, seed.value),
+    `已在 ${payload.time.toFixed(2)}s 创建 ${payload.path} 的关键帧。`)
+}
+
+/** 时钟：开/关动画。关闭时命令层保留最后值。 */
+function onToggleAnimation(payload: { clipKey: string; path: string; time: number; enable: boolean }): void {
+  if (payload.enable) {
+    commitKeyframeCommand(enableAnimationCommand(payload.clipKey, payload.path, payload.time),
+      `已开启 ${payload.path} 的动画。`)
+    return
+  }
+  commitKeyframeCommand(disableAnimationCommand(payload.clipKey, payload.path),
+    `已关闭 ${payload.path} 的动画。`)
+}
+
+/** 前后帧跳转：只移播放头（会话写入，不进文档）。 */
+function onJumpKeyframe(payload: { clipKey: string; path: string; time: number }): void {
+  const found = clipContext.value
+  if (found === null || documentService === undefined) {
+    return
+  }
+  // 片段局部秒 → 全局秒：加上片段起点（`ClipViewEntry.start` 已是全局秒）。
+  documentService.setPlayhead(found.clip.start + payload.time)
+}
+
+/** 提交一条命令；失败时把焦点移到该行（不伪造成功）。 */
+function commitKeyframeCommand(command: DocCommand | null, successText: string): void {
+  if (command === null) {
+    return
+  }
+  const outcome = ctx.commands.commit(command)
+  if (outcome.ok) {
+    focusMessage.value = successText
+    focusMessageKind.value = 'info'
+    return
+  }
+  focusMessage.value = outcome.error ?? '命令被拒绝。'
+  focusMessageKind.value = 'error'
+}
+
 // ── 状态辅助 ─────────────────────────────────────────────────
 
 const multiLabel = computed(() => (state.value.kind === 'multi' ? state.value.clipKeys.length : 0))
@@ -546,6 +632,9 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
               @focus-row="focusRow($event.path)"
               @enabled="onEnabled"
               @failed="onFailed"
+              @toggle-keyframe="onToggleKeyframe"
+              @toggle-animation="onToggleAnimation"
+              @jump-keyframe="onJumpKeyframe"
             />
           </div>
 

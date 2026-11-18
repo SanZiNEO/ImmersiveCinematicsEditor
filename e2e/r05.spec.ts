@@ -287,7 +287,8 @@ test('C5/B3/C6/C7：双击进编辑器页，触发器表单改前置并保存', 
   await expect(page.locator('.doc-header')).toContainText('A')
   await expect(page.locator('[data-focus-scope="panel:core.timeline:timeline.main"]')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('[data-focus-scope="panel:core.clip-effects:clip.effects"]')).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('[data-focus-scope="panel:core.selection-properties:selection.properties"]')).toBeVisible({ timeout: 20_000 })
+  // 右栏是 tab 组（属性 / 触发器 / 脚本属性）：无选中时激活脚本属性，故断言 tab 存在。
+  await expect(page.locator('[role="tab"]', { hasText: '属性' }).first()).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('.timeline-panel')).toContainText('还没有轨道')
 
   // 触发器已迁到独立插件 `core.behavior`（06-12）：右栏同槽并列成面板级 tab。

@@ -39,6 +39,9 @@ const emit = defineEmits<{
   'focus-row': [{ path: string }]
   'enabled': [{ clipKey: string; path: string; time: number }]
   'failed': [{ clipKey: string; path: string; message: string }]
+  'toggle-keyframe': [{ clipKey: string; path: string; time: number; create: boolean }]
+  'toggle-animation': [{ clipKey: string; path: string; time: number; enable: boolean }]
+  'jump-keyframe': [{ clipKey: string; path: string; time: number }]
 }>()
 
 const total = computed(() => props.group.rows.length)
@@ -131,6 +134,9 @@ function jumpToEffects(): void {
             @focus-row="emit('focus-row', $event)"
             @enabled="emit('enabled', $event)"
             @failed="emit('failed', $event)"
+            @toggle-keyframe="emit('toggle-keyframe', $event)"
+            @toggle-animation="emit('toggle-animation', $event)"
+            @jump-keyframe="emit('jump-keyframe', $event)"
           />
         </div>
       </template>

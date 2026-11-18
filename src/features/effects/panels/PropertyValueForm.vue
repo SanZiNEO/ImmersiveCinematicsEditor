@@ -19,6 +19,7 @@ import { PLAYHEAD_EPSILON } from '../geometry.ts'
 import type { PropertyRow, RejectCode } from '../types.ts'
 import {
   REJECT_MESSAGES,
+  animatable,
   controlKindOf,
   parseTextInput,
   rangeHint,
@@ -30,12 +31,18 @@ import {
 import type { CommitTarget } from '../types.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
 import StructTreeEditor from './StructTreeEditor.vue'
+import AnimationControls from './AnimationControls.vue'
 import type { AddKeyframePayload, SetValuePayload } from './effectRowEvents.ts'
 
 const props = defineProps<{
   row: PropertyRow
   panel: 'properties' | 'effects'
   playhead: number
+  /**
+   * 片段时长上下文：采样必须先按范围过滤关键帧（`object-model.md` §3.4 第 1 步），
+   * 否则轴外帧会污染轴内采样。省略时不过滤（内部场景）。
+   */
+  timing?: { duration: number; infinite: boolean }
   /** 该行是否已有关键帧；缺省按 `row.keyframes.length > 0` 推导。 */
   rowHasKeyframes?: boolean
   disabled?: boolean
@@ -53,6 +60,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   commit: [payload: SetValuePayload]
   'add-keyframe': [payload: AddKeyframePayload]
+  /** 点菱形建帧（父组件走 `object.addKeyframe`，初值由 `seedForNewNode` 回退链取）。 */
+  'toggle-keyframe': [payload: { clipKey: string; path: string; time: number; create: boolean }]
+  /** 点时钟开关动画（父组件走 enableAnimation / disableAnimation）。 */
+  'toggle-animation': [payload: { clipKey: string; path: string; time: number; enable: boolean }]
+  /** 跳转到该属性的上/下一个关键帧。 */
+  'jump-keyframe': [payload: { clipKey: string; path: string; time: number }]
 }>()
 
 const ctx = usePanelContext()
@@ -61,6 +74,66 @@ const kind = computed(() => controlKindOf(props.row))
 const hasKeyframes = computed(() => props.rowHasKeyframes ?? props.row.keyframes.length > 0)
 const playheadHitsNode = computed(() =>
   props.row.keyframes.some((frame) => Math.abs(frame.time - props.playhead) <= PLAYHEAD_EPSILON))
+
+/** 该行是否支持关键帧（`mode=value` / `struct` / 未知路径都不支持）。 */
+const animatableRow = computed(() => animatable(props.row.def) && !props.row.unknown)
+
+/** 动画控件只对可动画的行显示（事件行走记录编辑器，值/结构行没有帧）。 */
+const showAnimationControls = computed(() =>
+  kind.value !== 'event' && kind.value !== 'readonly' && kind.value !== 'struct')
+
+/** 该属性的上/下一个关键帧（升序数组里找最近的）。 */
+const hasPrevKeyframe = computed(() =>
+  props.row.keyframes.some((frame) => frame.time < props.playhead - PLAYHEAD_EPSILON))
+const hasNextKeyframe = computed(() =>
+  props.row.keyframes.some((frame) => frame.time > props.playhead + PLAYHEAD_EPSILON))
+
+function onToggleKeyframe(create: boolean): void {
+  emit('toggle-keyframe', {
+    clipKey: props.row.clipKey,
+    path: props.row.path,
+    time: props.playhead,
+    create,
+  })
+}
+
+function onToggleAnimation(enable: boolean): void {
+  emit('toggle-animation', {
+    clipKey: props.row.clipKey,
+    path: props.row.path,
+    time: props.playhead,
+    enable,
+  })
+}
+
+/** 跳到相邻关键帧：取严格小于/大于播放头里最近的那个。 */
+function jumpToPrev(): void {
+  const candidates = props.row.keyframes
+    .map((frame) => frame.time)
+    .filter((time) => time < props.playhead - PLAYHEAD_EPSILON)
+  if (candidates.length === 0) {
+    return
+  }
+  emit('jump-keyframe', {
+    clipKey: props.row.clipKey,
+    path: props.row.path,
+    time: Math.max(...candidates),
+  })
+}
+
+function jumpToNext(): void {
+  const candidates = props.row.keyframes
+    .map((frame) => frame.time)
+    .filter((time) => time > props.playhead + PLAYHEAD_EPSILON)
+  if (candidates.length === 0) {
+    return
+  }
+  emit('jump-keyframe', {
+    clipKey: props.row.clipKey,
+    path: props.row.path,
+    time: Math.min(...candidates),
+  })
+}
 
 /** 读播放头所在段的作者态缓动（没有就是 `undefined`，采样按目录 `interp`）。 */
 function easingAt(time: number): { mode: 'linear' | 'bezier'; out: { x: number; y: number }; in: { x: number; y: number }; revision: number; clipKey: string; path: string; fromTime: number; toTime: number } | undefined {
@@ -98,6 +171,7 @@ const sampled = computed<{ ok: boolean; value?: unknown }>(() => {
     frames: props.row.keyframes,
     interp: props.row.interp,
     time: props.playhead,
+    ...(props.timing === undefined ? {} : { timing: props.timing }),
     ...(easing === undefined ? {} : { easing }),
   })
 })
@@ -512,22 +586,54 @@ const structValue = computed<JsonValue>(() => {
         >
         <span v-if="suffix !== ''" class="value-form__suffix" aria-hidden="true">{{ suffix }}</span>
         <span v-if="kind === 'nullable-number' && nullableUnset" class="value-form__muted">不锁</span>
+        <AnimationControls
+          v-if="showAnimationControls"
+          :has-keyframes="hasKeyframes"
+          :at-keyframe="playheadHitsNode"
+          :animatable="animatableRow"
+          :playhead="playhead"
+          :has-prev="hasPrevKeyframe"
+          :has-next="hasNextKeyframe"
+          :read-only="row.unknown"
+          :compact="compact === true"
+          @toggle="onToggleKeyframe"
+          @prev="jumpToPrev"
+          @next="jumpToNext"
+          @toggle-animation="onToggleAnimation"
+        />
       </div>
       <p v-if="hint !== null" class="value-form__hint">范围 {{ hint }}</p>
     </template>
 
     <!-- boolean：开关，立即提交 -->
     <template v-else-if="kind === 'boolean'">
-      <label class="value-form__toggle">
-        <input
-          type="checkbox"
-          :checked="boolValue"
-          :disabled="!canEdit"
-          :aria-label="`${row.label} 开关`"
-          @change="onBooleanChange"
-        >
-        <span>{{ boolValue ? '开' : '关' }}</span>
-      </label>
+      <div class="value-form__line">
+        <label class="value-form__toggle">
+          <input
+            type="checkbox"
+            :checked="boolValue"
+            :disabled="!canEdit"
+            :aria-label="`${row.label} 开关`"
+            @change="onBooleanChange"
+          >
+          <span>{{ boolValue ? '开' : '关' }}</span>
+        </label>
+        <AnimationControls
+          v-if="showAnimationControls"
+          :has-keyframes="hasKeyframes"
+          :at-keyframe="playheadHitsNode"
+          :animatable="animatableRow"
+          :playhead="playhead"
+          :has-prev="hasPrevKeyframe"
+          :has-next="hasNextKeyframe"
+          :read-only="row.unknown"
+          :compact="compact === true"
+          @toggle="onToggleKeyframe"
+          @prev="jumpToPrev"
+          @next="jumpToNext"
+          @toggle-animation="onToggleAnimation"
+        />
+      </div>
     </template>
 
     <!-- text / ref：失焦或回车提交 -->
@@ -561,6 +667,21 @@ const structValue = computed<JsonValue>(() => {
         <datalist v-if="kind === 'ref' && refCandidates.length > 0" id="value-form-ref-candidates">
           <option v-for="item in refCandidates" :key="item" :value="item" />
         </datalist>
+        <AnimationControls
+          v-if="showAnimationControls"
+          :has-keyframes="hasKeyframes"
+          :at-keyframe="playheadHitsNode"
+          :animatable="animatableRow"
+          :playhead="playhead"
+          :has-prev="hasPrevKeyframe"
+          :has-next="hasNextKeyframe"
+          :read-only="row.unknown"
+          :compact="compact === true"
+          @toggle="onToggleKeyframe"
+          @prev="jumpToPrev"
+          @next="jumpToNext"
+          @toggle-animation="onToggleAnimation"
+        />
       </div>
       <p v-if="refUnconstrained" class="value-form__hint">未约束形态：schema 没有给出候选，按自由文本写入。</p>
     </template>
@@ -578,6 +699,21 @@ const structValue = computed<JsonValue>(() => {
           <option v-if="typeof displayValue !== 'string'" value="" disabled>（未设置）</option>
           <option v-for="item in enumValues" :key="item" :value="item">{{ item === '' ? '（空字符串）' : item }}</option>
         </select>
+        <AnimationControls
+          v-if="showAnimationControls"
+          :has-keyframes="hasKeyframes"
+          :at-keyframe="playheadHitsNode"
+          :animatable="animatableRow"
+          :playhead="playhead"
+          :has-prev="hasPrevKeyframe"
+          :has-next="hasNextKeyframe"
+          :read-only="row.unknown"
+          :compact="compact === true"
+          @toggle="onToggleKeyframe"
+          @prev="jumpToPrev"
+          @next="jumpToNext"
+          @toggle-animation="onToggleAnimation"
+        />
       </div>
       <p v-if="enumCurrentOutside" class="value-form__hint value-form__hint--warn">
         当前值不在枚举内：{{ String(displayValue) }}

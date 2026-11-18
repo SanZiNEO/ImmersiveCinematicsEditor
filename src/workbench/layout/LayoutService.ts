@@ -8,7 +8,7 @@
  */
 import type { DiagnosticInput, DiagnosticSeverity, DiagnosticSink } from '../api/diagnostics.ts'
 import type { Orientation, PanelRef } from '../api/ids.ts'
-import { CORE_PAGE_IDS, panelNodeId, samePanel } from '../api/ids.ts'
+import { CORE_PAGE_IDS, panelNodeId, samePanel, SLOT_IDS } from '../api/ids.ts'
 import type {
   GroupNode,
   GroupStatePatch,
@@ -29,8 +29,10 @@ import {
   buildDefaultTree,
   buildPresetTree,
   isPagePresetId,
+  mergePanelConstraint,
   PAGE_PRESETS,
 } from './defaultLayouts.ts'
+import type { PanelSlotSource } from './defaultLayouts.ts'
 import {
   assignGroupActiveTabId,
   clonePanelNode,
@@ -695,6 +697,51 @@ export class LayoutService implements WorkspaceLayoutService {
       tree.root = root
       return true
     })
+  }
+
+  /**
+   * 把注册表里已注册、但当前布局中不存在的面板补进它声明的槽位 group。
+   *
+   * 为什么需要：布局在插件激活**之前**构建（04 轮启动顺序），因此新增面板不会自动进布局。
+   * 本方法在激活后调用，只补缺失项，不动用户已有的排列、比例与活动标签。
+   *
+   * @returns 补进去的面板数量（0 表示布局已是最新）
+   */
+  ensureSlotPanels(pageId: string, panels: PanelSlotSource): number {
+    let added = 0
+    this.mutate(pageId, 'ensureSlotPanels', (page) => {
+      const tree = this.treeOf(page)
+      for (const slot of SLOT_IDS) {
+        const registered = panels.bySlot(slot)
+        if (registered.length === 0) {
+          continue
+        }
+        const group = findGroup(tree.root, slot)
+        if (!group) {
+          continue
+        }
+        for (const entry of registered) {
+          const ref: PanelRef = { pluginId: entry.pluginId, panelId: entry.contribution.panelId }
+          if (findPanel(tree.root, ref) !== null) {
+            continue
+          }
+          const node = createPanelNode(ref, mergePanelConstraint(ref.panelId, entry.contribution))
+          const nextGroup: GroupNode = {
+            ...group,
+            panels: [...group.panels, node],
+            activePanelId: group.activePanelId ?? node.id,
+          }
+          const root = replaceNode(tree.root, group.id, nextGroup)
+          if (!root) {
+            continue
+          }
+          tree.root = root
+          added += 1
+        }
+      }
+      return added > 0
+    })
+    return added
   }
 
   setActivePanel(pageId: string, groupId: string, panel: PanelRef): void {

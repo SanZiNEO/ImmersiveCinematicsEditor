@@ -22,6 +22,7 @@ import type { JsonObject, JsonValue, ScriptDoc } from '../core/doc/types.ts'
 import { HoverIntent } from './shared/hoverIntent.ts'
 import type { HoverTimerHandle } from './shared/hoverIntent.ts'
 import { createGestureSession } from './shared/gesture.ts'
+import { targetPanelFor } from './app/SelectionPanelSync.ts'
 import { buildPropertyRows, readClipTiming, isRequiredMissing, outOfRangeCount, effectiveStaticValue, groupLabelOf, UNGROUPED_KEY } from '../features/effects/rows.ts'
 import { buildGroups, partitionGroups, summarizeRows, hasKeyframeContent } from '../features/effects/membership.ts'
 import {
@@ -35,7 +36,7 @@ import {
   finiteDuration,
 } from '../features/effects/viewport.ts'
 import { layoutRows, nodesOfRow, segmentsOfRow, hitTestNodes, nodesInRect, isOutOfRange } from '../features/effects/geometry.ts'
-import { sampleValue, bakeSegment, bakeSampleCount, segmentIndexAt } from '../features/effects/easing.ts'
+import { sampleValue, bakeSegment, bakeSampleCount, segmentIndexAt, framesInRange } from '../features/effects/easing.ts'
 import { controlKindOf, parseTextInput, resolveTarget, validateValue, seedForNewNode, missingPositionAxes, animatable } from '../features/effects/valueControls.ts'
 import { easingKey, readEasingTable, writeEasingMutator, removeEasingMutator, clearPathEasingMutator, pruneInvalidEasingsMutator, unbakedSummary } from '../features/effects/easingStore.ts'
 import type { EffectPanelSession, KeyframeSelection } from '../features/effects/types.ts'
@@ -609,6 +610,35 @@ function main(): void {
 
     const stepAtEnd = sampleValue({ frames, interp: 'step', time: 2 })
     check('06-06 采样：step 到达端点取后一帧', stepAtEnd.ok && stepAtEnd.value === 100, stepAtEnd)
+
+    // 范围过滤（object-model.md §3.4 第 1 步）：轴外帧不得污染轴内采样。
+    const withOutOfRange = [
+      { time: 0, value: 0 },
+      { time: 9, value: 90 },
+    ]
+    const insideOnly = sampleValue({
+      frames: withOutOfRange,
+      interp: 'linear',
+      time: 3,
+      timing: { duration: 4, infinite: false },
+    })
+    check('06-06 采样：轴外帧不参与轴内插值', insideOnly.ok && insideOnly.value === 0, insideOnly)
+    const withoutTiming = sampleValue({ frames: withOutOfRange, interp: 'linear', time: 3 })
+    check('06-06 采样：省略 timing 时不做范围过滤（内部场景）',
+      withoutTiming.ok && Math.abs((withoutTiming.value as number) - 30) < 1e-6, withoutTiming)
+
+    check('06-06 范围：过滤后只剩范围内帧',
+      framesInRange(withOutOfRange, { duration: 4, infinite: false }).length === 1,
+      framesInRange(withOutOfRange, { duration: 4, infinite: false }))
+    check('06-06 范围：无限片段只排除负时间',
+      framesInRange([{ time: -1, value: 0 }, { time: 9, value: 1 }], { duration: -1, infinite: true }).length === 1)
+    const singleFrame = sampleValue({
+      frames: [{ time: 2, value: 7 }],
+      interp: 'linear',
+      time: 0,
+      timing: { duration: 4, infinite: false },
+    })
+    check('06-06 采样：单帧整段恒值', singleFrame.ok && singleFrame.value === 7, singleFrame)
   }
 
   // ── 9. 值控件与目标解析 ─────────────────────────────────────────
@@ -913,7 +943,26 @@ function main(): void {
       !eventStore.store.commit({ kind: 'object.removeKeyframe', clipKey: eventKey, path: 'event', time: 1 }).ok)
   }
 
-  // ── 13. 效果面板会话类型可用（形状自检） ─────────────────────────
+  // ── 13. 选择域驱动面板切换（06-12 补充） ─────────────────────────
+  {
+    check('06-12 切换：none → 脚本属性面板',
+      targetPanelFor({ domain: 'none' })?.panelId === 'meta.properties', targetPanelFor({ domain: 'none' }))
+    check('06-12 切换：clip → 片段属性面板',
+      targetPanelFor({ domain: 'clip', clipKey: 'c1' })?.panelId === 'selection.properties')
+    check('06-12 切换：object → 片段属性面板',
+      targetPanelFor({ domain: 'object', clipKey: 'c1', objectPath: 'yaw' })?.panelId === 'selection.properties')
+    check('06-12 切换：keyframe → 片段属性面板',
+      targetPanelFor({ domain: 'keyframe', clipKey: 'c1', objectPath: 'yaw', keyframeTime: 1 })?.panelId === 'selection.properties')
+    check('06-12 切换：path / rule / binding 不切',
+      targetPanelFor({ domain: 'path', pathId: 'p1' }) === null
+      && targetPanelFor({ domain: 'rule', ruleId: 'r1' }) === null
+      && targetPanelFor({ domain: 'binding', bindingId: 'b1' }) === null)
+    check('06-12 切换：目标面板属于右栏槽位的两个已知面板',
+      targetPanelFor({ domain: 'none' })?.pluginId === 'core.meta'
+      && targetPanelFor({ domain: 'clip', clipKey: 'c1' })?.pluginId === 'core.selection-properties')
+  }
+
+  // ── 14. 效果面板会话类型可用（形状自检） ─────────────────────────
   {
     const session: EffectPanelSession = {
       collapsed: new Set<string>(),

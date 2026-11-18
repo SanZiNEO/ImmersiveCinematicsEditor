@@ -17,6 +17,7 @@ import type { JsonValue } from '../../core/doc/types.ts'
 import { cloneJson } from '../../core/doc/json.ts'
 import type { ValidationTransport } from '../../core/doc/validate.ts'
 import type { DiagnosticSink } from '../api/diagnostics.ts'
+import { CORE_PAGE_IDS } from '../api/ids.ts'
 import type { HostPort } from '../api/host.ts'
 import type { LayoutFile } from '../api/layout.ts'
 import type { ServiceRegistry } from '../api/services.ts'
@@ -91,6 +92,7 @@ import { WEBUI_MESSAGE } from '../host/webui/protocol.ts'
 import { PageRouterImpl } from '../shell/pageRouter.ts'
 import { focusElement } from '../shell/focusRegions.ts'
 import { BUILTIN_PLUGINS } from '../../plugins/builtin.ts'
+import { startSelectionPanelSync } from './SelectionPanelSync.ts'
 import type { PluginManifest } from '../api/contributions.ts'
 
 /** 离机传输：没有游戏连接时的真实失败回退（不伪造成功）。 */
@@ -146,6 +148,8 @@ export class WorkbenchApp {
   readonly router: PageRouterImpl
   readonly documents: DocumentServiceImpl
   readonly selection: SelectionServiceImpl
+  /** 选择驱动右栏标签的释放函数（`dispose` 时调用）。 */
+  private stopSelectionPanelSync: (() => void) | null = null
   readonly graph: ScriptGraphService
   readonly graphLayout: GraphLayoutStore
   readonly mutations: ScriptMutationService
@@ -285,6 +289,16 @@ export class WorkbenchApp {
     })
 
     this.selection = new SelectionServiceImpl(this.documents.store)
+    // 选择域驱动右栏标签（对齐剪辑软件：点空白→脚本属性，点片段→片段属性）。
+    this.stopSelectionPanelSync = startSelectionPanelSync({
+      pageId: 'document',
+      layout: this.layout,
+      selection: this.selection,
+      documents: { subscribe: (listener) => this.documents.subscribe(listener) },
+      report: (text) => {
+        this.diagnostics.report({ severity: 'warning', source: 'layout', message: text })
+      },
+    })
     this.shellActions = new ShellActions({
       documents: this.documents,
       files: this.host.files,
@@ -343,6 +357,10 @@ export class WorkbenchApp {
     // 反过来的话首启会是空布局（面板注册表还没填）。
     await this.startPlugins()
     await this.loadLayout()
+    // 已落盘的旧 layout.json 里没有后来新增的面板；补进它们声明的槽位，只补不改。
+    for (const pageId of CORE_PAGE_IDS) {
+      this.layout.ensureSlotPanels(pageId, this.panels)
+    }
     this.installKeybindings()
     this.wireConnection()
     this.client?.connect()
@@ -375,6 +393,8 @@ export class WorkbenchApp {
 
   async dispose(): Promise<void> {
     await this.saveLayout()
+    this.stopSelectionPanelSync?.()
+    this.stopSelectionPanelSync = null
     this.plugins.dispose()
     this.documents.dispose()
     this.selection.dispose()

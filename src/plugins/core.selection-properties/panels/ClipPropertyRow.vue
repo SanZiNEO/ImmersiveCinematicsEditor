@@ -38,6 +38,12 @@ const emit = defineEmits<{
   'focus-row': [{ path: string }]
   'enabled': [{ clipKey: string; path: string; time: number }]
   'failed': [{ clipKey: string; path: string; message: string }]
+  /** 菱形建/删帧（外壳走 addKeyframe / removeKeyframe）。 */
+  'toggle-keyframe': [{ clipKey: string; path: string; time: number; create: boolean }]
+  /** 时钟开关动画（外壳走 enableAnimation / disableAnimation）。 */
+  'toggle-animation': [{ clipKey: string; path: string; time: number; enable: boolean }]
+  /** 前后帧跳转（外壳只移播放头）。 */
+  'jump-keyframe': [{ clipKey: string; path: string; time: number }]
 }>()
 
 const ctx = usePanelContext()
@@ -160,6 +166,21 @@ function revealEffects(): void {
   emit('reveal-effects', { clipKey: props.row.clipKey, path: props.row.path })
 }
 
+/** 菱形：透传给外壳（外壳按 create 决定建帧还是删帧）。 */
+function onToggleKeyframe(payload: { clipKey: string; path: string; time: number; create: boolean }): void {
+  emit('toggle-keyframe', payload)
+}
+
+/** 时钟：透传给外壳（外壳按 enable 决定开启动画还是关闭）。 */
+function onToggleAnimation(payload: { clipKey: string; path: string; time: number; enable: boolean }): void {
+  emit('toggle-animation', payload)
+}
+
+/** 前后帧跳转：透传给外壳（只移播放头）。 */
+function onJumpKeyframe(payload: { clipKey: string; path: string; time: number }): void {
+  emit('jump-keyframe', payload)
+}
+
 function onEnabled(payload: { clipKey: string; path: string; time: number }): void {
   emit('enabled', payload)
 }
@@ -218,22 +239,22 @@ function onFailed(payload: { clipKey: string; path: string; message: string }): 
         </button>
       </template>
 
-      <!-- 值 / 结构：只有值控件；已有帧的行不显示值控件，只给定位入口 -->
-      <template v-else-if="hasFrames">
-        <span class="prop-row__count">已有 {{ row.keyframes.length }} 帧</span>
-        <button type="button" class="prop-row__link" @click.stop="revealEffects">在效果面板</button>
-      </template>
-
+      <!-- 值 / 结构：全部行都给值控件（有帧时控件显示并编辑播放头处的帧值） -->
       <template v-else>
         <PropertyValueForm
           :row="row"
           panel="properties"
           :playhead="playhead"
-          :row-has-keyframes="false"
+          :timing="timing"
+          :row-has-keyframes="row.keyframes.length > 0"
           :disabled="blocked || unavailable !== undefined"
+          @toggle-keyframe="onToggleKeyframe"
+          @toggle-animation="onToggleAnimation"
+          @jump-keyframe="onJumpKeyframe"
         />
+        <span v-if="hasFrames" class="prop-row__count">{{ row.keyframes.length }} 帧</span>
         <AnimationClock
-          v-if="isAnimated && !isStruct"
+          v-if="isAnimated && !isStruct && row.keyframes.length === 0"
           :row="row"
           :playhead="playhead"
           :disabled-reason="unavailable"

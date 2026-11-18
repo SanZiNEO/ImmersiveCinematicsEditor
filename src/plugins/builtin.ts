@@ -11,6 +11,7 @@ import timelinePlugin from './core.timeline/manifest.ts'
 import coreClipEffects from './core.clip-effects/manifest.ts'
 import coreSelectionProperties from './core.selection-properties/manifest.ts'
 import coreBehavior from './core.behavior/manifest.ts'
+import coreMeta from './core.meta/manifest.ts'
 import demoExtra from './demo.extra/manifest.ts'
 import demoKitchenSink from './demo.kitchen-sink/manifest.ts'
 
@@ -22,6 +23,7 @@ export const BUILTIN_PLUGINS: PluginManifest[] = [
   coreClipEffects,
   coreSelectionProperties,
   coreBehavior,
+  coreMeta,
   demoExtra,
   demoKitchenSink,
 ]

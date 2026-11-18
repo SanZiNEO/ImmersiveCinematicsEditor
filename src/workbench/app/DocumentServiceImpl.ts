@@ -382,6 +382,14 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
     }
   }
 
+  metaObject(): JsonObject | null {
+    const doc = this.store.doc
+    if (doc === null) {
+      return null
+    }
+    return isJsonObject(doc.meta) ? cloneJson(doc.meta) as JsonObject : null
+  }
+
   clipObjects(clipKey: string): JsonObject | null {
     const handle = this.store.registry.handle(clipKey)
     if (handle === undefined) {

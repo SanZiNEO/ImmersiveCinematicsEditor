@@ -145,7 +145,9 @@ test('document 页：默认布局渲染左右中下面板与抽屉（真实组�
   // 面板是懒加载：等真实内容挂上再统计 DOM（不是等固定时间）。
   await expect(page.locator('canvas.preview-canvas')).toHaveCount(1, { timeout: 30_000 })
   await expect(page.locator('[data-focus-scope="panel:core.clip-effects:clip.effects"]')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('[data-focus-scope="panel:core.selection-properties:selection.properties"]')).toBeVisible({ timeout: 30_000 })
+  // 右栏是 tab 组：无选中时默认激活「脚本属性」，有选中片段时切到「属性」。
+  // 两者都存在，这里断言 tab 存在而不是容器可见（只有活动 tab 可见）。
+  await expect(page.locator('[role="tab"]', { hasText: '属性' }).first()).toBeVisible({ timeout: 30_000 })
 
   const state = await page.evaluate(() => {
     const workbench = (window as unknown as { __workbench?: WorkbenchDebug }).__workbench

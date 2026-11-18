@@ -355,6 +355,82 @@ test('R6-7：保存重开无损 —— 值 / 帧 / 事件不变', async () => {
   expect(JSON.stringify(onDisk)).not.toContain('authoring')
 })
 
+test('R6-10：菱形按钮 —— 播放头有帧显示实心，点击删帧后变空心', async () => {
+  await openScript('finite.json')
+  await waitForPanels()
+
+  // `position.x` 有 [0, 1] 两帧，播放头默认在 0 → 菱形应为实心 ◆
+  const diamond = effectsPanel().locator('.anim-ctl__btn--diamond').first()
+  await expect(diamond).toBeVisible({ timeout: 10_000 })
+  await expect(diamond).toHaveText('◆')
+  await expect(diamond).toHaveAttribute('aria-pressed', 'true')
+
+  // 时钟按钮同时存在（开/关动画，与菱形是两层语义）
+  await expect(effectsPanel().locator('.anim-ctl__btn--clock').first()).toBeVisible()
+
+  await diamond.click()
+  // 删掉 t=0 的帧后播放头不再命中节点 → 空心 ◇
+  await expect(diamond).toHaveText('◇', { timeout: 10_000 })
+  await expect(diamond).toHaveAttribute('aria-pressed', 'false')
+
+  // 撤销恢复
+  await page.evaluate(() => {
+    const holder = window as unknown as { __workbench?: DebugWorkbench }
+    holder.__workbench?.documents.undo()
+  })
+  await expect(diamond).toHaveText('◆', { timeout: 10_000 })
+})
+
+test('R6-11：属性面板列出全部行（含已有帧），并带动画控件', async () => {
+  await openScript('finite.json')
+  await waitForPanels()
+
+  const text = await propertiesPanel().innerText()
+  // 有帧的 position.x 与静态的 yaw 都要在（属性面板不做 leaf 过滤）。
+  expect(text).toContain('position.x')
+  expect(text).toContain('yaw')
+  // 属性面板里也有菱形控件。
+  await expect(propertiesPanel().locator('.anim-ctl__btn--diamond').first()).toBeVisible({ timeout: 10_000 })
+})
+
+test('R6-12：选择域驱动右栏标签 —— none 给脚本属性，clip 给片段属性', async () => {
+  await openScript('finite.json')
+  await waitForPanels()
+
+  const activePanelId = async (): Promise<string | null> => page.evaluate(() => {
+    const holder = window as unknown as {
+      __workbench?: { layout: { getGroup(p: string, id: string): { activePanelId?: string } | undefined } }
+    }
+    return holder.__workbench?.layout.getGroup('document', 'document.right')?.activePanelId ?? null
+  })
+
+  // 清空选择 → 脚本属性面板
+  await page.evaluate(() => {
+    const holder = window as unknown as { __workbench?: DebugWorkbench }
+    holder.__workbench?.documents.select({ domain: 'none' })
+  })
+  await expect.poll(activePanelId, { timeout: 10_000 }).toBe('p:core.meta:meta.properties')
+  // 面板是懒加载：等真实内容挂上（不是等容器可见）。
+  await expect(page.locator('[data-focus-scope="panel:core.meta:meta.properties"] .meta-panel'))
+    .toBeVisible({ timeout: 20_000 })
+  // meta 面板按 02 目录列出全部字段（不只 view().meta 那 6 个）。
+  const metaText = await page.locator('[data-focus-scope="panel:core.meta:meta.properties"]').innerText()
+  expect(metaText).toContain('block_keyboard')
+  expect(metaText).toContain('interruptible')
+
+  // 选回片段 → 片段属性面板
+  await page.evaluate(() => {
+    const holder = window as unknown as {
+      __workbench?: { documents: { clips(): Array<{ clipKey: string }>; select(s: unknown): void } }
+    }
+    const clip = holder.__workbench?.documents.clips()[0]
+    if (clip !== undefined) {
+      holder.__workbench?.documents.select({ domain: 'clip', clipKey: clip.clipKey })
+    }
+  })
+  await expect.poll(activePanelId, { timeout: 10_000 }).toBe('p:core.selection-properties:selection.properties')
+})
+
 test('R6-8：触发器在独立面板 —— 属性面板不再有触发器 tab', async () => {
   await openScript('finite.json')
   await waitForPanels()

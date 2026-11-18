@@ -22,12 +22,15 @@ import EffectRow from './EffectRow.vue'
 import type {
   AddKeyframePayload,
   DisableAnimationPayload,
+  JumpKeyframePayload,
   NodeMovePayload,
   NodeSelectPayload,
   OpenEventEditorPayload,
   RemoveKeyframesPayload,
   RevealDiagnosticPayload,
   SetValuePayload,
+  ToggleAnimationPayload,
+  ToggleKeyframePayload,
 } from '../../../features/effects/panels/effectRowEvents.ts'
 
 const props = defineProps<{
@@ -59,6 +62,12 @@ const emit = defineEmits<{
   /** 段选择（缓动编辑入口）：外壳据此写 `session.selectedSegment`。 */
   'select-segment': [payload: { clipKey: string; path: string; fromTime: number; toTime: number }]
   'toggle-collapse': [groupKey: string]
+  /** 菱形建/删帧（透传自值控件）。 */
+  'toggle-keyframe': [payload: ToggleKeyframePayload]
+  /** 时钟开关动画（透传自值控件）。 */
+  'toggle-animation': [payload: ToggleAnimationPayload]
+  /** 前后帧跳转（透传自值控件）。 */
+  'jump-keyframe': [payload: JumpKeyframePayload]
 }>()
 
 const collapsed = computed(() => props.session.collapsed.has(props.group.key))
@@ -212,6 +221,9 @@ function onSelectSegment(payload: { clipKey: string; path: string; fromTime: num
         @reveal-diagnostic="onRevealDiagnostic"
         @open-event-editor="onOpenEventEditor"
         @select-segment="onSelectSegment"
+        @toggle-keyframe="(payload) => emit('toggle-keyframe', payload)"
+        @toggle-animation="(payload) => emit('toggle-animation', payload)"
+        @jump-keyframe="(payload) => emit('jump-keyframe', payload)"
       />
     </div>
   </section>

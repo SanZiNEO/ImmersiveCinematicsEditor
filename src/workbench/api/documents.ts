@@ -197,6 +197,13 @@ export interface DocumentService {
   clips(): ClipListEntry[]
   /** 当前脚本只读视图（轨道 / 触发器 / A-B / 有限末端）；无文档为 `null`。 */
   view(): ScriptView | null
+  /**
+   * 脚本 `meta` 的只读克隆（完整 21+ 字段，不只 `view().meta` 暴露的那 6 个）。
+   *
+   * `meta` 段字段全在 02 目录里，面板按目录渲染，因此这里必须给完整对象；
+   * 无文档时返回 `null`。
+   */
+  metaObject(): JsonObject | null
   /** 片段 `objects` 的只读克隆；片段不存在为 `null`。 */
   clipObjects(clipKey: string): JsonObject | null
   /** 主轴会话快照（播放头 / 缩放 / 标记 / 预览范围 / 轨道状态）。 */

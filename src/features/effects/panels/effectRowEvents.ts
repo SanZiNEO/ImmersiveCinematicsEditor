@@ -97,6 +97,35 @@ export interface EffectRowEmitMap {
   'open-event-editor': [payload: OpenEventEditorPayload]
   /** 段选择（缓动编辑入口，06-06）：外壳据此写 `session.selectedSegment`。 */
   'select-segment': [payload: { clipKey: string; path: string; fromTime: number; toTime: number }]
+  /** 菱形建/删帧：外壳走 `object.addKeyframe` / `object.removeKeyframe`。 */
+  'toggle-keyframe': [payload: ToggleKeyframePayload]
+  /** 时钟开关动画：外壳走 `object.enableAnimation` / `object.disableAnimation`。 */
+  'toggle-animation': [payload: ToggleAnimationPayload]
+  /** 跳到该属性的上/下一个关键帧：外壳只移播放头（会话写入）。 */
+  'jump-keyframe': [payload: JumpKeyframePayload]
+}
+
+/** 菱形按钮意图：`create=true` 建帧，`false` 删该时刻的帧。 */
+export interface ToggleKeyframePayload {
+  clipKey: string
+  path: string
+  time: number
+  create: boolean
+}
+
+/** 时钟按钮意图：`enable=true` 开启动画，`false` 关闭动画。 */
+export interface ToggleAnimationPayload {
+  clipKey: string
+  path: string
+  time: number
+  enable: boolean
+}
+
+/** 前后帧跳转意图：只移动播放头。 */
+export interface JumpKeyframePayload {
+  clipKey: string
+  path: string
+  time: number
 }
 
 /** 值控件的事件表类型。 */

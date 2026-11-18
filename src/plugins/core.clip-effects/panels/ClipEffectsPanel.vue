@@ -29,7 +29,14 @@ import {
 } from '../../../features/effects/viewport.ts'
 import { PLAYHEAD_EPSILON, layoutRows } from '../../../features/effects/geometry.ts'
 import { findClipContext, propertyRowsFor } from '../../../features/effects/clipContext.ts'
-import { disableAnimationCommand, removeKeyframeCommands } from '../../../features/effects/keyframeOps.ts'
+import {
+  addKeyframeCommand,
+  disableAnimationCommand,
+  enableAnimationCommand,
+  removeKeyframeCommands,
+} from '../../../features/effects/keyframeOps.ts'
+import { sampleValue } from '../../../features/effects/easing.ts'
+import { seedForNewNode } from '../../../features/effects/valueControls.ts'
 import type {
   EffectGroup,
   EffectPanelSession,
@@ -409,6 +416,63 @@ function onDisableAnimation(payload: { clipKey: string; path: string }): void {
   commit(disableAnimationCommand(payload.clipKey, payload.path), `已关闭 ${payload.path} 的动画。`)
 }
 
+/**
+ * 菱形：播放头有帧 → 删该帧；无帧 → 建帧。
+ *
+ * 建帧初值按 06-05 的回退链：播放头采样值 → 静态值 → 目录默认值；都没有则拒绝并提示。
+ * 与剪辑软件一致：菱形只处理"当前时刻这一帧"，不碰其他帧。
+ */
+function onToggleKeyframe(payload: { clipKey: string; path: string; time: number; create: boolean }): void {
+  const row = allRows.value.find((item) => item.path === payload.path)
+  if (row === undefined) {
+    return
+  }
+  if (!payload.create) {
+    commit(
+      removeKeyframeCommands(payload.clipKey, [{ path: payload.path, time: payload.time }]),
+      `已删除 ${payload.path} 在 ${payload.time.toFixed(2)}s 的关键帧。`,
+    )
+    return
+  }
+  const sampled = sampleValue({
+    frames: row.keyframes,
+    interp: row.interp,
+    time: payload.time,
+    timing: timing.value,
+  })
+  const seed = seedForNewNode(row, sampled.ok ? sampled.value : undefined, payload.time)
+  if (!seed.ok || seed.value === undefined) {
+    report(seed.message ?? '没有可用的初值，请先输入静态值。', 'error')
+    return
+  }
+  commit(
+    addKeyframeCommand(payload.clipKey, row, payload.time, seed.value),
+    `已在 ${payload.time.toFixed(2)}s 创建 ${payload.path} 的关键帧。`,
+  )
+}
+
+/** 时钟：开/关动画。关闭时由命令层保留最后值。 */
+function onToggleAnimation(payload: { clipKey: string; path: string; time: number; enable: boolean }): void {
+  if (payload.enable) {
+    commit(
+      enableAnimationCommand(payload.clipKey, payload.path, payload.time),
+      `已开启 ${payload.path} 的动画。`,
+    )
+    return
+  }
+  commit(disableAnimationCommand(payload.clipKey, payload.path), `已关闭 ${payload.path} 的动画。`)
+}
+
+/** 前后帧跳转：只移播放头（会话写入，不进文档、不进撤销栈）。 */
+function onJumpKeyframe(payload: { clipKey: string; path: string; time: number }): void {
+  const entry = clipEntry.value
+  if (entry === undefined || documentService === undefined) {
+    return
+  }
+  // 效果面板用片段局部秒；主播放头是全局秒，需要加片段起点。
+  documentService.setPlayhead(entry.start + payload.time)
+}
+
 function onSelectSegment(segment: SegmentSelection): void {
   session.value.selectedSegment = segment
 }
@@ -553,6 +617,9 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
               @select-segment="onSelectSegment"
               @open-event-editor="openEventEditor"
               @reveal-diagnostic="revealDiagnostic"
+              @toggle-keyframe="onToggleKeyframe"
+              @toggle-animation="onToggleAnimation"
+              @jump-keyframe="onJumpKeyframe"
             />
           </div>
 
