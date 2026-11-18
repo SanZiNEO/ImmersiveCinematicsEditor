@@ -1,6 +1,6 @@
 # 回放检查
 
-> 状态：未实现
+> 状态：已实现
 > 范围：把"写脚本 → 推给游戏 → 看真实结果"做成一条可操作闭环，只用既有消息
 > 关联：08-05 镜头检查面板、08-02 叠化与参数过渡、03 文档序列化、01 消息路由
 
@@ -138,10 +138,13 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-尚未开工；状态机、校验两道门、推送与跳转的意图保持、消息面边界按上述设计执行，无实现偏差可记。
+实现落在 `src/features/camera/playback/model.ts`：11 个 phase（disconnected / ready / validating / valid / invalid / pushing / seeking / playing / paused / stopped / error）、`actionsFor` 按钮矩阵、`applyReport` / `applyConnection` / `applyRevisionChange` / `pushErrored` / `controlErrored` / `validation*`、`receiptTimeout`（跳转中 2 秒无回执标 `missingReceipt` 且保持 `seeking`）、`timeDrift`、`playbackSummary`。文档侧沿用既有 `script.validate` 与 `editor.pushScript`、`transport.seek`，不新增消息类型；`DocumentService` 以加法方式补 `serialize()` / `pushPreview()` / `seekPreview()` / `previewConnected()` / `localIssues()`。
+
+验证：`verify-08.ts` —— 初始 ready / disconnected、各 phase 的按钮矩阵、修订号变化回 ready、播放中改文档标 `stalePush`、回执清 `missingReceipt`、断线回 disconnected。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 回放检查用既有服务 token | `DocumentService` 增 5 个方法，同步在 `src/workbench/api/documents.ts` 与 `DocumentServiceImpl` 实现 | 既有 token 没有「序列化 + 推送 + 跳转 + 连接态 + 本地问题」入口；只做加法、不改既有方法签名，属扩展而非改契约 |
+

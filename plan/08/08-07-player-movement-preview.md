@@ -1,6 +1,6 @@
 # 玩家移动预演
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`camera.inspect` 的玩家移动 tab，只读呈现 EVENT 轨的 `Position` 目标点、折线、到达阈值与循环复位
 > 关联：08-05 镜头检查面板、06-07 事件记录编辑、模组 `PlayerMoveController`
 
@@ -139,10 +139,13 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-尚未开工；读取口径、预览原点与画布呈现按上述设计执行，无实现偏差可记。
+实现落在 `src/features/camera/player/model.ts`：`buildPlayerRoute` 读 EVENT 轨 `objects.event` 的关键帧（`recordFrames` 读 `{keyframes:[{time,value}]}`，`value.position` 为 `{x,z}` 或 `{dx,dz}`）；`time > duration` 的记录在读取期丢弃并计数；`ARRIVE_EPSILON = 0.05`；预览原点支持「文档存值」与「编辑器本地预览原点」两种来源；产出目标表、段表、包围盒与诊断（`player.*` 九个代号）；`projectPoint` 做 XZ 归一化供画布使用。MOD_EVENT 只检测 `position` 是否存在并给提示，不解析坐标。
+
+验证：`verify-08.ts` —— 2 个目标、全局时间 = 片段起点 + 局部时间、绝对坐标原样、相对坐标叠加预览原点、段数 = 目标数 - 1、`player.mod-event-position` 提示、无 EVENT 轨空态。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 事件记录行直接是记录数组 | 按 `{ keyframes: [...] }` 读取 | 文档模型里 `objects.*` 一律是 `{value?/keyframes?}` 包装，与解析器、模组 `EventClipRuntime` 的落盘形态一致；文档未写死行形态，以代码事实为准 |
+

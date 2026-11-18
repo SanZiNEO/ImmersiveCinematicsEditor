@@ -1,6 +1,6 @@
 # 连续性诊断
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`camera.inspect` 的连续性 tab，解释脚本级播放字段、片段循环字段与交界字段的后果
 > 关联：08-05 镜头检查面板、08-02 叠化与参数过渡、模组播放生命周期规则
 
@@ -128,10 +128,13 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-尚未开工；字段读取、规则推导与诊断口径按上述设计执行，无实现偏差可记。
+实现落在 `src/features/camera/continuity/model.ts`：`readContinuityMeta` 读 `play_mode / priority / interruptible / skippable / hold_at_end / macro_loop / macro_loop_count / macro_loop_mode / skip_vote_ratio`；`buildContinuityView` 复用 `buildTransitionView` 的交界（不重复实现交界判定），产出同脚本替换/排队与跨脚本独占/打断/空交界规则、`exit.natural|hold|skip|system-stop|force|replaced` 六类门（`allowed|conditional|blocked`）、片段循环与宏循环诊断（`continuity.deadlock / exclusive-sticky / parallel-sticky / mode-conflict / macro-loop / skip-vote / clip-loop-infinite`）；`sortContinuityIssues` 统一排序。
+
+验证：`verify-08.ts` 覆盖独占粘滞、模式冲突、宏循环、无限片段循环、门 status 三态与排序。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| — | 无实现偏差 | — |
+
