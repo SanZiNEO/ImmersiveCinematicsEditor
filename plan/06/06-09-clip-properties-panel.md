@@ -103,14 +103,15 @@
 状态：已实现
 
 `ClipPropertiesPanel.vue` + `ClipPropertiesHeader/Toolbar/Group/Row/AnimationClock` + `rowLayout.ts`。
-行集合来自 `propertyRowsFor` → `separateUnknownGroup` → `withAvailability`，
-再 `partitionGroups(..., 'leaf', timing).propertyGroups`。
+行集合来自 `propertyRowsFor` → `separateUnknownGroup` → `withAvailability` → `buildGroups`，
+**直接渲染全部组**；`partitionGroups(...)` 只用来算"N 项也在效果面板"的组头计数，不用于过滤行。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| 列当前轨道全部适用叶子 | 剔除 `playControl` 五字段（`CLIP_GEOMETRY_PATHS`） | 片段时间几何由主轴编辑；属性面板给了值控件会误导（06-09 §4.4 已声明"不修改起止与时长"） |
+| 列当前轨道全部适用叶子 | 剔除 `playControl` 五字段（`CLIP_GEOMETRY_PATHS`） | 片段时间几何由主轴编辑；属性面板给了值控件会误导（06-09 §4.4 已声明"不修改起止与时长"）。**待定**：用户提出 clip 面板应承载这五个属性，尚未落位 |
+| 已有关键帧的叶子"只给定位入口、不显示值控件" | **改为显示值控件**（有帧时显示并编辑播放头处的帧值）+ 菱形组 | 补充实现（用户裁决）：属性面板是"对象的值 + 菱形建帧"，效果面板是"精细化多属性对照与曲线"；两边都看得到同一对象，但操作粒度不同。原 leaf 过滤让属性面板看不到在动的属性，与剪辑软件不符 |
 | 未设置叶子编辑即创建对象 | `object.setValue` 创建并写入，一次撤销回到未设置 | 与设计一致 |
-| 组头提示"N 项已去效果面板" | `effectCountByGroup` + `requestRevealInEffectControls` | 与设计一致 |
+| 组头提示"N 项已去效果面板" | `effectCountByGroup` + `requestRevealInEffectControls` | 与设计一致（现在是"也在效果面板"，不是"已移走"） |
 | 100+ 叶子纵向虚拟化、组头吸顶 | `rowLayout.ts` 固定行高 + 绝对定位 | 与设计一致 |
 | 面板压窄时标签与控件上下排列 | 行布局本就是 `flex-direction: column`（标签在上、控件在下），无横向滚动 | 与设计一致 |
 

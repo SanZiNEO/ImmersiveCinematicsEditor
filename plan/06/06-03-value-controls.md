@@ -94,12 +94,16 @@ step 插值的属性用离散控件，不显示连续缓动入口。参考系类
 
 值控件落在 `src/features/effects/panels/PropertyValueForm.vue`，按 `controlKindOf` 九路分派；
 提交目标由 `resolveTarget` 统一解析；校验与拒绝代码在 `valueControls.ts`。
+动画控件在 `AnimationControls.vue`（菱形组），由值控件按行类型挂载。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
 | 值控件放 `features/` 之外的共享区 | 放 `src/features/effects/panels/` | 它同时消费 `PanelContext` 与效果领域纯函数；搬到中立区需造第二套数据形状（更糟）。已记录为放宽"features 不含 Vue" |
 | 参考系切换补齐三轴弹窗 | `missingPositionAxes` 返回缺失轴；补齐走一次批量建帧命令 | 与设计一致 |
 | 连续提交合并为一个撤销项 | `commit(cmd, 'setValue:clip:path:time')` + 失焦 `endCoalescing()` | 与设计一致 |
+| 每个值控件只有"时钟"一个动画入口 | **四按钮组**：‹ ◇/◆ › + ⏱ | 补充实现（用户裁决）：时钟管"这个属性有没有动画"，菱形管"播放头这一时刻有没有帧"，是两层语义。语义取自 Olive `NodeParamViewKeyframeControl`（`ShowButtonsFromKeyframeEnable`：‹ ◇ › 只在已开动画时可见，时钟永远可见） |
+| — | 菱形点击：有帧删该帧、无帧按回退链建帧（采样值 → 静态值 → 目录默认值） | 与剪辑软件一致；建帧初值与 06-05 的回退链共用 `seedForNewNode` |
+| 采样直接吃全量关键帧 | **先按范围过滤**（`framesInRange` + `sampleValue` 的 `timing` 参数） | 修正实现缺陷：源码 `object-model.md` §3.4 第 1 步是"取范围内关键帧"。原实现下，片段 duration=4、帧在 `[0,9]`、播放头 t=3 时会拿 `[0,9]` 插值而不是只用首帧——轴外帧污染轴内采样。越界帧仍保留在文档里（§3.5：正常语义，不报错） |
 
 ### 验收要点
 

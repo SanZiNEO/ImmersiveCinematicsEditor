@@ -115,7 +115,7 @@ src/workbench/shared/     工作台共享交互（机制，不含业务）
 | `node --experimental-strip-types src/core/doc/verify.ts` | 03 文档模型 + 06 撤销合并 | 198 ok / 0 fail |
 | `node --experimental-strip-types src/workbench/verify.ts` | 04 工作台骨架 | 171 ok / 0 fail |
 | `node --experimental-strip-types src/workbench/verify-05.ts` | 05 服务层 | 51 ok / 0 fail |
-| `node --experimental-strip-types src/workbench/verify-06.ts` | 06 共享交互 + 效果领域纯函数 + 命令层 | 180 ok / 0 fail |
+| `node --experimental-strip-types src/workbench/verify-06.ts` | 06 共享交互 + 效果领域纯函数 + 命令层 + 选择驱动 | 201 ok / 0 fail |
 
 `verify-06.ts` 的覆盖范围（全部走真实实现，不 mock 业务逻辑）：
 
@@ -126,13 +126,17 @@ src/workbench/shared/     工作台共享交互（机制，不含业务）
 5. 轴外与无限片段：轴外计数、无限片段不判轴外。
 6. 局部视口：坐标互逆、缩放锚点不动、缩放上下限、平移不钳制、可见窗口、四条适配命令。
 7. 节点与段几何：事件瞬时节点、播放头命中、选择、事件行无段、段插值、命中测试、框选、行布局、虚拟化。
-8. 缓动采样与烘焙：线性/step/贝塞尔、端点精确、非数值不插值、采样率上下限、烘焙保留起止。
+8. 缓动采样与烘焙：线性 / ANGLE 最短路径 / GEOMETRIC 几何平均 / STEP 端点取后帧、端点精确、
+   非数值不插值、**范围过滤（轴外帧不污染轴内）/ 单帧整段恒值 / 无限片段只排除负时间**、
+   采样数按秒推导与缩放无关、烘焙保留起止。
 9. 值控件与目标解析：九种控件分派、校验拒绝、文本解析、三种提交目标、初值回退链、参考系三轴检查。
 10. 作者态缓动存储：写入 / 删除 / 清空属性 / 剪枝失效段 / 未烘焙摘要。
 11. 作者态写入进撤销栈且不写盘（序列化前后一致）。
 12. 命令层新增成员：enableAnimation / setKeyframeValue / 批量移动 / 批量删除 / 删空帧 / disableAnimation / 粘贴 / 烘焙 / 事件非空约束。
+13. 选择域 → 右栏面板映射：`none` → 脚本属性、`clip/object/keyframe` → 片段属性、
+    `path/rule/binding` 不切。
 
-## 七、端到端验收（`e2e/r06.spec.ts`，9 条全过）
+## 七、端到端验收（`e2e/r06.spec.ts`，12 条全过）
 
 只替身 WebSocket 网络边界；DocStore、命令层、归属策略、Vue 渲染、工作区文件读写全部走真实实现。
 
@@ -147,6 +151,9 @@ src/workbench/shared/     工作台共享交互（机制，不含业务）
 | R6-7 保存重开 | 落盘 JSON 的 `position.x.keyframes` 与内存一致；`fov.keyframes` 保持空数组；文件里**不含** `clipKey` / `authoring` |
 | R6-8 触发器迁移 | 触发器是 `document.right` 的独立面板 tab；属性面板内无 `#selection-tab-trigger`、无内嵌 `.trigger-pane` |
 | R6-9 渲染稳定 | 除 `ws://127.0.0.1:8765` 断连外无未捕获异常 |
+| R6-10 菱形按钮 | 播放头命中节点时菱形是实心 `◆`（`aria-pressed=true`）；点击后变空心 `◇`；撤销回 `◆`；时钟按钮同时存在 |
+| R6-11 属性面板全行 | 属性面板同时出现 `position.x`（有帧）与 `yaw`（静态）；面板内也有菱形控件 |
+| R6-12 选择域切换 | 清空选择后右栏 `activePanelId` 变 `p:core.meta:meta.properties` 且面板渲染出 23 个 meta 字段；选回片段变 `p:core.selection-properties:selection.properties` |
 
 ## 八、实现过程中修掉的真实缺陷
 
@@ -162,6 +169,14 @@ src/workbench/shared/     工作台共享交互（机制，不含业务）
 - 属性面板对 `playControl`（`start_time` / `duration` / `loop` / `loop_count` / `loop_mode`）
   渲染了值控件 → 这些是片段时间几何，由主轴编辑，已从行集合剔除。
 - 删除 05 遗留的 `ObjectPropertyRow.vue`、切片 A 留下的孤儿 `rulerScale.ts`。
+- **采样未按范围过滤**（`sampleValue` 直接吃全量关键帧）→ 源码 `object-model.md` §3.4 第 1 步
+  是"取范围内关键帧"。片段 duration=4、帧在 `[0,9]`、播放头 t=3 时会拿 `[0,9]` 插值，
+  轴外帧污染轴内采样。新增 `framesInRange` + `timing` 参数修正。
+- **选择驱动切换收不到宿主写入**：`DocumentServiceImpl.select()` 直接调 `store.select` +
+  `this.emit()`，不经过 `SelectionServiceImpl.requestSelect`。只订阅 `SelectionService`
+  会漏掉这类选区变化。改为同时订阅 `DocumentService`。
+- **新增面板不出现**：布局在插件激活后构建，但已落盘的 `layout.json` 不含新面板。
+  加 `LayoutService.ensureSlotPanels`，激活后把缺失面板补进声明槽位（只补不改）。
 
 ## 九、已知局限（明确记录，不静默跳过）
 
@@ -192,6 +207,13 @@ src/workbench/shared/     工作台共享交互（机制，不含业务）
    （`math/path/ArcLength.java`、`PathCapability.ANALYTIC_ARC_LENGTH`），线性补帧会把曲线拉直，
    **应当**拦截烘焙。但 06 的 `PropertyRow` 不含片段级 `curve` 信息（路径能力属 07 的
    `paths.collection`），本轮无法判断，未实现。这是跨轮依赖，不是遗漏。
+9. **clip 级字段面板未落位**：`playControl` 五字段（`start_time` / `duration` / `loop` /
+   `loop_count` / `loop_mode`）目前从属性面板剔除、只由主时间轴编辑。用户提出它们应归属
+   「clip 面板」，但面板形态（独立插件 `core.clip` vs 属性面板内的「片段」分组）尚未确定，
+   本轮未实现。这是待裁决项，不是遗漏。
+10. **面板内部交互待继续打磨**：本轮把剪辑软件的参数行形态（菱形组、值控件、选择驱动切换）
+    做成可用的骨架；用户明确表示后续继续优化，故未做拖拽分隔条、列宽记忆、精确
+    `scrollIntoView` 等交互细节。
 
 ## 十、与 legacy（旧 WebUI）的对照结论
 

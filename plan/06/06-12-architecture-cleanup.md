@@ -105,7 +105,10 @@
 | 拆胖控制器：图 | 拆出 `layoutScheduler.ts`（分批出图/BFS 顺序/视口内动画）+ `layoutPersist.ts`（三条防抖写入） | 与设计一致；`state.ts` 用 re-export 保持调用点不变 |
 | 拆胖控制器：时间轴 | 拆出 `viewState.ts`（滚动/尺寸/紧凑档）+ `interactionState.ts`（工具/吸附/活动轨/剪贴板） | 与设计一致 |
 | 触发器字段面迁出属性面板 | 新插件 `core.behavior`（panelId `behavior.triggers`），组件 `git mv` 保留历史 | 与用户裁决一致（触发器需要独立面板） |
-| 全部自检与两套 e2e 保持通过 | `verify.ts` 171 ok、`verify-05.ts` 51 ok、e2e 36 passed | 与设计一致 |
+| — | **新增 `core.meta` 插件**（panelId `meta.properties`）：脚本属性面板，按 02 目录 23 个 meta 字段分组渲染 | 补充实现（用户裁决）：对应剪辑软件的「草稿参数」。原架构没有脚本级字段入口。同时扩 `DocumentService.metaObject()`——`view().meta` 只暴露 6 个字段，面板需要完整对象 |
+| — | **新增 `SelectionPanelSync`**：选择域驱动右栏标签切换（`none` → 脚本属性；`clip/object/keyframe` → 片段属性；`path/rule/binding` 不切） | 补充实现（用户裁决）：按选择区域自动切换。同时订阅 `SelectionService` 与 `DocumentService`——宿主 `documents.select()` 不走 `requestSelect`，只订前者会收不到 |
+| — | **`LayoutService.ensureSlotPanels`**：激活后把注册表里已注册、布局中缺失的面板补进声明槽位 | 补充实现：布局在插件激活后构建，但已落盘的旧 `layout.json` 不含新增面板，不补的话新面板永远不出现。只补不改（不动用户排列/比例/活动标签） |
+| 全部自检与两套 e2e 保持通过 | `verify.ts` 171 ok、`verify-05.ts` 51 ok、`verify-06.ts` 201 ok、e2e 39 passed | 与设计一致 |
 
 **未完成项（明确记录，附原因）**：`core.timeline/TimelinePanel.vue` 的手势状态机尚未改用
 `workbench/shared/gesture.ts`。原因不是遗漏，是**语义差异**：
