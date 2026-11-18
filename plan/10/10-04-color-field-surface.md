@@ -1,6 +1,6 @@
 # 10-04 · 调色字段面：CAMERA lane 与 ADJUST master
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`CAMERA` 片段的 57 个 lane 调色通道 + 10 条曲线，`ADJUST` 轨的 59 个 master 调色通道 + 10 条曲线 + LUT 与层混合
 > 关联：10-05 窄组与控件、10-06 曲线、10-07 LUT 与层混合、10-09 媒体检查
 
@@ -103,13 +103,17 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-调色字段面与两层分离尚未落地。
+`shared/colorSpec.ts` 按字段目录导出 `COLOR_GROUPS`（基础校色 / HSL / 白平衡 / 通道系数 / 通道混合 / 曲线强度 / Lift·Gamma·Gain / Hue 曲线强度 / 六色带 / 风格化 / 层级混合 / 曲线定义 / LUT 定义等），并区分 `CAMERA` 与 `ADJUST`：前者不出现 `lut`、`lut_input_gamma`、`lut_strength`、`blend_mode`、`blend_amount`，后者保留 LUT 与层混合。`core.audio/index.ts` 对 57/59 通道全部注册字段面与专用控件；未注册路径仍由 06 的通用控件只读/未知组处理，不删通道。`COLOR_ANIMATED_PATHS` 决定“开时钟/有帧走效果面板”；曲线定义、`lut`、`lut_input_gamma`、`blend_mode` 保持 value-only。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| 57/59 通道 + 10 曲线 + LUT/混合的字段面 | 未实现 | — |
+| 57/59 通道 + 10 曲线 + LUT/混合的字段面 | 全部接入；`CAMERA` 与 `ADJUST` 各自注册 | 10-04 §4.3 的 12 个窄组之外，曲线定义 10 条与 LUT 定义另列显示组，最终 `COLOR_GROUPS` 为 14 组；不合并、不删字段 |
+| 12 个窄组 | 14 个显示组 | 曲线定义/ LUT 定义需要独立可编辑落点；归入窄组会让 value-only 字段混进动画组 |
+| 未知通道只读扩展组 | 沿用 06 的未知路径只读处理；字段面不注册未知路径 | 无 |
+
+验证：`verify-10` 覆盖 57/59 通道数、CAMERA 无 LUT、ADJUST 有 LUT、范围/默认值、曲线定义 value-only；`summary ok=96 fail=0`。真实 Electron 冒烟 `R10-2` 通过：ADJUST 渲染调色组，CAMERA 不出现 LUT 控制；逐字段输入交互未逐项点击。
 
 **验收要点**
 

@@ -1,6 +1,6 @@
 # 10-07 · LUT 与层混合
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`ADJUST` 的 `.cube` LUT 路径、输入 gamma、LUT 强度、混合模式与混合量，以及同脚本多轨的覆盖语义
 > 关联：10-04 字段面、10-05 窄组与控件、10-08 资源抽屉、10-09 媒体检查
 
@@ -98,13 +98,18 @@ LUT 步由三个字段共同决定：路径、输入 gamma、强度。路径为�
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-LUT 字段、层混合与覆盖提示尚未落地。
+`ColorLutField` 只写相对 `resource/` 的 `.cube` 路径：输入框、资源抽屉填入、资源清单命中/未找到/不可用提示；不读 `.cube` 内容、不解析颜色、不做预览。`ColorLutGammaField` 校验 `>0`，`ColorLutStrengthField` 显示 0..1 强度并在无 LUT 时提示“不生效”（仍可编辑，不强制写 0）。`ColorEnumField` 提供 `normal/multiply/screen/soft_light/overlay` 五种模式并提示“同一时刻只有后发布 ADJUST 轨道覆盖前轨、不叠乘”；`ColorBanner` 分别显示多 ADJUST 轨覆盖、同轨重叠、LUT 强度无 LUT、gamma≠1、CAMERA 无 LUT/层混合。`shared/colorSpec.ts` 明确 `lut_input_gamma>0`、无 LUT 时强度运行时不生效、CAMERA 无 LUT。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| `.cube` LUT + 层混合 + 多轨覆盖语义 | 未实现 | — |
+| `.cube` LUT + 层混合 + 多轨覆盖语义 | 字段与提示全部落地；不解析 LUT | 编辑器不实现像素级调色，读 `.cube` 内容没有运行时依据 |
+| 多 ADJUST 轨覆盖提示 | 横幅显示轨道数覆盖说明；同轨重叠另给“只第一个活跃”提示 | 无 |
+| LUT 扩展名错误阻止推送 | 字段标 error；推送/保存的真实拦截由模组 `ObjectValidator.checkAdjust()` 执行 | 编辑器不复制运行时校验器，避免两套规则漂移 |
+| 无 LUT 时强度强制 0 | 只在运行时生效；编辑器 UI 弱化并提示，不静默写 0 | 文档要求“值保留、可选”，保留作者输入 |
+
+验证：`verify-10` 覆盖 `.cube` 扩展名、相对路径、非 `.cube` 拒绝、`lut_input_gamma>0`、无 LUT 强度提示、`blend_mode` 五值、多 ADJUST 覆盖；`summary ok=96 fail=0`。真实 Electron 冒烟 `R10-2` 通过：ADJUST 的 LUT 输入占位与混合控件渲染、CAMERA 不出现 LUT；非法路径拒绝与 `blend_mode` 切换未在 e2e 中逐项点击。
 
 **验收要点**
 

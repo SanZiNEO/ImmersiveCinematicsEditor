@@ -1,6 +1,6 @@
 # 10-09 · 媒体检查与错误状态
 
-> 状态：未实现
+> 状态：已实现
 > 范围：音频、调色、LUT、曲线、监听与资源引用的静态检查，问题分级与定位，资源列表不完整时的检查暂停
 > 关联：10-01 至 10-08 各字段面与抽屉，以及 06 的对象诊断体系
 
@@ -88,13 +88,25 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-检查结果、分级、定位与暂停规则尚未落地。
+`shared/mediaChecks.ts` 生成 M01–M25：资源引用缺失/扩展名/`..` 越界、音频 `sound` 为空/扩展名/路径越界/不可用、包络整段跳过、同轨重叠、监听回落、调色通道越界、LUT 扩展名/路径/`lut_input_gamma`、`blend_mode`、ADJUST 禁止字段、曲线点集/强度/曲线为空、同脚本多 ADJUST 轨覆盖；`sortCheckItems` 按级别排序、`highestSeverity` 取组头级别，`unverified` 用于资源清单不可达/截断/未完成，不伪造缺失。`MediaChecksPanel` 注册进 `resources` 抽屉检查页签：当前片段/全局范围、级别计数、按资源/音频/调色分组、定位到属性面板/曲线抽屉/meta.properties/资源抽屉/时间轴，定位只改选择与面板焦点、不改文档、不移播放头。`MediaResourcesDrawer` 在失败时保留旧列表，截断时显示“可能未列全”并暂停缺失检查。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| 文档检查 + 抽屉状态 + 定位 + 暂停规则 | 未实现 | — |
+| M01–M25 静态检查 + 分级 + 定位 + 暂停 | 25 个代码全部落地；级别 block/error/warning/info/unverified | 没有新增运行时检查；资源清单不完整时缺失类检查降为 `unverified` |
+| 资源请求失败保留旧列表 | 实现：失败时旧列表不清空，选择不丢，检查暂停 | 资源抽屉首次无旧列表时只显示错误条，不生成假文件 |
+| 图片组 png/gif | 与 10-08 一致 | 模组 `ResourceFileService.IMAGE_EXT` 还接受 jpg/jpeg；这是本轮按 09 裁决 + 10-08 表格产生的口径差异，不是编辑器漏接。若后续要按模组白名单放行 jpg/jpeg，需要改 10-08/10-09 表格并同步检查扩展名 |
+| 真实游戏播放确认 | 未运行（当前环境没有游戏实例）；不能把编辑器预览/静态检查当成游戏结果 | 环境项，明确记录，不静默跳过 |
+| Electron 字段面与抽屉冒烟 | 4/4 通过；同时修复共享面板四处集成缺陷：`ClipPropertyRow` 的 `fieldSurfaceComponent` 分支缺 `objects`（ADJUST 调色控件首次渲染崩溃）、`OrientationGroupEditor` 的脚本函数访问未解包 `bar`、`ClipPropertiesPanel` 对 AUDIO/ADJUST 仍渲染 07 的位置/朝向条与模型区、插件晚于首次渲染注册自定义控件导致不刷新（`customFields` 增加 `customFieldsRevision` 并由 `ClipPropertyRow` 订阅） | 前两者是 10 字段面必需的入参与共享文件运行时错误；第三处按 07-02/07-09 的 CAMERA-only 语义加 `hasPositionBars`/`hasMotionModels` 守卫，否则 AUDIO 面板会被 07 控件污染，违反 10-01 的 13 字段面；第四处是异步插件装配的响应式缺口。四处均非 10 的设计字段 |
+
+验证：
+
+- `node --experimental-strip-types src/workbench/verify-10.ts` → `summary ok=96 fail=0`；覆盖音频/调色/曲线/检查主要纯函数与字段面。
+- `npm run verify` → 通过。
+- `npm run build` → 通过（Vite 生产构建，插件装配无缺失）。
+- `npx vue-tsc --noEmit` 全量仍为 exit 2，剩余 2 处错误均在并行轮次路径：`src/plugins/core.behavior/panels/TriggerRequirementsSection.vue(128,7)`（TS2367 条件类型无交集）与 `src/plugins/core.selection-properties/panels/PositionGroupEditor.vue(80,25)`（TS2589 类型实例化过深），不在本轮代码路径；本轮路径（`core.audio`、`workbench/api`、`workbench/app`、`builtin.ts`、`verify-10`）过滤后无错误；`OrientationGroupEditor` 的类型/运行时错误均已由 `bar.value` 修复。
+- 真实 Electron UI 冒烟（`e2e/r10.spec.ts`）：`4 passed`（最终运行使用独立 5174、关闭 HMR 的 Vite 服务，避免并行轮次写文件触发整页刷新；测试仍支持默认 5173）。`R10-1` 确认 AUDIO 13 字段/四组/“文件循环/淡入/淡出”与包络横幅，且 07 的位置条/模型区不污染；`R10-2` 确认 ADJUST 的调色组、矩阵、曲线摘要、LUT 与层混合，CAMERA 不出现 LUT 且保留 07 位置条；`R10-3` 确认资源/检查抽屉与断连降级；`R10-4` 确认无未捕获页面错误。异步字段控件加载需要等待（测试用 `.wf-file-loop`/`.wf-matrix`/`.wf-curves`/`.wf-lut`/`.wf-blend` 作就绪锚点），ADJUST 的组按 10-05 默认折叠，测试显式展开断言涉及的组，不绕过真实折叠。
 
 **验收要点**
 

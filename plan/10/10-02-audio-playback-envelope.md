@@ -1,6 +1,6 @@
 # 10-02 · AUDIO 播放、循环与包络
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`AUDIO` 轨的单活跃片段语义、`file_loop` 与片段循环的两层区分、`fade_in`/`fade_out` 包络、同轨重叠提示
 > 关联：10-01 字段面、10-03 空间与监听、10-09 媒体检查
 
@@ -84,13 +84,17 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-单活跃语义、包络示意、重叠提示与拆轨动作尚未落地。
+`shared/audioSpec.ts` 按 `AudioTrackPlayer.resolveFadeEnvelope` 实现线性淡入/淡出、尾段覆盖淡入、整段跳过与无限片段；`activeAudioIndex` 固定 storage order 第一个活跃片段；`overlappingAudioClips` 只提示后出现片段。`AudioEnvelopeField` 合并 `fade_in`/`fade_out`、绘制 SVG 包络、提示 `fade_in+fade_out>duration` 与同轨重叠；`AudioBanner` 在属性面板片段头区域分别显示片段循环 ×N/∞、文件循环、淡入淡出摘要和重叠 chip。时间轴片段循环仍由 05/07 的片段头负责，本轮不写片段执行循环字段。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| 单活跃片段 + 两层循环 + 包络 + 重叠提示 | 未实现 | — |
+| 单活跃片段 + 两层循环 + 包络 + 重叠提示 | `activeAudioIndex`、`overlappingAudioClips`、`audioEnvelope` 与两个 UI 控件落地 | 重叠提示显示在属性面板顶部横幅，不是时间轴片段头；时间轴片段头不属于 10 的范围 |
+| 尾音重叠不标“双活跃” | 横幅只写“同轨重叠 / 只播第一个活跃片段”，不出现“双活跃” | 无 |
+| `duration<0` 只有淡入 | 包络只画淡入，`fade_out` 控件仍显示并明确提示“值保留但不生效” | 文档要求“值保留”；不禁用输入，避免作者误以为值被删 |
+
+验证：`verify-10` 覆盖线性包络、整段跳过、无限片段、storage order 首个活跃、重叠只提示后一个；`summary ok=96 fail=0`。运行 `npm run build` 通过；真实 Electron 冒烟 `R10-1` 通过，AUDIO 字段面与包络/循环横幅可见（见 10-09）。
 
 **验收要点**
 

@@ -1,6 +1,6 @@
 # 10-03 · AUDIO 空间语义与监听
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`category` 的两类声音语义、`position_mode` 与 `attenuation`、脚本级 `meta.listener` 与镜头听者回落
 > 关联：10-01 字段面、10-02 播放与包络、10-09 媒体检查
 
@@ -89,13 +89,17 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-空间控件、监听卡与回落提示尚未落地。
+`AudioEnumField` 提供 `category`/`position_mode`/`attenuation` 的中文语义选项与提示；`music` 时将 `position_mode`、`attenuation`、`x/y/z` 禁用并保留值。`SliderField` 按 `position_mode` 把 `x/y/z` 标为“听者偏移”或“世界坐标”，并说明实际听者来源；`AudioBanner` 在 `music` 时给出“固定相对玩家、无衰减”的横幅。`meta` 字段面新增 `ScriptListenerField`：声明 `player`/`camera`，按当前文档与播放头区分“以相机为锚点”“播放头空档回落（info）”“无 CAMERA 片段（warning）”，并说明顶层实例由运行时判定；没有自动改 `listener`，提供打开时间轴/跳到第一个 CAMERA 片段的入口。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| 两类声音语义 + 监听卡回落提示 | 未实现 | — |
+| `category=music` 禁用空间控件、值保留 | `x/y/z`、`position_mode`、`attenuation` 禁用；`category` 保持可切换 | 文档 §2.2/§三要求“后三者全部禁用”；`category` 本身是切换开关，不禁用 |
+| 监听两种回落分别给不同级别 | 无 CAMERA 片段 `warning`，播放头空档 `info`；卡上不修改值 | 无 |
+| 提供跳到 CAMERA 轨入口 | warning 时按钮聚焦 `timeline.main`；播放头空档时按钮选中第一个 CAMERA 片段 | 编辑器没有“轨道跳转”单独 API，用面板焦点/片段选择表达；不改变播放头 |
+
+验证：`verify-10` 覆盖监听三态、`music` 忽略空间字段、x/y/z 默认与范围；`summary ok=96 fail=0`。真实 Electron 冒烟 `R10-1` 通过，AUDIO 字段面可渲染；`meta.listener` 专用卡未在本轮 e2e 的单条断言里单独点击，监听三态与回落提示由 `verify-10` 的纯函数覆盖，不把“未点击”写成已验收。
 
 **验收要点**
 

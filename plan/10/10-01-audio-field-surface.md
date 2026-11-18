@@ -1,6 +1,6 @@
 # 10-01 · AUDIO 字段面与音源
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`AUDIO` 轨 13 个既有字段的编辑面、`source` 的两套取值域、`file_loop` 与片段循环的区分
 > 关联：10-02 播放与包络、10-03 空间与监听、10-08 资源抽屉、10-09 媒体检查
 
@@ -96,13 +96,17 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-字段面、音源分流与双面板路由尚未落地。
+`shared/audioSpec.ts` 固定 `AUDIO` 13 字段与四个显示组（音源 / 音量 / 包络 / 空间），`core.audio/index.ts` 注册专用控件并把 `fade_out` 合并进包络控件。`SliderField`、`AudioSourceField`、`AudioEnumField`、`AudioFileLoopField` 均只通过 `PanelContext.commands` 写入；`volume`/`x`/`y`/`z` 有帧后由字段面 `hideWhenFramed` 交给效果面板，`pitch` 数值框不钳制、原样写入。`source` 切换前询问并保留 `sound`，一次提交可撤销；`minecraft` 使用 `registry.query` 候选，未命中只提示“未找到”。`category=music` 时 `x/y/z/position_mode/attenuation` 控件禁用并提示“固定相对玩家、无衰减”，值保留。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| 13 字段、双面板路由、音源双取值域 | 未实现 | — |
+| 13 字段、双面板路由、音源双取值域 | 13 字段全部注册；4 个显示组；`pitch` 数值不钳制；`source` 切换保留原值并二次确认；`music` 禁用空间控件 | `README.md` 的字段表把 `file_loop` 标为“播放”组；10-01 §三明确把它归入“音源”，实现按 10-01 执行，界面另行说明文件循环与片段循环的区别 |
+| value-only 字段不进效果面板 | 只注册属性面板控件；没有动画字段面注册 | 无 |
+| `sound` 为空 block、扩展名/路径 error、清单未命中 warn | `checkAudioSound` 分级实现；保存/推送拦截仍由模组校验器负责 | 编辑器不复制运行时校验器；推送/保存的真实拦截在游戏侧 |
+
+验证：`node --experimental-strip-types src/workbench/verify-10.ts` 覆盖字段数、组顺序、扩展名、相对路径、音源取值域；`summary ok=96 fail=0`。`vue-tsc` 在本轮文件上无错误；真实 Electron 冒烟 `R10-1` 通过：AUDIO 只出现 13 个字段、四组与“文件循环/淡入/淡出”横幅（见 10-09）。
 
 **验收要点**
 
