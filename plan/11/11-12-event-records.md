@@ -1,6 +1,6 @@
 # EVENT 事件记录
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`objects.event` 的离散记录、命令与位置字段、时间与触发语义、列表与摘要
 > 关联：11-14 事件标记与 seek、11-15 校验、02/06 的对象结构
 
@@ -98,13 +98,19 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-记录字段、移动语义与触发规则已定，代码尚未落地。
+EVENT 记录字段面与校验落在 `src/features/behavior/events.ts`、目录 `src/core/schema/catalog/behaviorEvents.ts`；唯一详情编辑器在行为抽屉事件页签 `EventRecordsTab.vue` / `EventRecordDetail.vue`，效果面板与片段属性面板只留摘要 + "在行为页打开"。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 行为抽屉内提供事件详情编辑（效果 / 属性面板亦有编辑器） | 详情表单只挂载在 `drawer/events/EventRecordsTab.vue:29` → `EventRecordDetail.vue`；`core.clip-effects/panels/ClipEffectsPanel.vue:299-309` 与 `core.selection-properties/panels/ClipPropertiesPanel.vue:592-642` 收成摘要 + `openInBehavior` 跳转；`core.clip-effects/panels/EventRecordEditor.vue` 文件保留但全仓无引用 | 用户裁决：同一份记录只有一个详情编辑器 |
+| 唯一记录不可删，说明需删整个事件对象 | `events.ts:618-623` `isLastRecord`（同对象 `siblingCount <= 1`）；`EventRecordDetail.vue:84` `isLast`、`:715-716` 删除按钮禁用、`:722` 原因文案"要让片段不再有该通道，请删除整个事件对象" | 与设计一致 |
+| 记录四字段白名单，未知成员拒绝 | 目录 `behaviorEvents.ts:75-120`（`command`/`event_type`/`position`/`id`）；未知成员 L73 block（`events.ts:91`） | 与设计一致 |
+| 同刻冲突 L71、超时长 L72 warn、多 EVENT 轨 L84 warn | `events.ts:103` `sameTime` L71、`:102` `outOfDuration` L72、`:104` `multiEventTrack` L84；`:305-308` 多轨提示不自动合并 | 与设计一致 |
+| 记录可删除、复制、上下移动 | 删除 `EventRecordDetail.vue:284`、复制 `:302-325`（`duplicateRecordCommand`，偏移 `RECORD_COPY_OFFSET` 秒）；未提供独立"上移 / 下移"按钮，重排由改时间完成，列表按局部时间升序 | 本文 §三"上下移动"在实现里落到时间字段，以代码为准 |
+| 占位 / 前导斜杠 / 超时长摘要文案 | `events.ts:485-496` `describeEventRecord`；前导斜杠 L78 warn（`events.ts:96`），保留原文 | 与设计一致 |
+| 记录 `id` 不参与运行时身份 | 目录 `behaviorEvents.ts:115-118`：运行时身份 = 播放实例 + 片段 + 对象路径 + 事件下标；`id` 运行时忽略、不自动生成 | 与设计一致 |
 
 ### 验收要点
 

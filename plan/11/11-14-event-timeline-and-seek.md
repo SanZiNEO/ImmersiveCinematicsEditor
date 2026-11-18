@@ -1,6 +1,6 @@
 # 事件时间轴与 Seek
 
-> 状态：未实现
+> 状态：已实现
 > 范围：事件标记的位置与外观、选中与定位、seek 的前跳后跳与暂停语义、循环与新实例
 > 关联：11-12 EVENT 记录、11-13 MOD_EVENT 记录、05 主时间轴
 
@@ -93,13 +93,21 @@ seek 语义分三种情况：
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-标记规则与 seek 语义已定，代码尚未落地。
+标记层纯逻辑落在 `src/plugins/core.timeline/eventMarkers.ts`，`TimelinePanel.vue` 渲染三种几何态；聚合组展开后逐条定位 / 预览，独立片段与无起点标记不进入拖动手势；定位先打开行为抽屉页签，再交记录身份。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 跟随片段的内联标记 | `positioned`：`eventMarkers.ts:291` 取得到活片段几何，全局时间按活起点重算（`:299`），片段移动后跟随、局部时间不变 | 与设计一致 |
+| 独立片段标记按全局时间画在独立片段带并标注来源 | `standalone`：`:292` 标记独立片段，`:306` 独立分组键；`TimelinePanel.vue:107-110` 画进轨道区下方独立片段带，`:1709` 悬停卡标注"来源："片段名 | 与设计一致 |
+| 取不到起点的记录不伪造横坐标 | `unpositioned`：`:305-307` 独立成组进提示区；`TimelinePanel.vue:99-104` 无起点提示列表，不画横坐标 | 与设计一致 |
+| 预览提前一小段；时间为 0 / 无几何不可预览 | `PREVIEW_LEAD = 0.3`s（`eventMarkers.ts:17`）；`previewStartOf` `:374-381` = `start + max(0, localTime - lead)`，末尾记录退到末尾之前；`canPreview` `:366-368` 要求 positioned 且 `localTime > 0`；`state.ts:551-558` 就地提示不夹取 | 与设计一致 |
+| 聚合组展开后逐条可定位 / 预览 | `groupMarkers` `:333-363`；`TimelinePanel.vue:1682-1693` 展开后逐条标记，`:1706-1714` 悬停卡每条"定位到事件 / 预览此事件" | 与设计一致 |
+| 标记可拖动改时间，范围限片段内 | 仅主轴行内片段可拖：`TimelinePanel.vue:135-138` `!view.attached` 直接 return，不调 `beginMarkerDrag`；独立片段 / 无起点标记不参与拖动 | 拖动边界按几何态收窄；以代码为准 |
+| 单击选中行为页记录，先开抽屉再交身份 | `TimelinePanel.vue:148-149` 先 `openBehaviorDrawer()`（`:124` `ctx.requestOpenDrawer('behavior')`），再 `selectMarker`；`state.ts:532-539` `requestFocus({target, surface:'behavior-drawer'})` | 先开页签再交记录身份，避免抽屉未开时身份丢失 |
+| 面板聚焦与记录身份是两条互补通道 | `focusPanel()`（`TimelinePanel.vue:1246-1250`）走既有 `focusService.focusRegion` 聚焦面板；`features/behavior/focus.ts` 只传 `RecordRef` 身份，不构成第二套选中 | 两条通道分工互补，与设计一致 |
+| 标记层开关是会话状态，关闭只隐藏不删记录 | `state.ts:519-521` `toggleMarkersVisible`，不写文档 | 与设计一致 |
 
 ### 验收要点
 

@@ -1,6 +1,6 @@
 # 触发器条件树与 27 种条件
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`meta.triggers[].conditions` 的递归结构、27 种类型的字段面、区域与物品模式、组合器与摘要格式
 > 关联：11-02 声明与悬停摘要、11-05 前置、11-15 校验
 
@@ -95,13 +95,15 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-类型清单、递归结构与摘要规则已定，代码尚未落地。
+27 种类型（25 叶子 + `all_of`/`any` 两组合器）条件树的递归编辑落在右栏 `TriggerConditionsSection.vue`/`ConditionNodeRow.vue`/`ConditionLeafFields.vue`，纯函数与校验在 `src/features/behavior/triggerConditions.ts`；条件摘要由 `describeTriggerCondition` 一处生成，列表、详情与脚本图悬停共用。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 条件树在行为页详情区内递归编辑 | 条件树编辑在右栏面板（`src/plugins/core.behavior/panels/TriggerConditionsSection.vue`）；抽屉触发器行只摘要 + 跳转（`BehaviorTree.vue:98-104`） | 用户裁决：同一份记录只允许一个详情编辑器 |
+| 27 种类型按代码顺序列为下拉顺序（本文 §3 列举：`login`、`location`、…、`all_of`、`any`） | 实际下拉顺序以编辑器目录 `src/core/schema/catalog/behaviorTriggers.ts:170-521` 的 `TRIGGER_TYPES` 为准，其顺序对齐 Java `registerTriggerTypes()`（`ImmersiveCinematics.java:24-60`）；本文 §3 列举顺序对应的是 Java `TriggerSchemas.all()`（`TriggerSchemas.java:64-90`）的 map 顺序，两套顺序不一致。数量一致：25 叶子 + 2 组合器 | 以代码/Java 注册顺序为准，本文 §3 列举顺序需修正 |
+| 无显著偏差 | 深度 8 层封顶（`CONDITION_DEPTH_MAX = 8`，`triggerConditions.ts:27、253-254`）；组合器 `list` 非空；子项选择器分"触发器条件/脚本前置"两组（`triggerPanelModel.ts:361-377`）；事件类子项在 `window=0` 时禁用；未知类型与未登记字段只读保留；区域角点归一、缺分量标"永不满足"；摘要三处共用同一出处 | — |
 
 ### 验收要点
 

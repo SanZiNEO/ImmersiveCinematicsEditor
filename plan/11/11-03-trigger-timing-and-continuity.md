@@ -1,6 +1,6 @@
 # 触发器时序与连续语义
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`delay`、`repeatable`、`on_enter`、`exit_buffer`、`poll_interval`、`continuity` 的适用性与呈现
 > 关联：11-02 声明、11-04 条件树、06 脚本属性里的触发器缺省
 
@@ -90,13 +90,16 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-适用性规则与呈现方式已定，代码尚未落地。
+六个时序字段的适用性判定、三层轮询继承与连续性边界落在 `src/features/behavior/trigger.ts`、`src/plugins/core.behavior/panels/triggerPanelModel.ts` 与右栏 `TriggerTimingSection.vue`；不适用项按合同码 L48–L51 路由到结构层诊断。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 时序字段在行为页详情区内编辑 | 时序编辑在右栏 `TriggerTimingSection.vue`；抽屉触发器行只给摘要与"在右栏编辑"跳转（`src/plugins/core.behavior/drawer/BehaviorTree.vue:102-104`） | 用户裁决：同一份记录只允许一个详情编辑器 |
+| 轮询间隔按 触发器 → 脚本缺省 → 类型默认 三层继承，界面显示生效值与来源 | `resolvePollInterval` 按 触发器声明 → 脚本缺省（Script Properties）→ 类型缺省 回落，事件驱动显示"事件驱动，不轮询"（`triggerPanelModel.ts:336-352`）；`poll_interval` 限 1~600 tick，类型级缺省值取自目录 `behaviorTriggers.ts` 各条目 `defaultPollInterval` | 与设计一致 |
+| `dwell`/`window` 为 tick；`window` 只对 `all_of`/`any` 生效，叶子不重复显示；越界/非整数就地报错不夹取 | `dwell`/`window` 为整数 tick，范围 0~1200（`CONTINUITY_MAX_TICKS`，`behaviorTriggers.ts:35`）；`window` 仅组合器根渲染；`sweep` 仅几何语义类型；边界校验见 `trigger.ts` `triggerTimingIssues`、`triggerPanelModel.ts:472-503`。不适用项路由 `L48`（exit_buffer）/`L49`（poll_interval）/`L50`（on_enter）/`L51`（continuity），合同级别见 `src/features/behavior/validation.ts:167-202`、`src/core/doc/structural.ts:184-197` | 与设计一致 |
+| 无显著偏差 | `delay` 按秒；`repeatable` 单次/可重复；`exit_buffer` 需同时满足 已开 `on_enter` + 轮询类 + 条件根有可外扩区域；不适用的旧值只读保留；全零/false 的 `continuity` 可整体省略；未知 `continuity` 键原样保留 | — |
 
 ### 验收要点
 

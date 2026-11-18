@@ -1,6 +1,6 @@
 # 规则动作
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`rules[].actions` 与 `policy.on_timeout` 的九种动作、各自字段约束、与触发器动作的分离
 > 关联：11-06 规则定义、11-10 执行与出口、09/10 的片段字段
 
@@ -92,13 +92,15 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-九种动作的字段面与边界已定，代码尚未落地。
+九种规则动作的字段约束、超时数组命令拦截与 pause/resume 配对诊断落在 `src/features/behavior/actions.ts`，主动作与 `on_timeout` 动作共用抽屉 `action/ActionListEditor.vue`；通道与枚举目录在 `behaviorRules.ts`。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 动作列表在规则详情区内编辑，主动作与超时动作是同一套动作对象 | 两处共用抽屉 `ActionListEditor.vue`，`timedOut` 区分合同约束（`ActionListEditor.vue:31、101-104、119-120`）；动作不引用轨道、不写关键帧，均为运行时临时工件 | 与设计一致 |
+| 九种动作；`camera_set` 六通道；`adjust_set` 十五通道；五调度/五出口归绑定域 | 九动作 `camera_set/overlay_set/adjust_set/goto_clip/pause/resume/exit/play_sound/emit_command`（`behaviorRules.ts:80-90`）；六通道 `position/yaw/pitch/roll/fov/zoom`（`:120-127`）；十五校色通道（`:133-149`）；五调度 `clip_start/clip_complete/local_time/delay/fact`、五出口 `continue/goto/return/end_execution/end_script`、两控制 `observe/hold` 归绑定域（`:93-111`） | 与设计一致 |
+| 无显著偏差 | `channels` 非空不重复、选中通道必给值、未选给值报错；`mode` add/multiply/replace；`priority` 整数；`overlay_set` 仅 fade、颜色六位十六进制、opacity 0~1、`z_index` 整数；`adjust_set` 至少一个通道；`goto_clip` `clip` 必填、`entry_time` ≥ 0、旧 `track`/`at` 拒绝；`pause`/`resume`/`exit` 无参；`play_sound` `sound` 必填、`volume`/`pitch` 有限数；`emit_command` 非空、前导斜杠 warn、超时数组 block；pause/resume 跨规则配对 warn；旧字段只读保留。校验行号见 `actions.ts:105-327、338-380` | — |
 
 ### 验收要点
 

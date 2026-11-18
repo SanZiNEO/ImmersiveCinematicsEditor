@@ -1,6 +1,6 @@
 # 触发器前置与跨脚本依赖
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`meta.triggers[].requires` 的两种形态、三种内置前置、目标解析状态、跨脚本依赖视图
 > 关联：11-04 条件树、11-11 事实检查器、05 脚本图
 
@@ -90,13 +90,18 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-形态规则、解析状态与依赖视图已定，代码尚未落地。
+`requires` 双形态读取、六态解析、跨脚本依赖边与成环标记落在 `src/features/behavior/requirements.ts`、`src/core/graph/requirements.ts`，编辑界面在右栏 `TriggerRequirementsSection.vue`；命令层只提供 add/update/remove 三条前置命令。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 前置在行为页详情区内编辑 | 前置编辑在右栏 `TriggerRequirementsSection.vue`；抽屉触发器行只摘要 + 跳转（`BehaviorTree.vue:98-104`） | 用户裁决：同一份记录只允许一个详情编辑器 |
+| 第 7 轮写法：嵌套对象 `{type, data:{script}}` | 磁盘形状已统一为扁平 `{type, script, ...}`。Java 依据：`ScriptParser.java:1031-1046`（除 `type` 外键入 data）、`ScriptValidator.java:2072`（`validatePrerequisiteRef(reqObj, reqObj, ...)` 把条目自身当 data）、`ScriptValidator.java:2511-2526`（`script` 从顶层读）；写侧 `src/core/graph/requirements.ts:203-230`（`newRequirement` 扁平落盘）；读侧对老嵌套 `data` 降级容忍（`src/core/graph/requirements.ts:61-80` 的 `viewData`/`readEntryScript`），取不到时回退 custom/不可解析，不崩 | 以代码/Java 为准，本文原描述的嵌套 `data` 形态需修正 |
+| 前置条目可上下移动（独立移动命令） | 命令层只有 `trigger.requires.add/update/remove`（`src/core/doc/commands.ts:1155-1193`），无 `move`；内置条目上下移由 remove + add 组成一批（一次撤销），见 `TriggerRequirementsSection.vue:174-198`。自定义/形态非法条目只读：命令层标 `custom_readonly` 拒绝改写（`commands.ts:1174-1176、1187-1189`），面板 `editable` 判定见 `TriggerRequirementsSection.vue:107-111` | 命令层事实：形态非法与自定义类型不提供字段改写通路，移动靠批次组合 |
+| 字符串简写等价 `script_played`，做空串/自引用/存在性检查 | 字符串简写三项检查：空串、自引用、目标存在性（`ScriptValidator.java:2057-2068`；`requirements.ts` `resolveRequirement:107-113`） | 与设计一致 |
+| 解析状态：已解析、缺失、自引用、重复 id、自定义只读（五态） | 代码呈现六态：`resolved`/`missing`/`self_reference`/`duplicate_id_unresolved`/`malformed`/`custom`（`requirements.ts`；面板状态标签）；`malformed` 为形态非法条目单独一态 | 代码事实：本文状态清单需补"形态非法"一态 |
+| 无显著偏差 | 字符串/对象双形态保存时保留原形态；对象改类型保留原 `script`；同目标重复保留多条、图上只画一条边；缺失画悬空桩、自引用不画完整边、环内前置标环；`requiresFingerprint` 只用于并发检测，不在行为页显示 | — |
 
 ### 验收要点
 

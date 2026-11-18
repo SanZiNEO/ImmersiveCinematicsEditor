@@ -1,6 +1,6 @@
 # 规则定义与策略
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`rules[]` 的字段面、`policy` 六个字段、增删复制与 id 事务重命名、引用保护
 > 关联：11-07 条件树、11-08 动作、11-09 绑定、11-10 执行
 
@@ -96,13 +96,17 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-定义字段面与引用规则已定，代码尚未落地。
+规则四键校验、policy 六字段语义、事务性重命名与引用保护落在 `src/features/behavior/rules.ts`，编辑界面在行为抽屉 `RuleDetail.vue`；新建规则默认 id 由 `suggestRecordId` 生成，默认策略投影自目录 `POLICY_DEFAULTS`。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 详情自上而下：身份、条件、动作、策略、绑定、诊断 | 规则定义编辑在行为抽屉 `RuleDetail.vue`（身份/条件/动作/策略/绑定只读/诊断），不在右栏；触发器才走右栏面板 | 与设计一致：规则详情本就归抽屉（11-01 抽屉结构） |
+| 新建规则给默认 id 与默认策略（单次、冷却 0、进入模式、驻留 0、无限等待），条件与动作先留空 | 新建经 `suggestRecordId(ruleIds, 'rule')` 生成默认 id，`createDefaultRule(id)` 条件/动作留空、策略取缺省（`BehaviorDrawer.vue:326-329`；`rules.ts:318-325、48-57`）；空条件/空动作在应用时报错（`rules.ts:215-229`） | 与设计一致 |
+| 改 id 事务性重命名：全部绑定 `rule` 同步更新，一次撤销回退，任一失败整体不应用 | `renameRuleId` 一次性改规则自身与全部 `rule_bindings[].rule`，新 id 非法/被占用/原规则缺失整体抛错，不产生部分写入（`rules.ts:348-389`）；被引用规则删除禁用并列绑定，支持先迁移到另一条规则再删（`RuleDetail.vue:267-286`；`rules.ts:307-313` `bindingsOfRule`） | 与设计一致 |
+| `cooldown`/`dwell`/`timeout` 单位为秒 | 三者均为秒（double），不是 tick；Java 依据 `RuleDefinition.java:14-16、59-62`；代码校验消息与列表摘要按秒（`rules.ts:137、163、179、404-405`） | 本文 §3/验收要点同样写秒，与代码/Java 一致 |
+| 无显著偏差 | `once` 缺省 true；`mode` enter/dwell，切回 enter 保留 `dwell` 值但禁用不清零；`timeout=-1` 无限等待、超时动作只读保留；`on_timeout` 可空；id 字符集同触发器（`RULE_ID_PATTERN`，`src/core/doc/keys.ts:39`）；复制只复制定义、不复制绑定（`rules.ts:331-337`） | — |
 
 ### 验收要点
 

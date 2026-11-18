@@ -1,6 +1,6 @@
 # 校验与诊断
 
-> 状态：未实现
+> 状态：已实现
 > 范围：error/warn/info 三级、合同校验范围、诊断面板与跳转、修复原则
 > 关联：11-02 至 11-14 各字段面、模组校验器口径
 
@@ -97,13 +97,20 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-三级定义、校验范围与修复原则已定，代码尚未落地。
+合同注册表 `CONTRACT_CHECKS` 落在 `src/features/behavior/validation.ts`（L35–L90 连续 56 条），内部问题码经 `src/core/doc/structural.ts` 路由到合同码；行为域夹具 26 件（6 合法 + 20 非法）在 `fixtures/scripts/index.json` 登记。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 合同码从 L35 起连续编号，不插空号 | `validation.ts:46-562` 共 56 条，L35–L90 无缺号、无重复（脚本清点）；L01–L34 归第 7 轮，本文件不占用 | 与设计一致 |
+| 未登记合同码不假回退级别 | `contractCheck` `:568-574`、`severityForContract` `:577-579` 未登记抛 `RangeError` | 与设计一致 |
+| "将被忽略"绝大多数是 error，不按字面降级 | L48（`:171`）/ L49（`:179`）/ L50（`:189`）severity 均为 `error` | 与本文 §2.1 口径一致 |
+| 乒乓模式用在事件轨是 error | L85 error（`validation.ts:507-514`）；Java `ObjectValidator.java:176-183` `rejectPingpong`（AUDIO/EVENT/MOD_EVENT 命中 `pingpong` 即记 issue）；夹具 `behavior-event-pingpong.json` 覆盖 | 仅对内联片段判定；独立片段路径服务端不经 `ObjectValidator.validate`，以真游戏实例验收为准 |
+| 前置目标缺失：有索引判不存在，无索引不判缺失 | 有索引：`REQ_SCRIPT_MISSING_TARGET` → L44 error（`structural.ts:208`）；自引用：`REQ_SELF_REFERENCE` → L44 error（`structural.ts:207`，域内 warn 仅作内部标记）；无索引：`facts.ts:521` / `structural.ts:71` 降级 `unresolved`，不落合同 issue、面板标"未判定" | 无索引时代码不产生合同 issue（不是 L90 info 条目）；以代码为准 |
+| 行为域夹具 6 合法 + 20 非法 | `fixtures/scripts/index.json` 中 `behavior-*` 合法 6、非法 20，共 26 件；README 逐条列判定类别、内部码、合同码与级别 | 与设计一致 |
+| 超时动作里的命令动作是编辑器合同错误 | 域内 `actions.ts:313` `ACTION_COMMAND_IN_TIMEOUT`；合同 L68 error（`validation.ts:352-359`）；`foldSeverity` `:585-590` 把 block/error 折叠为面板 error | 与设计一致 |
+| 五级校验时机、四条禁止自动修复 | `VALIDATION_TIMING` `:593-599`；`FORBIDDEN_FIXES` `:602-607` | 与设计一致 |
 
 ### 验收要点
 

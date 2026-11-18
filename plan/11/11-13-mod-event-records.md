@@ -1,6 +1,6 @@
 # MOD_EVENT 事件记录
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`objects.mod_event` 的离散记录、事件名与数据树、对象级缺省、与内置播放器的关系
 > 关联：11-12 事件记录、11-14 时间轴语义、11-15 校验
 
@@ -92,13 +92,20 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-记录字段、数据编辑与继承规则已定，代码尚未落地。
+MOD_EVENT 记录与对象级缺省落在 `events.ts`、`drawer/events/objectDefaults.ts` 与 `EventRecordDetail.vue`；对象级 `event_type`/`data` 走 `object.setValue`（保关键帧）、不回填已覆盖记录；数据结构化为**双视图**（默认结构化键值编辑 + 原始 JSON 视图，共用同一份草稿），顶层非对象时不给键值视图；内置播放器不消费，全页无"生效 / 未生效"状态位。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 对象级缺省可编辑，改对象级不批量改写已有记录 | `objectDefaults.ts:70-81` `buildSetObjectDefaultCommand` 构造 `object.setValue`；`commands.ts:1432-1447` 只写 `object.value`、保留 `keyframes`；`objectDefaults.ts:9-10` 注明不回填；`EventRecordDetail.vue:517` 标注"只影响未覆盖（未显式写该字段）的记录；已写记录保持不变" | 与设计一致 |
+| 来源标注三态：记录级写入 / 继承对象级 / 两边未写 | `EventRecordDetail.vue:432-441`（event_type explicit/inherited/missing）、`:443-450`（data 四态归并）、`:460-469` 徽标文案三态 | 与设计一致 |
+| 删键时移除该键，不写成 `null` | `objectDefaults.ts:53-54` / `:60-61` 补丁为 `null` 时 `delete` 键；结构化视图的删键同样重建对象、剔除该键（`DataObjectEditor.vue:49-55`） | 与设计一致 |
+| 内置播放器不消费该轨，不显示生效 / 未生效 | Java `ModEventTrackPlayer.java:11` 占位实现，`isActiveAt` 恒 false；`EventRecordDetail.vue:533` 固定横幅"内置播放器不消费该轨，这里只保证格式与落盘，不显示生效 / 未生效"，全页无生效状态位 | 与设计一致 |
+| data 双视图：默认结构化键值编辑 + 原始 JSON 视图 | 已落地：`drawer/events/DataObjectEditor.vue`（结构化区 124-146、原始 JSON 区 148-156、`switchView` 105 切回前先把文本解析回草稿）、`DataValueCell.vue`（类型下拉 `changeKind`:43、标量与 null 控件 49-62、对象折叠递归 107-113、数组按下标 `updateElement`/`removeElement`/`addElement`:63-80）、`dataEditing.ts` 的 `coerceText` 保证 string→number 落盘是数字；记录级接入 `EventRecordDetail.vue:656-659`、对象级接入 `:486-495`；顶层非对象不给键值视图（`:650-654`），只读展开 + `L82` | 与设计一致 |
+| 禁止键 `command`/`position`/`id` 出现即拒绝 | 目录 `behaviorEvents.ts:159` `MOD_EVENT_FORBIDDEN_KEYS`；L80 block（`events.ts:98`） | 与设计一致 |
+| data 顶层必须是对象、数字必须有限 | L82 data 顶层非对象、L83 数字非有限（`validation.ts:480-496`）；`objectDefaults.ts:88-110` 对象级同口径校验 | 与设计一致 |
+| 唯一记录不可删 | 同 11-12：`events.ts:618-623` 按同对象判定；`EventRecordDetail.vue:715-722` 禁用并说明 | 与设计一致 |
 
 ### 验收要点
 

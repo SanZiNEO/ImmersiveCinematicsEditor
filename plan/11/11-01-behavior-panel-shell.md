@@ -1,6 +1,6 @@
 # 行为抽屉与脚本结构树
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`behavior` 抽屉的结构树、详情与依赖页签、选择模型、草稿提交、错误隔离
 > 关联：04 抽屉容器与焦点、05 脚本图悬停摘要、11-02 起的各字段面
 
@@ -87,13 +87,22 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-面板结构与选择模型已定，代码尚未落地。
+行为抽屉外壳、四组树、记录级草稿与跨面板定位通道均已落地（`src/plugins/core.behavior/drawer/**`、`src/features/behavior/{focus,summary,index}.ts`）；触发器详情按用户裁决留在右栏 `behavior.triggers` 面板，抽屉的触发器组只做摘要与"在右栏编辑"。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 插件 `core.behavior-panel` | 插件 id 为 `core.behavior`（`BEHAVIOR_PLUGIN_ID`），`behavior` 页签在 `manifest.ts:43` 注册，`tabId:'behavior'`、`order:30`、`minHeight:160`、`keepAlive:true`、`available: ctx => ctx.pageId === 'document'` | 04 起插件 id 就是 `core.behavior`，本文旧名属笔误，以代码为准 |
+| 抽屉内提供触发器详情编辑 | 触发器组只有摘要行 + "在右栏编辑"；身份、类型、条件、前置、时序表单全在右栏 `behavior.triggers` 面板 | 用户裁决：同一份记录只有一个详情编辑器，不得出现第二套触发器字段面 |
+| 跨面板只提"焦点"，未定义记录身份通道 | 新建 `features/behavior/focus.ts`：单槽一次性队列，`takeFocus(surface)` 消费，`surface = 'right-panel' \| 'behavior-drawer'`，只传 `RecordRef` 身份，不改主选择 | 04 的焦点端口只管面板，传不了记录身份；需要一条窄通道避免各面板各建一套选中 |
+| 列表、详情、悬停各自组织摘要文案 | 统一入口 `features/behavior/summary.ts` 的 `describeSummary` 判别联合 + `SUMMARY_ENTRY` 登记表（7 条），三处共用 | 同一记录在列表/详情/悬停必须同一句话，验收可直接断言同一函数 |
+| 抽屉单例 | `DrawerTabContribution` 类型无 `singleton` 字段；单例由注册表 `idKey = tabId` 保证，全仓 `tabId:'behavior'` 仅一处 | 类型层不提供该开关，重复注册在注册期即被拒 |
+| 被绑定引用的规则可"迁移绑定后再删" | 命令层无改 `binding.rule` 的命令：用 `binding.remove` + `binding.add` + `rule.remove` 组成一个 `commitBatch`，一次撤销，不级联删绑定 | 复用既有的 16 条命令，不为一种交互新增命令 |
+| 树直接读文档快照 | `buildBehaviorModel(root, clips)` 每次从 `documents.root()` 深拷贝现算，不缓存文档副本 | 文档现算、不伪造事实；缓存副本会与并发编辑不同步 |
+| 可达性诊断按片段时间线判定 | `refs.clips` 暂留空 → 可达性诊断降级为"缺数据"，不下结论 | 片段时间线事实由时间轴面提供，本轮未接该事实表 |
+| 规则 / 绑定 / 事件可排序 | 本轮未做重排按钮，只保留"排序仅影响阅读"的语义 | 本文只规定排序语义，未要求本轮 UI |
+| 记录级草稿一次撤销 | 字段、条件、id、类型进草稿批次 `commitBatch`；前置 add/update/remove 是独立即时命令，不并入草稿批次 | 命令层前置命令没有草稿载荷通道，硬并会让"应用"变成两次撤销 |
 
 ### 验收要点
 

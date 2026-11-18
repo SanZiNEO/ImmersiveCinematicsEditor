@@ -1,6 +1,6 @@
 # 触发器声明与身份
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`meta.triggers` 的声明、身份规则、固定播放动作、列表摘要与脚本图悬停摘要
 > 关联：11-04 条件树、11-05 前置、05 脚本图悬停
 
@@ -89,13 +89,16 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-声明面、身份规则与悬停摘要格式已定，代码尚未落地。
+声明面、身份派生、重复 id 拦截与"触发后"只读卡落在右栏 `behavior.triggers` 面板与 `src/features/behavior/trigger.ts`；新建草稿预填未占用的可读 id（`trigger_N`），已有 id 可清空且身份回落 `type#index`；脚本图悬停摘要落在 `src/plugins/core.script-graph/hoverSummary.ts`，与列表、详情共用同一套条件摘要。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 详情在行为页内分四段编辑：身份、触发后、条件与前置、诊断 | 触发器身份、类型、条件、前置、时序的编辑全部在右栏 `behavior.triggers` 面板（`src/plugins/core.behavior/panels/TriggerPane.vue`、`TriggerIdentitySection.vue`、`TriggerActionCard.vue`）；行为抽屉触发器组只渲染摘要行与"在右栏编辑"跳转（`src/plugins/core.behavior/drawer/BehaviorTree.vue:98-104`；`BehaviorDrawer.vue:368-371` 经 `requestFocus` 切到右栏） | 用户裁决：同一份记录只允许一个详情编辑器，抽屉内不得出现第二套触发器表单 |
+| 新建触发器默认 `login` 并生成可读 id | `suggestTriggerId(existing)`（`triggerPanelModel.ts:456`）从 `trigger_1` 起递增、避开已占用 id（置空条目不算占用）；`emptyTriggerDraft(existingIds?)`（`:467`）把建议值预填进草稿，`TriggerPane.vue:299-300` 在新建时传入既有显式 id 集合。建议值只存在本地草稿，`trigger.add` 应用时才落盘，取消不留空对象 | 与设计一致 |
+| 清空 id 后列表显示生成身份 | 允许清空：`trigger.setId` 在 `value === ''` 时**删除 `id` 键**（不写空串、不写 null），身份回落 `type#index`（`src/core/doc/commands.ts:1948-1950`；Java 依据 `ScriptParser.java:996-1007`：缺省 / JSON null 合法，空串才是解析错误）。选中按声明下标兜底（`TriggerPane.vue` 的 `selectedIndex`），置空或撤销后仍停在同一记录；字段旁显示"身份回落为 `login#0`（正常状态，不参与唯一性冲突）" | 与设计一致 |
+| 无显著偏差 | 27 类型下拉全列；重复 id 两条同标并阻止应用；无动作/目标选择器，只读卡文案 `TRIGGER_ACTION_CARD_TEXT`；切类型后旧条件进只读块并可清理；列表行给出类型、身份、单次/可重复、叶子数、前置数、最高问题级别；悬停卡列全部触发器、完整条件树与全部前置，摘要与列表共用 `describeTriggerCondition` | — |
 
 ### 验收要点
 

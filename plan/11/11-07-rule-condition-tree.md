@@ -1,6 +1,6 @@
 # 规则条件树
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`rules[].condition` 的 12 种类型、根与子项的两种形态、时间与事实语义、8 层嵌套
 > 关联：11-06 规则定义、11-11 事实检查器、11-15 校验
 
@@ -97,13 +97,15 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-12 种类型、两种形态与事实语义已定，代码尚未落地。
+12 种规则条件（8 状态叶子 + 2 事实叶子 + 2 组合器）的根平铺/子项两层形态、引用解析与 8 层封顶落在 `src/features/behavior/ruleConditions.ts`，编辑在抽屉 `condition/ConditionNodeEditor.vue`、`ConditionTreeEditor.vue`；类型白名单独立于触发器 27 类型。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 规则条件树在行为页详情区内编辑 | 规则条件树编辑在行为抽屉 `condition/ConditionNodeEditor.vue`；不进右栏，也不复用触发器 27 类型白名单 | 与设计一致：规则条件归抽屉 |
+| 12 种类型分三组：8 状态叶子、2 事实叶子、2 组合器 | 类型清单：状态 `time/location/facing/biome/dimension/camera_pos/camera_facing/camera_fov`，事实 `clip_fact/rule_fact`，组合器 `all_of/any`（`src/core/schema/catalog/behaviorRules.ts:43-74`）；选择器按状态/事实/组合分组，不混入触发器类型 | 与设计一致 |
+| 无显著偏差 | 根节点平铺字段、组合器子项包 `conditions`；`time` 的 `at` 与 `from`/`to` 互斥；`location` 维度精确匹配；`camera_pos` 方体优先、球形被忽略并警告；`clip_fact` 未知片段 block、不可达 warn；`rule_fact` 未知绑定 block、自绑定 warn；深度 8 封顶（`RULE_CONDITION_MAX_DEPTH = 8`，`behaviorRules.ts:77`；`ruleConditions.ts:120-122`）；未知类型/未知键 block；旧字段只读保留 | — |
 
 ### 验收要点
 

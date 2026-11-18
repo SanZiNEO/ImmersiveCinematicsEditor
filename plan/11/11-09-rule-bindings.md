@@ -1,6 +1,6 @@
 # 规则绑定
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`rule_bindings[]` 的字段面、时间门、控制方式、五种调度、五种出口覆盖与引用保护
 > 关联：11-06 规则定义、11-08 动作、11-10 执行与出口、11-07 的 `rule_fact`
 
@@ -99,13 +99,20 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-绑定字段面与出口归属已定，代码尚未落地。
+绑定字段面落在 `src/features/behavior/bindings.ts`（gate / control / 五调度 / 五出口校验、引用保护与静态诊断），详情分区在 `src/plugins/core.behavior/drawer/BindingDetail.vue`；调度与出口枚举取自 `src/core/schema/catalog/behaviorRules.ts`，被引用规则删除前以迁移批次落地，不级联删绑定。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 五种调度、五种出口枚举 | 目录 `behaviorRules.ts:93-99` 五种调度（`clip_start`/`clip_complete`/`local_time`/`delay`/`fact`）、`:102-108` 五种出口（`continue`/`goto`/`return`/`end_execution`/`end_script`），`bindings.ts:21-25` 复用目录枚举 | 与设计一致 |
+| `gate.at` 越界报错而不是夹取 | 编辑器 `bindings.ts:150-151` `BINDING_GATE_OOB`（error，文案"越界报错，不夹取"）；Java `RuleCollectionParser.java:317-324` `parseGate` 越界抛 `ScriptParseException` | 双端同口径，与设计一致 |
+| 未知规则 / 片段引用解析期 block | 编辑器 `bindings.ts:78` `BINDING_RULE_UNKNOWN`、`:230` `BINDING_SCHEDULE_CLIP_UNKNOWN`、`:244` `BINDING_SCHEDULE_BINDING_UNKNOWN`；Java `RuleCollectionParser.java:245`（`.rule`）、`:251`（`.clip`）解析期抛错 | 与设计一致 |
+| 被绑定引用的规则删除前迁移引用 | 命令层无改 `binding.rule` 的命令：`BehaviorDrawer.vue:264-277` 用 `binding.remove` + `binding.add` + `rule.remove` 组一个 `commitBatch`（`:275`），一次撤销，不级联删绑定 | 复用既有命令，不为一种交互新增命令 |
+| 重命名 id 事务性同步调度与条件树引用 | `bindings.ts:538` `renameBindingId` 一次性改绑定自身、全部 `schedule.fact.binding` 与条件树 `rule_fact.binding`；引用位置收集在 `:488`（调度）/`:517`（条件树）；`BindingDetail.vue:197` 标注一处失败整体不应用 | 与设计一致 |
+| 绑定 `exit` 归属四条说明；无 `goto_clip` 时提示未被使用 | `BindingDetail.vue:342-345` 四条归属说明常显；`:345` 规则动作里没有 `goto_clip` 时显示"该出口未被本绑定 goto 使用" | 与设计一致 |
+| 目标片段被删除时绑定不能应用 | `BindingDetail.vue:61` `missingClip`，`:216` 红框"片段不存在：本绑定不能应用，请先修复片段引用" | 与设计一致 |
+| 三种同义出口混用只提示、不改写 | `bindings.ts:351` `SYNONYM_EXIT_KINDS`（`continue`/`return`/`end_execution`），`:430` `BINDING_EXIT_SYNONYM_MIX`（info），保留作者原文 | 与设计一致 |
 
 ### 验收要点
 
