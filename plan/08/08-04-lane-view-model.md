@@ -1,6 +1,6 @@
 # lane 视图模型
 
-> 状态：未实现
+> 状态：已实现
 > 范围：编辑器对"当前播放头会产出哪些 lane"的只读解释，含顺序、来源、合成参数摘要、覆盖链与调色归属
 > 关联：08-05 镜头检查面板、08-02 叠化与参数过渡、模组 `LaneCompositor` / `ScriptLaneDriver` / `CameraTrackPlayer`
 
@@ -129,10 +129,13 @@ lane 视图、提示、序号、角色、窗口区间全部是界面派生层，
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-尚未开工；形态判定、顺序规则、摘要口径与写盘边界按上述设计执行，无实现偏差可记。
+实现落在 `src/features/camera/lanes/model.ts`：`collectLaneClips` 按轨道数组顺序建立层序（后者在上，不按开始时间排序）；`buildLaneView` 产出 lane 表（`role: single|morph|crossfade`、`top` 徽标、morph 窗口与叠化重叠区、`compositeSummary` 摘要、`COVER_CHAIN_TIERS` 覆盖链）；空态分类 `none|no-camera|gap|morph-tail|crossfade-invalid|no-active`；不产出运行时快照、不写盘。
+
+验证：`verify-08.ts` —— 播放头 1.8s 两条 lane（A 在下、B 在上且 role=叠化、最上层徽标只在 B、重叠区 = B 起点→A 结束、opacity 摘要 0→1）；2.6s 只剩 B；3.4s 为单条 morph lane 且给出出场片段；3.8s 窗口外回到普通 lane。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 叠化在 lane 里是 A/B 两条全屏 lane 各带 role | 同左，不额外产出 crossfade lane | 与运行时一致：叠化不是 lane 类型，只是上层不透明度 |
+
