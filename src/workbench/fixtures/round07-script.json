@@ -1,0 +1,420 @@
+{
+  "meta": {
+    "id": "round07_fixture",
+    "name": "Round 07 Fixture",
+    "author": "editor"
+  },
+  "timeline": {
+    "tracks": [
+      {
+        "type": "CAMERA",
+        "clips": [
+          {
+            "id": "c1",
+            "start_time": 0,
+            "duration": 6,
+            "objects": {
+              "position.x": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 1
+                  },
+                  {
+                    "time": 1,
+                    "value": 1
+                  },
+                  {
+                    "time": 1.25,
+                    "value": 6.123233995736766e-17
+                  },
+                  {
+                    "time": 1.5,
+                    "value": -1
+                  },
+                  {
+                    "time": 1.75,
+                    "value": -1.8369701987210297e-16
+                  },
+                  {
+                    "time": 2,
+                    "value": 1
+                  },
+                  {
+                    "time": 3,
+                    "value": 3
+                  },
+                  {
+                    "time": 4,
+                    "value": 3
+                  },
+                  {
+                    "time": 5,
+                    "value": 5
+                  }
+                ]
+              },
+              "position.y": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "time": 1,
+                    "value": 0
+                  },
+                  {
+                    "time": 1.25,
+                    "value": 0
+                  },
+                  {
+                    "time": 1.5,
+                    "value": 0
+                  },
+                  {
+                    "time": 1.75,
+                    "value": 0
+                  },
+                  {
+                    "time": 2,
+                    "value": 0
+                  },
+                  {
+                    "time": 3,
+                    "value": 0
+                  },
+                  {
+                    "time": 4,
+                    "value": 0
+                  },
+                  {
+                    "time": 5,
+                    "value": 0
+                  }
+                ]
+              },
+              "position.z": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "time": 1,
+                    "value": 0
+                  },
+                  {
+                    "time": 1.25,
+                    "value": -1
+                  },
+                  {
+                    "time": 1.5,
+                    "value": -1.2246467991473532e-16
+                  },
+                  {
+                    "time": 1.75,
+                    "value": 1
+                  },
+                  {
+                    "time": 2,
+                    "value": 0
+                  },
+                  {
+                    "time": 3,
+                    "value": 0
+                  },
+                  {
+                    "time": 4,
+                    "value": 0
+                  },
+                  {
+                    "time": 5,
+                    "value": 0
+                  }
+                ]
+              },
+              "yaw": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "time": 5,
+                    "value": 90
+                  }
+                ]
+              },
+              "pitch": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "time": 5,
+                    "value": 0
+                  }
+                ]
+              },
+              "roll": {
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "time": 5,
+                    "value": 0
+                  }
+                ]
+              },
+              "position_mode": {
+                "value": "relative"
+              },
+              "position_space": {
+                "value": "world"
+              },
+              "transition": {
+                "value": "cut"
+              },
+              "motion_position": {
+                "value": {
+                  "type": "chain",
+                  "models": [
+                    {
+                      "type": "exponential_smooth",
+                      "tau": 0.2
+                    },
+                    {
+                      "type": "spring",
+                      "stiffness": 6,
+                      "damping": 0.9,
+                      "initial_velocity": 0
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "paths": [
+    {
+      "id": "p_1",
+      "clip": "c1",
+      "from": 0,
+      "to": 1,
+      "axes": [
+        "x",
+        "y",
+        "z"
+      ],
+      "geometry": {
+        "type": "arc",
+        "center": {
+          "dx": -1,
+          "dy": 0,
+          "dz": 0
+        },
+        "radius": 1,
+        "start_angle": 0,
+        "end_angle": 360,
+        "normal": {
+          "x": 0,
+          "y": 1,
+          "z": 0
+        },
+        "reference_axis": {
+          "x": 1,
+          "y": 0,
+          "z": 0
+        }
+      }
+    },
+    {
+      "id": "p_2",
+      "clip": "c1",
+      "from": 1,
+      "to": 1.25,
+      "axes": [
+        "x",
+        "y",
+        "z"
+      ],
+      "geometry": {
+        "type": "bezier",
+        "control_points": [
+          {
+            "dx": 0,
+            "dy": 0,
+            "dz": -0.5522847498307933
+          },
+          {
+            "dx": -0.44771525016920655,
+            "dy": 0,
+            "dz": -1
+          }
+        ]
+      },
+      "timing": {
+        "type": "keyframes",
+        "points": [
+          {
+            "t": 0,
+            "s": 0
+          },
+          {
+            "t": 0.5,
+            "s": 0.3
+          },
+          {
+            "t": 1,
+            "s": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "p_3",
+      "clip": "c1",
+      "from": 1.25,
+      "to": 1.5,
+      "axes": [
+        "x",
+        "y",
+        "z"
+      ],
+      "geometry": {
+        "type": "bezier",
+        "control_points": [
+          {
+            "dx": -0.5522847498307933,
+            "dy": 0,
+            "dz": 0
+          },
+          {
+            "dx": -1,
+            "dy": 0,
+            "dz": 0.44771525016920655
+          }
+        ]
+      }
+    },
+    {
+      "id": "p_4",
+      "clip": "c1",
+      "from": 1.5,
+      "to": 1.75,
+      "axes": [
+        "x",
+        "y",
+        "z"
+      ],
+      "geometry": {
+        "type": "bezier",
+        "control_points": [
+          {
+            "dx": 0,
+            "dy": 0,
+            "dz": 0.5522847498307933
+          },
+          {
+            "dx": 0.44771525016920644,
+            "dy": 0,
+            "dz": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "p_5",
+      "clip": "c1",
+      "from": 1.75,
+      "to": 2,
+      "axes": [
+        "x",
+        "y",
+        "z"
+      ],
+      "geometry": {
+        "type": "bezier",
+        "control_points": [
+          {
+            "dx": 0.5522847498307933,
+            "dy": 0,
+            "dz": 0
+          },
+          {
+            "dx": 1,
+            "dy": 0,
+            "dz": -0.44771525016920666
+          }
+        ]
+      }
+    },
+    {
+      "id": "p_6",
+      "clip": "c1",
+      "from": 2,
+      "to": 3,
+      "axes": [
+        "x"
+      ],
+      "geometry": {
+        "type": "line"
+      }
+    },
+    {
+      "id": "p_7",
+      "clip": "c1",
+      "from": 3,
+      "to": 4,
+      "axes": [
+        "x",
+        "y",
+        "z"
+      ],
+      "geometry": {
+        "type": "ellipse",
+        "center": {
+          "dx": -1,
+          "dy": 0,
+          "dz": 0
+        },
+        "semi_major": 1,
+        "semi_minor": 1,
+        "rotation": 0,
+        "start_angle": 0,
+        "end_angle": 360,
+        "normal": {
+          "x": 0,
+          "y": 1,
+          "z": 0
+        },
+        "reference_axis": {
+          "x": 1,
+          "y": 0,
+          "z": 0
+        }
+      }
+    },
+    {
+      "id": "p_8",
+      "clip": "c1",
+      "from": 4,
+      "to": 5,
+      "axes": [
+        "x",
+        "y",
+        "z"
+      ],
+      "geometry": {
+        "type": "line"
+      }
+    }
+  ]
+}
