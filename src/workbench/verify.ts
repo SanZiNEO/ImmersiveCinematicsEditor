@@ -1111,12 +1111,13 @@ async function main(): Promise<void> {
       './core.timeline/manifest',
       './core.clip-effects/manifest',
       './core.selection-properties/manifest',
+      './core.behavior/manifest',
       './demo.extra/manifest',
       './demo.kitchen-sink/manifest',
     ]
-    check('11 builtin.ts 是唯一静态清单（7 个插件 import）', valueImports.length === 7
+    check('11 builtin.ts 是唯一静态清单（8 个插件 import）', valueImports.length === 8
       && expectedManifests.every((path) => valueImports.some((line) => line.includes(path))), valueImports)
-    check('11 builtin.ts 数组顺序为 core → 05 真实插件 → demo', /BUILTIN_PLUGINS[^=]*=\s*\[[\s\S]*coreWorkbench[\s\S]*scriptGraph[\s\S]*timelinePlugin[\s\S]*coreClipEffects[\s\S]*coreSelectionProperties[\s\S]*demoExtra[\s\S]*demoKitchenSink[\s\S]*\]/.test(builtinSource), builtinSource.slice(0, 500))
+    check('11 builtin.ts 数组顺序为 core → 05/06 真实插件 → demo', /BUILTIN_PLUGINS[^=]*=\s*\[[\s\S]*coreWorkbench[\s\S]*scriptGraph[\s\S]*timelinePlugin[\s\S]*coreClipEffects[\s\S]*coreSelectionProperties[\s\S]*coreBehavior[\s\S]*demoExtra[\s\S]*demoKitchenSink[\s\S]*\]/.test(builtinSource), builtinSource.slice(0, 500))
 
     const demoManifestSource = [
       await readFile(new URL('../plugins/demo.kitchen-sink/manifest.ts', WORKBENCH_DIR), 'utf8'),
@@ -1198,6 +1199,9 @@ async function main(): Promise<void> {
         commit: () => ({ ok: true, warnings: [] }),
         undo: () => false,
         redo: () => false,
+        endCoalescing: () => undefined,
+        commitClipAuthoring: () => ({ ok: true, warnings: [] }),
+        clipAuthoringOf: () => ({}),
         select: () => undefined,
         selectMany: () => undefined,
       },

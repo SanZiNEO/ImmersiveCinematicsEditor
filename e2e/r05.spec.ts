@@ -290,10 +290,15 @@ test('C5/B3/C6/C7：双击进编辑器页，触发器表单改前置并保存', 
   await expect(page.locator('[data-focus-scope="panel:core.selection-properties:selection.properties"]')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('.timeline-panel')).toContainText('还没有轨道')
 
-  await page.locator('#selection-tab-trigger').click()
-  await expect(page.locator('.trigger-pane')).toBeVisible()
-  await page.locator('.trigger-item').first().click()
-  const requires = page.locator('.requires')
+  // 触发器已迁到独立插件 `core.behavior`（06-12）：右栏同槽并列成面板级 tab。
+  const behaviorTab = page.locator('[role="tab"]', { hasText: '触发器' }).first()
+  await expect(behaviorTab).toBeVisible({ timeout: 20_000 })
+  await behaviorTab.click()
+  await expect(page.locator('[data-focus-scope="panel:core.behavior:behavior.triggers"]')).toBeVisible({ timeout: 20_000 })
+  const triggerPane = page.locator('[data-focus-scope="panel:core.behavior:behavior.triggers"] .trigger-pane')
+  await expect(triggerPane).toBeVisible()
+  await triggerPane.locator('.trigger-item').first().click()
+  const requires = triggerPane.locator('.requires')
   await expect(requires).toContainText('前置（2）')
   await requires.locator('.requires__button', { hasText: '换目标' }).first().click()
   // 编辑器页只显示关系：表单只有「目标脚本」一个下拉（类型不再暴露）。
@@ -562,9 +567,14 @@ test('C11/C12/C15/D7/D8：跨页一致、四面板、刷新合并、统计与渲
   await expect(page.locator('[data-graph-node="custom.json"]')).toHaveAttribute('aria-label', /1 条前置/, { timeout: 20_000 })
   await page.locator('[data-graph-node="custom.json"]').dblclick()
   await expect(page.locator('.document-page')).toBeVisible({ timeout: 20_000 })
-  await page.locator('#selection-tab-trigger').click()
-  await page.locator('.trigger-item').first().click()
-  const requires = page.locator('.requires')
+  // 触发器是 `document.right` 的独立面板 tab（06-12），不再是属性面板内的 tab。
+  const behaviorTab = page.locator('[role="tab"]', { hasText: '触发器' }).first()
+  await expect(behaviorTab).toBeVisible({ timeout: 20_000 })
+  await behaviorTab.click()
+  const behaviorPanel = page.locator('[data-focus-scope="panel:core.behavior:behavior.triggers"]')
+  await expect(behaviorPanel).toBeVisible({ timeout: 20_000 })
+  await behaviorPanel.locator('.trigger-item').first().click()
+  const requires = behaviorPanel.locator('.requires')
   await expect(requires).toContainText('前置（2）', { timeout: 20_000 })
 
   // C12：编辑器页改回（删掉刚加的那条内置前置）→ 回脚本页，边数与磁盘一致，无需手动刷新。
@@ -621,7 +631,10 @@ test('C11/C12/C15/D7/D8：跨页一致、四面板、刷新合并、统计与渲
   await expect(page.locator('.document-page')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('.timeline-panel')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('[data-focus-scope="panel:core.clip-effects:clip.effects"]')).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('[data-focus-scope="panel:core.selection-properties:selection.properties"]')).toBeVisible({ timeout: 20_000 })
+  // 右栏是 tab 组：属性与触发器同槽并列（06-12 把触发器迁出属性面板）。
+  // 只有一个处于选中态可见，因此断言两个 tab 都存在，而不是两个容器都可见。
+  await expect(page.locator('[role="tab"]', { hasText: '属性' }).first()).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('[role="tab"]', { hasText: '触发器' }).first()).toBeVisible({ timeout: 20_000 })
   await page.locator('.doc-header button', { hasText: '项目' }).click()
   await expect(page.locator('.script-graph-panel')).toBeVisible({ timeout: 20_000 })
 
