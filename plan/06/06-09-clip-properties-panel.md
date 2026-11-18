@@ -1,6 +1,6 @@
 # 片段属性面板
 
-> 状态：未实现
+> 状态：已实现（偏差见 §六）
 > 范围：`selection.properties` 从选择摘要改为片段属性面板：全部适用属性、静态值与未设置值、时钟、关闭动画后的回流、选择联动、过滤与虚拟化
 > 关联：06-01 效果面板外壳、06-02 组与行、06-03 值控件、06-05 迁移、06-10 诊断
 
@@ -100,13 +100,19 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-面板定位与行为规则已定，尚未实现。
+`ClipPropertiesPanel.vue` + `ClipPropertiesHeader/Toolbar/Group/Row/AnimationClock` + `rowLayout.ts`。
+行集合来自 `propertyRowsFor` → `separateUnknownGroup` → `withAvailability`，
+再 `partitionGroups(..., 'leaf', timing).propertyGroups`。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 列当前轨道全部适用叶子 | 剔除 `playControl` 五字段（`CLIP_GEOMETRY_PATHS`） | 片段时间几何由主轴编辑；属性面板给了值控件会误导（06-09 §4.4 已声明"不修改起止与时长"） |
+| 未设置叶子编辑即创建对象 | `object.setValue` 创建并写入，一次撤销回到未设置 | 与设计一致 |
+| 组头提示"N 项已去效果面板" | `effectCountByGroup` + `requestRevealInEffectControls` | 与设计一致 |
+| 100+ 叶子纵向虚拟化、组头吸顶 | `rowLayout.ts` 固定行高 + 绝对定位 | 与设计一致 |
+| 面板压窄时标签与控件上下排列 | 行布局本就是 `flex-direction: column`（标签在上、控件在下），无横向滚动 | 与设计一致 |
 
 ### 验收要点
 

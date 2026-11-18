@@ -1,6 +1,6 @@
 # 架构整理：把职责从按轮次堆改成按层分
 
-> 状态：未实现
+> 状态：已实现（偏差见 §六）
 > 范围：`src/` 的目录分层与职责边界、胖控制器拆分方向、跨轮概念的落点、共享交互的归属
 > 关联：06-01 至 06-11 的落点约束，07～12 的实现位置
 
@@ -92,13 +92,35 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-边界与迁移方向已定，尚未开始迁移。
+`src/features/effects/` 承接效果领域内核（行派生、归属策略、视口、几何、缓动、值控件、
+关键帧操作、事件记录、诊断、烘焙检查）；`src/workbench/shared/` 承接共享交互机制
+（`hoverIntent.ts` / `gesture.ts`）。图与时间轴控制器各拆出两类状态。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| `features/` 不引用 Vue 组件 | `features/effects/panels/` 放了 4 个共享组件（值控件、结构树、诊断条、行事件类型） | 它们同时消费 `PanelContext` 与效果领域纯函数；搬到中立区必须造第二套数据形状。**放宽了这一条**，"不引用插件"仍成立 |
+| 共享交互抽到工作台共享区 | `hoverIntent` / `gesture` 两份机制；图控制器已改用 `HoverIntent` | 与设计一致。`gesture` 已抽出但时间轴面板尚未切过去（见下） |
+| 拆胖控制器：图 | 拆出 `layoutScheduler.ts`（分批出图/BFS 顺序/视口内动画）+ `layoutPersist.ts`（三条防抖写入） | 与设计一致；`state.ts` 用 re-export 保持调用点不变 |
+| 拆胖控制器：时间轴 | 拆出 `viewState.ts`（滚动/尺寸/紧凑档）+ `interactionState.ts`（工具/吸附/活动轨/剪贴板） | 与设计一致 |
+| 触发器字段面迁出属性面板 | 新插件 `core.behavior`（panelId `behavior.triggers`），组件 `git mv` 保留历史 | 与用户裁决一致（触发器需要独立面板） |
+| 全部自检与两套 e2e 保持通过 | `verify.ts` 171 ok、`verify-05.ts` 51 ok、e2e 36 passed | 与设计一致 |
+
+**未完成项（明确记录，附原因）**：`core.timeline/TimelinePanel.vue` 的手势状态机尚未改用
+`workbench/shared/gesture.ts`。原因不是遗漏，是**语义差异**：
+
+| 事件 | 时间轴现状 | `gesture.ts` |
+|---|---|---|
+| `pointerup` | 提交 | 提交 |
+| `pointercancel` | **提交**（复用 `onWindowPointerUp`） | **取消**（`onCancel`） |
+| `Escape` | 取消 | 取消 |
+
+`pointercancel` 按 WHATWG 语义是"设备中断、指针失效"，当作提交会把未完成的拖动落盘；
+但 04/05 轮已按现状验收通过。替换会改变既有行为，属于需要你裁决的范围，不自行改。
+
+若要统一，建议：把 `gesture.ts` 的 `pointercancel` 行为做成可配置（`cancelOnPointerCancel?: boolean`，
+默认 `true`），时间轴显式传 `false` 保持现状，再单独评估是否该改成取消。
 
 ### 与后续轮次的关系
 

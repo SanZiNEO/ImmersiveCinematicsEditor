@@ -1,6 +1,6 @@
 # 值控件与提交目标
 
-> 状态：未实现
+> 状态：已实现（偏差见 §六）
 > 范围：属性面板静态值、效果面板节点值共用的一套值控件；提交目标解析；九种值类型；step 与 STRUCT 的特殊约束
 > 关联：06-02 行、06-04 关键帧组、06-05 编辑操作、06-07 事件记录
 
@@ -90,13 +90,16 @@ step 插值的属性用离散控件，不显示连续缓动入口。参考系类
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-值控件与目标解析规则已定，尚未实现。
+值控件落在 `src/features/effects/panels/PropertyValueForm.vue`，按 `controlKindOf` 九路分派；
+提交目标由 `resolveTarget` 统一解析；校验与拒绝代码在 `valueControls.ts`。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 值控件放 `features/` 之外的共享区 | 放 `src/features/effects/panels/` | 它同时消费 `PanelContext` 与效果领域纯函数；搬到中立区需造第二套数据形状（更糟）。已记录为放宽"features 不含 Vue" |
+| 参考系切换补齐三轴弹窗 | `missingPositionAxes` 返回缺失轴；补齐走一次批量建帧命令 | 与设计一致 |
+| 连续提交合并为一个撤销项 | `commit(cmd, 'setValue:clip:path:time')` + 失焦 `endCoalescing()` | 与设计一致 |
 
 ### 验收要点
 

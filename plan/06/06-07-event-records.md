@@ -1,6 +1,6 @@
 # 事件记录编辑
 
-> 状态：未实现
+> 状态：已实现（偏差见 §六）
 > 范围：EVENT / MOD_EVENT 叶子的记录列表、字段编辑、非空约束、白名单与类型校验、面板归属
 > 关联：06-02 行、06-04 记录条、06-05 编辑操作、06-10 诊断
 
@@ -89,13 +89,18 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-事件记录模型与约束已定，尚未实现。
+记录体字段表与校验在 `src/features/effects/eventRecords.ts`，编辑器在 `EventRecordEditor.vue`。
+非空约束由命令层拒绝（`object.removeKeyframe` / `removeKeyframes` 对 `mode=event` 抛错），
+`object.disableAnimation` 也拒绝事件叶子。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 事件分瞬时/区间两种，区间事件画记录条 | **只有瞬时事件**（竖菱形） | **源码事实冲突**：`EventRecord` 只有 `time` + 记录体，无终点字段。`EventClipRuntime` 按单点触发 |
+| 记录体字段按 schema 渲染 | 目录有 `FieldEntry` 时走 `checkValue`；缺失时按 `ObjectCodec.readEvent/readModEvent` 同口径白名单 | 与设计一致（不发明字段） |
+| 未知字段折叠进"原始记录"只读区 | 已实现，无删除按钮 | 与设计一致 |
+| 白名单校验名称字段 | 运行时只约束 `event_type` 为字符串；无枚举白名单 | 源码无该白名单，不凭空造 |
 
 ### 验收要点
 

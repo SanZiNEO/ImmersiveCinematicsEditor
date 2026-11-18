@@ -1,6 +1,6 @@
 # 对象与节点诊断
 
-> 状态：未实现
+> 状态：已实现（偏差见 §六）
 > 范围：本地校验与服务端校验的结果如何落到行、节点与组头；诊断条；按面板归属的定位；必填缺失与未知路径
 > 关联：06-02 行、06-06 烘焙提示、06-09 属性面板；校验合同见 03-06
 
@@ -94,13 +94,19 @@ issue 与行、节点不是一对一：一条行 issue 可能覆盖多个节点�
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-诊断模型与定位规则已定，尚未实现。
+聚合在 `src/features/effects/diagnostics.ts`（`buildDiagnosticIndex` / `resolvePanel` /
+`mergeServerIssues` / `withServerIncomplete`），诊断条是**一份**参数化组件
+`src/features/effects/panels/DiagnosticsBar.vue`，`scope` 决定显示哪一侧。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 两个面板各一条诊断条 | 一份组件 + `scope` prop | 两份逻辑同源、只差 `scope` 与文案；参数化避免漂移 |
+| 服务端超时显示"未完成"，绝不当通过 | `server_incomplete` 的 info 诊断 | 与设计一致 |
+| 定位：动画行→效果面板，静态/缺失→属性面板 | `resolvePanel` 按行有无帧分流 | 与设计一致 |
+| 定位后滚动到该行 | 属性面板按 `rowLayout` 定位；效果面板依赖浏览器默认滚动 | 效果面板缺精确 `scrollIntoView`（见 §九 已知局限 2） |
+| 同代码服务端覆盖本地，不同代码并存 | `mergeServerIssues` | 与设计一致 |
 
 ### 验收要点
 

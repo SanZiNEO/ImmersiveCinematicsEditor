@@ -1,6 +1,6 @@
 # 段缓动与显式烘焙
 
-> 状态：未实现
+> 状态：已实现（偏差见 §六）
 > 范围：相邻节点之间的段缓动编辑、会话态缓动的采样、显式烘焙命令、保存与推送前的未烘焙提示
 > 关联：06-04 关键帧组、06-05 编辑操作、06-07 事件记录
 
@@ -93,13 +93,17 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-缓动与烘焙规则已定，尚未实现。
+采样在 `src/features/effects/easing.ts`（`sampleValue` / `bakeSegment` / `bakeSampleCount`），
+作者态缓动存 `doc.clipAuthoring`（`easingStore.ts` 读写），烘焙走 `object.bakeEasing` 文档命令。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 作者态缓动只存会话，文档关闭时丢弃 | 存 `doc.clipAuthoring[clipKey].easing`：**进撤销栈、不写盘、不进预览推送**，事件是 `'authoring'` | 比"纯会话"多一步撤销支持；序列化前后一致（有自检断言） |
+| 06 README 把 `object.setEasing` 列为文档命令 | **不存在该命令**；写入走 `DocStore.commitClipAuthoring` | 与 06-06 §4.2/§4.4 一致（缓动不进入文档序列化）。README 是汇总表，以专文为准 |
+| 保存或推送前检查未烘焙段 | 只接在 `file.saveDoc` | **已知缺口**：预览推送走 160ms 防抖、无交互点，未接三选一（见 §九 已知局限 3） |
+| 烘焙采样率按缩放与段时长推导 | `bakeSampleCount(from, to, pxPerSecond)`，1–240 点 | 与设计一致 |
 
 ### 验收要点
 

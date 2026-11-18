@@ -1,6 +1,6 @@
 # 关键帧组与节点几何
 
-> 状态：未实现
+> 状态：已实现（偏差见 §六）
 > 范围：每个动画叶子自己的关键帧组、共享局部标尺、节点与段线的画法、选择身份、轴外与无限片段的显示
 > 关联：06-02 行、06-05 编辑操作、06-08 局部视口、06-07 事件记录
 
@@ -94,13 +94,17 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-组与节点几何规则已定，尚未实现。
+几何全在 `src/features/effects/geometry.ts`（`nodesOfRow` / `segmentsOfRow` / `layoutRows` /
+`hitTestNodes` / `nodesInRect`），渲染在 `EffectKeyframeGroup.vue`。横坐标只由
+`viewport.ts` 的 `timeToX` 换算，组不持有视口。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 区间事件画起止端点加横条 | **只画瞬时竖菱形** | **源码事实冲突**：`EventRecord` 只有 `time`，无终点字段（`common/.../script/event/EventRecord.java`）。`NodeKind` 保留 `event-start`/`event-end` 取值以便将来扩展，但派生函数只产出 `event-instant` |
+| 贝塞尔段按作者态把手画曲线 | 读 `doc.clipAuthoring` 的缓动表 | 与设计一致 |
+| 跨行框选 | 行组件按本行节点解析矩形；跨行需外壳汇总 | 见 §九 已知局限 1（本轮为"本行内框选"子集） |
 
 ### 验收要点
 
