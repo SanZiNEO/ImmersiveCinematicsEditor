@@ -25,7 +25,11 @@ import {
   referencesToClip,
 } from './identity.ts'
 import type { ClipHandle } from './identity.ts'
-import { CLIP_ID_PATTERN, LOOP_MODES, META_ID_PATTERN, META_AUTHOR_MAX, META_NAME_MAX } from './keys.ts'
+import { CLIP_ID_PATTERN, LOOP_MODES, META_ID_PATTERN, META_AUTHOR_MAX, META_NAME_MAX, RULE_ID_PATTERN } from './keys.ts'
+import { bindingsOfRule, createDefaultRule, renameRuleId } from '../../features/behavior/rules.ts'
+import { referencesToBinding, renameBindingId } from '../../features/behavior/bindings.ts'
+import { TRIGGER_ID_PATTERN } from '../../features/behavior/trigger.ts'
+import { CONTROL_KINDS } from '../schema/catalog/behaviorRules.ts'
 import {
   insertKeyframe,
   moveKeyframe,
@@ -160,8 +164,43 @@ export type DocCommand =
   | { kind: 'path.writeBatch'; removeIds: string[]; entries: JsonObject[] }
   /** 07 组合命令：按顺序执行子命令；store 的一次快照保证整体撤销。 */
   | { kind: 'compound'; commands: DocCommand[] }
-  | { kind: 'path.remove'; pathId: string }
   | { kind: 'binding.remove'; bindingId: string }
+  // ── 11 轮触发器写命令 ──────────────────────────────────────────────────────
+  | { kind: 'trigger.add'; index: number; fields: JsonObject }
+  | { kind: 'trigger.remove'; triggerIdentity: string }
+  | { kind: 'trigger.move'; from: number; to: number }
+  | { kind: 'trigger.setId'; triggerIdentity: string; value: string }
+  /** 切类型：旧条件原样保留（不适用键由结构层判）；`clearInapplicable` 为点名清理名单。 */
+  | { kind: 'trigger.setType'; triggerIdentity: string; value: string; clearInapplicable?: string[] }
+  // ── 11 轮规则写命令 ──────────────────────────────────────────────────────
+  | { kind: 'rule.add'; index: number; id: string; condition?: JsonObject; actions?: JsonObject[]; policy?: JsonObject }
+  | { kind: 'rule.remove'; ruleId: string }
+  | { kind: 'rule.move'; from: number; to: number }
+  /** 事务重命名：一次改规则自身与全部 `rule_bindings[].rule`；任一失败整条不应用。 */
+  | { kind: 'rule.setId'; ruleId: string; value: string }
+  | {
+    kind: 'rule.setFields'
+    ruleId: string
+    policy?: JsonObject
+    condition?: JsonObject
+    actions?: JsonObject[]
+    onTimeout?: JsonValue
+  }
+  | { kind: 'rule.setCondition'; ruleId: string; condition: JsonObject }
+  | { kind: 'rule.setActions'; ruleId: string; actions: JsonObject[] }
+  // ── 11 轮绑定写命令 ──────────────────────────────────────────────────────
+  | { kind: 'binding.add'; index: number; binding: JsonObject }
+  /** 事务重命名：一次改绑定自身、`schedule.fact.binding` 与所有规则条件树 `rule_fact.binding`。 */
+  | { kind: 'binding.setId'; bindingId: string; value: string }
+  | {
+    kind: 'binding.setFields'
+    bindingId: string
+    gate?: JsonObject | null
+    control?: string | null
+    schedule?: JsonObject | null
+    exit?: JsonObject | null
+  }
+  | { kind: 'binding.move'; from: number; to: number }
 
 /** `apply` 的上下文。 */
 export interface ApplyContext {
@@ -346,6 +385,80 @@ function requireTrigger(ctx: ApplyContext, identity: string): JsonObject {
     throw new CommandError(`触发器不是对象: ${identity}`)
   }
   return trigger
+}
+
+// ── 11 轮行为命令辅助 ──────────────────────────────────────────────────────
+
+/** 规则表内的对象条目（非对象条目跳过，与域层读取口径一致）。 */
+function ruleArrayOf(root: JsonObject): JsonObject[] {
+  return Array.isArray(root.rules) ? root.rules.filter(isJsonObject) : []
+}
+
+/** 绑定表内的对象条目。 */
+function bindingArrayOf(root: JsonObject): JsonObject[] {
+  return Array.isArray(root.rule_bindings) ? root.rule_bindings.filter(isJsonObject) : []
+}
+
+/** 按规则 id 定位；不存在 → 抛错。 */
+function requireRule(root: JsonObject, ruleId: string): { index: number; rule: JsonObject } {
+  const rules = ruleArrayOf(root)
+  const index = rules.findIndex((entry) => entry.id === ruleId)
+  if (index < 0) {
+    throw new CommandError(`规则不存在: ${ruleId}`)
+  }
+  return { index, rule: rules[index] }
+}
+
+/** 按绑定 id 定位；不存在 → 抛错。 */
+function requireBinding(root: JsonObject, bindingId: string): { index: number; binding: JsonObject } {
+  const bindings = bindingArrayOf(root)
+  const index = bindings.findIndex((entry) => entry.id === bindingId)
+  if (index < 0) {
+    throw new CommandError(`绑定不存在: ${bindingId}`)
+  }
+  return { index, binding: bindings[index] }
+}
+
+/** 移动下标边界校验（from / to 都必须落在数组长度内）。 */
+function assertMoveBounds(from: number, to: number, length: number): void {
+  if (!Number.isInteger(from) || from < 0 || from >= length) {
+    throw new CommandError(`移动下标越界: from=${from}（0..${length - 1}）`)
+  }
+  if (!Number.isInteger(to) || to < 0 || to >= length) {
+    throw new CommandError(`移动下标越界: to=${to}（0..${length - 1}）`)
+  }
+}
+
+/** 取草稿根的 `meta` 对象；非对象 → 抛错（命令试算失败，文档不变）。 */
+function draftMeta(draft: JsonObject): JsonObject {
+  if (!isJsonObject(draft.meta)) {
+    throw new CommandError('meta 不是对象')
+  }
+  return draft.meta
+}
+
+/** 除 `exceptIndex` 外是否已占用某触发器 id。 */
+function assertTriggerIdUnique(triggers: readonly JsonValue[], id: string, exceptIndex: number): void {
+  triggers.forEach((entry, index) => {
+    if (index !== exceptIndex && isJsonObject(entry) && entry.id === id) {
+      throw new CommandError(`触发器 id 已被占用: ${id}`)
+    }
+  })
+}
+
+/**
+ * 在根副本上试算：`mutate` 抛错则文档不变；试算成功后把结果写回当前文档，
+ * 并重指 `meta` / `timeline` 引用（一次提交 = 一条撤销记录，由 store 快照保证）。
+ */
+function applyOnDraft(doc: ScriptDoc, mutate: (draft: JsonObject) => void): void {
+  const draft = cloneJson(doc.root)
+  mutate(draft)
+  for (const key of Object.keys(doc.root)) {
+    delete doc.root[key]
+  }
+  Object.assign(doc.root, draft)
+  doc.meta = isJsonObject(doc.root.meta) ? doc.root.meta : {}
+  doc.timeline = isJsonObject(doc.root.timeline) ? doc.root.timeline : {}
 }
 
 /** 校验前置下标与目标脚本 id。 */
@@ -1747,15 +1860,368 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
       return { warnings }
     }
     case 'binding.remove': {
-      const bindings = ctx.doc.root.rule_bindings
-      if (!Array.isArray(bindings)) {
-        throw new CommandError('rule_bindings 不是数组')
-      }
-      const index = bindings.findIndex((entry) => isJsonObject(entry) && entry.id === command.bindingId)
-      if (index < 0) {
-        throw new CommandError(`绑定不存在: ${command.bindingId}`)
-      }
-      bindings.splice(index, 1)
+      applyOnDraft(ctx.doc, (draft) => {
+        const bindings = draft.rule_bindings
+        if (!Array.isArray(bindings)) {
+          throw new CommandError('rule_bindings 不是数组')
+        }
+        const index = bindings.findIndex((entry) => isJsonObject(entry) && entry.id === command.bindingId)
+        if (index < 0) {
+          throw new CommandError(`绑定不存在: ${command.bindingId}`)
+        }
+        const referrers = referencesToBinding(draft, command.bindingId)
+        if (referrers.length > 0) {
+          const labels = referrers.map((ref) => ref.detail).join('、')
+          throw new CommandError(`绑定 ${command.bindingId} 仍被引用，无法删除（受影响: ${labels}）`)
+        }
+        bindings.splice(index, 1)
+      })
+      return { warnings }
+    }
+    // ── 11 轮触发器写命令 ──────────────────────────────────────────────────
+    case 'trigger.add': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const meta = draftMeta(draft)
+        const triggers = meta.triggers
+        const array = Array.isArray(triggers) ? [...triggers] : []
+        if (!Number.isInteger(command.index) || command.index < 0 || command.index > array.length) {
+          throw new CommandError(`插入下标越界: ${command.index}（0..${array.length}）`)
+        }
+        const raw = cloneJson(command.fields)
+        if (typeof raw.type !== 'string' || raw.type.length === 0) {
+          throw new CommandError('触发器 type 不能为空')
+        }
+        if (Object.prototype.hasOwnProperty.call(raw, 'id')) {
+          if (typeof raw.id !== 'string' || !TRIGGER_ID_PATTERN.test(raw.id)) {
+            throw new CommandError(`触发器 id 必须匹配 ${TRIGGER_ID_PATTERN.source}`)
+          }
+          assertTriggerIdUnique(array, raw.id, -1)
+        }
+        array.splice(command.index, 0, raw)
+        meta.triggers = array
+      })
+      return { warnings }
+    }
+    case 'trigger.remove': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const triggers = draftMeta(draft).triggers
+        if (!Array.isArray(triggers)) {
+          throw new CommandError('meta.triggers 不是数组')
+        }
+        const index = findTriggerIndex(triggers, command.triggerIdentity, duplicateTriggerIds(triggers))
+        if (index < 0) {
+          throw new CommandError(`触发器不存在: ${command.triggerIdentity}`)
+        }
+        triggers.splice(index, 1)
+      })
+      return { warnings }
+    }
+    case 'trigger.move': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const triggers = draftMeta(draft).triggers
+        if (!Array.isArray(triggers)) {
+          throw new CommandError('meta.triggers 不是数组')
+        }
+        assertMoveBounds(command.from, command.to, triggers.length)
+        const [item] = triggers.splice(command.from, 1)
+        triggers.splice(command.to, 0, item)
+      })
+      return { warnings }
+    }
+    case 'trigger.setId': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const triggers = draftMeta(draft).triggers
+        if (!Array.isArray(triggers)) {
+          throw new CommandError('meta.triggers 不是数组')
+        }
+        const index = findTriggerIndex(triggers, command.triggerIdentity, duplicateTriggerIds(triggers))
+        if (index < 0) {
+          throw new CommandError(`触发器不存在: ${command.triggerIdentity}`)
+        }
+        const trigger = triggers[index]
+        if (!isJsonObject(trigger)) {
+          throw new CommandError('触发器不是对象')
+        }
+        // `ScriptParser.java:996-1007` `optTriggerId`：缺省 / JSON null → null（合法），
+        // 但 `id: ""` 是解析错误。清空 id 的合法落地方式是删除 `id` 键（不写空串、不写 null），
+        // 身份回落 `type#index`；跳过唯一性校验。非空仍按正则 + 唯一性校验。
+        if (command.value === '') {
+          delete trigger.id
+          return
+        }
+        if (typeof command.value !== 'string' || !TRIGGER_ID_PATTERN.test(command.value)) {
+          throw new CommandError(`触发器 id 必须匹配 ${TRIGGER_ID_PATTERN.source}`)
+        }
+        assertTriggerIdUnique(triggers, command.value, index)
+        trigger.id = command.value
+      })
+      return { warnings }
+    }
+    case 'trigger.setType': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const triggers = draftMeta(draft).triggers
+        if (!Array.isArray(triggers)) {
+          throw new CommandError('meta.triggers 不是数组')
+        }
+        const index = findTriggerIndex(triggers, command.triggerIdentity, duplicateTriggerIds(triggers))
+        if (index < 0) {
+          throw new CommandError(`触发器不存在: ${command.triggerIdentity}`)
+        }
+        const trigger = triggers[index]
+        if (!isJsonObject(trigger)) {
+          throw new CommandError('触发器不是对象')
+        }
+        if (typeof command.value !== 'string' || command.value.length === 0) {
+          throw new CommandError('触发器 type 不能为空')
+        }
+        trigger.type = command.value
+        // 不适用键默认保留，由结构层判；仅清理调用方点名的条件键。
+        if (command.clearInapplicable !== undefined) {
+          if (!Array.isArray(command.clearInapplicable)) {
+            throw new CommandError('clearInapplicable 需要字符串数组')
+          }
+          const conditionsObj = isJsonObject(trigger.conditions) ? trigger.conditions : {}
+          for (const key of command.clearInapplicable) {
+            delete conditionsObj[key]
+          }
+          trigger.conditions = conditionsObj
+        }
+      })
+      return { warnings }
+    }
+    // ── 11 轮规则写命令 ──────────────────────────────────────────────────
+    case 'rule.add': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const rules = draft.rules
+        const array = Array.isArray(rules) ? [...rules] : []
+        if (!Number.isInteger(command.index) || command.index < 0 || command.index > array.length) {
+          throw new CommandError(`插入下标越界: ${command.index}（0..${array.length}）`)
+        }
+        if (typeof command.id !== 'string' || !RULE_ID_PATTERN.test(command.id)) {
+          throw new CommandError(`规则 id 必须匹配 ${RULE_ID_PATTERN.source}`)
+        }
+        if (ruleArrayOf(draft).some((entry) => entry.id === command.id)) {
+          throw new CommandError(`规则 id 已被占用: ${command.id}`)
+        }
+        const rule = createDefaultRule(command.id)
+        if (command.condition !== undefined) {
+          if (!isJsonObject(command.condition)) {
+            throw new CommandError('规则 condition 需要对象')
+          }
+          rule.condition = cloneJson(command.condition)
+        }
+        if (command.actions !== undefined) {
+          if (!Array.isArray(command.actions)) {
+            throw new CommandError('规则 actions 需要数组')
+          }
+          rule.actions = cloneJson(command.actions)
+        }
+        if (command.policy !== undefined) {
+          if (!isJsonObject(command.policy)) {
+            throw new CommandError('规则 policy 需要对象')
+          }
+          rule.policy = cloneJson(command.policy)
+        }
+        array.splice(command.index, 0, rule)
+        draft.rules = array
+      })
+      return { warnings }
+    }
+    case 'rule.remove': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const rawRules = draft.rules
+        if (!Array.isArray(rawRules)) {
+          throw new CommandError('rules 不是数组')
+        }
+        const index = rawRules.findIndex((entry) => isJsonObject(entry) && entry.id === command.ruleId)
+        if (index < 0) {
+          throw new CommandError(`规则不存在: ${command.ruleId}`)
+        }
+        const referrers = bindingsOfRule(draft, command.ruleId)
+        if (referrers.length > 0) {
+          const labels = referrers
+            .map((binding) => (typeof binding.id === 'string' ? binding.id : describe(binding)))
+            .join('、')
+          throw new CommandError(`规则 ${command.ruleId} 仍被绑定引用，无法删除（受影响绑定: ${labels}）`)
+        }
+        rawRules.splice(index, 1)
+      })
+      return { warnings }
+    }
+    case 'rule.move': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const rules = draft.rules
+        if (!Array.isArray(rules)) {
+          throw new CommandError('rules 不是数组')
+        }
+        assertMoveBounds(command.from, command.to, rules.length)
+        const [item] = rules.splice(command.from, 1)
+        rules.splice(command.to, 0, item)
+      })
+      return { warnings }
+    }
+    case 'rule.setId': {
+      applyOnDraft(ctx.doc, (draft) => {
+        let renamed: JsonObject
+        try {
+          renamed = renameRuleId(draft, command.ruleId, command.value)
+        } catch (error) {
+          throw new CommandError(error instanceof Error ? error.message : String(error))
+        }
+        for (const key of Object.keys(draft)) {
+          delete draft[key]
+        }
+        Object.assign(draft, renamed)
+      })
+      return { warnings }
+    }
+    case 'rule.setFields': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const { rule } = requireRule(draft, command.ruleId)
+        if (command.policy !== undefined) {
+          if (!isJsonObject(command.policy)) {
+            throw new CommandError('规则 policy 需要对象')
+          }
+          rule.policy = cloneJson(command.policy)
+        }
+        if (command.condition !== undefined) {
+          if (!isJsonObject(command.condition)) {
+            throw new CommandError('规则 condition 需要对象')
+          }
+          rule.condition = cloneJson(command.condition)
+        }
+        if (command.actions !== undefined) {
+          if (!Array.isArray(command.actions)) {
+            throw new CommandError('规则 actions 需要数组')
+          }
+          rule.actions = cloneJson(command.actions)
+        }
+        if (command.onTimeout !== undefined) {
+          const policy = isJsonObject(rule.policy) ? rule.policy : {}
+          if (command.onTimeout === null) {
+            delete policy.on_timeout
+          } else {
+            policy.on_timeout = cloneJson(command.onTimeout)
+          }
+          rule.policy = policy
+        }
+      })
+      return { warnings }
+    }
+    case 'rule.setCondition': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const { rule } = requireRule(draft, command.ruleId)
+        if (!isJsonObject(command.condition)) {
+          throw new CommandError('规则 condition 需要对象')
+        }
+        rule.condition = cloneJson(command.condition)
+      })
+      return { warnings }
+    }
+    case 'rule.setActions': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const { rule } = requireRule(draft, command.ruleId)
+        if (!Array.isArray(command.actions)) {
+          throw new CommandError('规则 actions 需要数组')
+        }
+        rule.actions = cloneJson(command.actions)
+      })
+      return { warnings }
+    }
+    // ── 11 轮绑定写命令 ──────────────────────────────────────────────────
+    case 'binding.add': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const bindings = draft.rule_bindings
+        const array = Array.isArray(bindings) ? [...bindings] : []
+        if (!Number.isInteger(command.index) || command.index < 0 || command.index > array.length) {
+          throw new CommandError(`插入下标越界: ${command.index}（0..${array.length}）`)
+        }
+        if (!isJsonObject(command.binding)) {
+          throw new CommandError('绑定需要对象')
+        }
+        const raw = cloneJson(command.binding)
+        if (typeof raw.id !== 'string' || !RULE_ID_PATTERN.test(raw.id)) {
+          throw new CommandError(`绑定 id 必须匹配 ${RULE_ID_PATTERN.source}`)
+        }
+        if (bindingArrayOf(draft).some((entry) => entry.id === raw.id)) {
+          throw new CommandError(`绑定 id 已被占用: ${raw.id}`)
+        }
+        array.splice(command.index, 0, raw)
+        draft.rule_bindings = array
+      })
+      return { warnings }
+    }
+    case 'binding.setId': {
+      applyOnDraft(ctx.doc, (draft) => {
+        let renamed: JsonObject
+        try {
+          renamed = renameBindingId(draft, command.bindingId, command.value)
+        } catch (error) {
+          throw new CommandError(error instanceof Error ? error.message : String(error))
+        }
+        for (const key of Object.keys(draft)) {
+          delete draft[key]
+        }
+        Object.assign(draft, renamed)
+      })
+      return { warnings }
+    }
+    case 'binding.setFields': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const { binding } = requireBinding(draft, command.bindingId)
+        if (command.gate !== undefined) {
+          if (command.gate === null) {
+            delete binding.gate
+          } else {
+            if (!isJsonObject(command.gate)) {
+              throw new CommandError('binding.gate 需要对象')
+            }
+            binding.gate = cloneJson(command.gate)
+          }
+        }
+        if (command.control !== undefined) {
+          if (command.control === null) {
+            delete binding.control
+          } else {
+            if (typeof command.control !== 'string' || !CONTROL_KINDS.includes(command.control)) {
+              throw new CommandError(`binding.control 取值: ${CONTROL_KINDS.join(' / ')}`)
+            }
+            binding.control = command.control
+          }
+        }
+        if (command.schedule !== undefined) {
+          if (command.schedule === null) {
+            delete binding.schedule
+          } else {
+            if (!isJsonObject(command.schedule)) {
+              throw new CommandError('binding.schedule 需要对象')
+            }
+            binding.schedule = cloneJson(command.schedule)
+          }
+        }
+        if (command.exit !== undefined) {
+          if (command.exit === null) {
+            delete binding.exit
+          } else {
+            if (!isJsonObject(command.exit)) {
+              throw new CommandError('binding.exit 需要对象')
+            }
+            binding.exit = cloneJson(command.exit)
+          }
+        }
+      })
+      return { warnings }
+    }
+    case 'binding.move': {
+      applyOnDraft(ctx.doc, (draft) => {
+        const bindings = draft.rule_bindings
+        if (!Array.isArray(bindings)) {
+          throw new CommandError('rule_bindings 不是数组')
+        }
+        assertMoveBounds(command.from, command.to, bindings.length)
+        const [item] = bindings.splice(command.from, 1)
+        bindings.splice(command.to, 0, item)
+      })
       return { warnings }
     }
     default: {

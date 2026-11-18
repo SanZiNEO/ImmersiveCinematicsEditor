@@ -37,6 +37,27 @@ import { validateGeometry } from '../paths/geometry.ts'
 import { validateTiming } from '../paths/timing.ts'
 import { isValidObjectPath, POSITION_AXIS_PATHS } from './path.ts'
 import type { DocIssue, JsonObject, JsonValue, ScriptDoc, Severity } from './types.ts'
+import type { BehaviorProblem } from '../../features/behavior/shared.ts'
+import type { BehaviorRefs } from '../schema/catalog/behaviorRules.ts'
+import { validateRules } from '../../features/behavior/rules.ts'
+import { validateBindings } from '../../features/behavior/bindings.ts'
+import {
+  TRIGGER_ID_PATTERN,
+  findDuplicateIds,
+  parseTriggerNode,
+  triggerTimingIssues,
+} from '../../features/behavior/trigger.ts'
+import { validateTriggerConditions } from '../../features/behavior/triggerConditions.ts'
+import {
+  requirementEntries,
+  resolveRequirement,
+  validateRequirementFields,
+} from '../../features/behavior/requirements.ts'
+import type { RequirementContext } from '../../features/behavior/requirements.ts'
+import type { RequirementEntry } from '../../features/behavior/trigger.types.ts'
+import { eventRecords } from '../../features/behavior/events.ts'
+import { factIndex } from '../../features/behavior/facts.ts'
+import { severityForContract } from '../../features/behavior/validation.ts'
 
 /** 结构检查上下文。 */
 export interface StructuralContext {
@@ -45,6 +66,11 @@ export interface StructuralContext {
   metaKeys: readonly string[]
   /** 片段身份表（已与文档同步）。 */
   registry: ClipRegistry
+  /**
+   * 项目图已知脚本 id 集合（含本脚本 `meta.id`）。转发给前置 / 事实域校验器做存在性判定；
+   * 缺省（`undefined`）= 未提供索引，域层降级 `unresolved`，不报缺失、也不判已解析。
+   */
+  knownScriptIds?: readonly string[]
 }
 
 /** 参考系切换字段（`ObjectValidator.SPACE_SWITCH_FIELDS`）。 */
@@ -66,6 +92,58 @@ const BASE_SWITCH_FIELDS: readonly string[] = [
   'yaw_base_to_freeze',
 ]
 
+/**
+ * Java `ObjectValidator.rejectPingpong`（`script/object/ObjectValidator.java:176-183`）：
+ * AUDIO / EVENT / MOD_EVENT 轨拒绝 `loop_mode: "pingpong"`；视觉轨（CAMERA / OVERLAY /
+ * LETTERBOX / ADJUST）保留乒乓时间映射。
+ */
+const PINGPONG_REJECT_TRACKS: ReadonlySet<string> = new Set(['AUDIO', 'EVENT', 'MOD_EVENT'])
+
+/** 读片段原始 `loop_mode`；非对象 / 非字符串返回 `undefined`。 */
+function readLoopMode(raw: JsonValue): string | undefined {
+  if (isJsonObject(raw) && typeof raw.loop_mode === 'string') return raw.loop_mode
+  return undefined
+}
+
+/**
+ * 字符串简写前置（`requires: ["a"]` ≡ `{type:"script_played", script:"a"}`）校验。
+ * 与对象写法同码：空串 → L43；自引用 / 目标不存在 → L44；未提供脚本索引时三态降级「未判定」，
+ * 不报缺失、也不判已解析。Java 依据：`ScriptValidator.java:2057-2068`
+ * （空串 :2059-2061、自引用 :2063-2065、`knownScriptIds` 缺失 :2066-2068）。
+ */
+function validateStringRequirement(
+  entry: Extract<RequirementEntry, { kind: 'string' }>,
+  path: string,
+  ctx: RequirementContext,
+): BehaviorProblem[] {
+  const resolved = resolveRequirement(entry, ctx)
+  switch (resolved.status) {
+    case 'malformed':
+      return [{
+        code: 'REQ_SCRIPT_MISSING',
+        severity: 'block',
+        message: '前置脚本 id 不能为空',
+        jsonPath: path,
+      }]
+    case 'self_reference':
+      return [{
+        code: 'REQ_SELF_REFERENCE',
+        severity: 'warn',
+        message: `script 自引用自身脚本 '${resolved.targetScriptId ?? ''}'（可能永不解锁或自我循环）`,
+        jsonPath: path,
+      }]
+    case 'missing':
+      return [{
+        code: 'REQ_SCRIPT_MISSING_TARGET',
+        severity: 'error',
+        message: `script 指向不存在的脚本 '${resolved.targetScriptId ?? ''}'（该前置条件永不满足）`,
+        jsonPath: path,
+      }]
+    default:
+      return []
+  }
+}
+
 interface IssueExtra {
   clipKey?: string
   objectPath?: string
@@ -84,6 +162,186 @@ interface ClipContext {
 
 /** 片段 id → 片段上下文（重复 id 保留第一个，重复本身另报）。 */
 type ClipIndex = Map<string, ClipContext>
+
+// ── 11 轮行为合同装配：内部问题码 → L35–L90 合同码路由 ──────────────────────────
+// 级别一律取 `validation.ts` 的 `severityForContract`，本映射只做分桶，不另造级别表。
+
+/** 内部问题码 → 合同码直映；未列出的按前缀回落。 */
+const INTERNAL_TO_CONTRACT: ReadonlyMap<string, string> = new Map([
+  // 触发器（L41–L51）
+  ['TRIGGER_TYPE_UNKNOWN', 'L41'],
+  ['COND_FIELD_REQUIRED', 'L45'],
+  ['COND_FIELD_TYPE', 'L45'],
+  ['COND_FIELD_ENUM', 'L45'],
+  ['COMBINATOR_LIST_MISSING', 'L46'],
+  ['COMBINATOR_LIST_EMPTY', 'L46'],
+  ['COMBINATOR_CHILD_NOT_OBJECT', 'L46'],
+  ['COMBINATOR_CHILD_TYPE_MISSING', 'L46'],
+  ['COMBINATOR_CHILD_CONDITIONS_TYPE', 'L46'],
+  ['COMBINATOR_DEPTH_LIMIT', 'L46'],
+  ['COMBINATOR_CHILD_UNKNOWN', 'L46'],
+  ['COMBINATOR_EVENT_NO_WINDOW', 'L47'],
+  ['TRIGGER_EXIT_BUFFER_UNSUPPORTED', 'L48'],
+  ['TRIGGER_POLL_INTERVAL_UNSUPPORTED', 'L49'],
+  ['TRIGGER_ON_ENTER_UNSUPPORTED', 'L50'],
+  ['TRIGGER_CONTINUITY_TYPE', 'L51'],
+  ['TRIGGER_SWEEP_TYPE', 'L51'],
+  ['TRIGGER_SWEEP_UNSUPPORTED', 'L51'],
+  ['TRIGGER_DWELL_TYPE', 'L51'],
+  ['TRIGGER_DWELL_NOT_INT', 'L51'],
+  ['TRIGGER_DWELL_RANGE', 'L51'],
+  ['TRIGGER_DWELL_UNSUPPORTED', 'L51'],
+  ['TRIGGER_WINDOW_TYPE', 'L51'],
+  ['TRIGGER_WINDOW_NOT_INT', 'L51'],
+  ['TRIGGER_WINDOW_RANGE', 'L51'],
+  ['TRIGGER_WINDOW_UNSUPPORTED', 'L51'],
+  ['TRIGGER_REPEATABLE_TYPE', 'L45'],
+  ['TRIGGER_DELAY_TYPE', 'L45'],
+  ['TRIGGER_ON_ENTER_TYPE', 'L45'],
+  ['TRIGGER_EXIT_BUFFER_TYPE', 'L45'],
+  ['TRIGGER_POLL_INTERVAL_TYPE', 'L45'],
+  ['TRIGGER_POLL_INTERVAL_NOT_INT', 'L45'],
+  ['TRIGGER_POLL_INTERVAL_RANGE', 'L45'],
+  ['REQ_TYPE_MISSING', 'L43'],
+  ['REQ_SCRIPT_MISSING', 'L43'],
+  ['REQ_SELF_REFERENCE', 'L44'],
+  ['REQ_SCRIPT_MISSING_TARGET', 'L44'],
+  // 规则定义（L53 / L54）
+  ['RULES_ARRAY', 'L53'],
+  ['RULE_TYPE', 'L53'],
+  ['RULE_UNKNOWN_KEY', 'L53'],
+  ['RULE_ID_MISSING', 'L53'],
+  ['RULE_ID_TYPE', 'L53'],
+  ['RULE_ID_PATTERN', 'L53'],
+  ['RULE_ID_DUPLICATE', 'L53'],
+  ['RULE_CONDITION_TYPE', 'L53'],
+  ['RULE_CONDITION_EMPTY', 'L53'],
+  ['RULE_ACTIONS_TYPE', 'L53'],
+  ['RULE_ACTIONS_EMPTY', 'L53'],
+  ['RULE_POLICY_TYPE', 'L54'],
+  ['RULE_POLICY_UNKNOWN_KEY', 'L54'],
+  ['RULE_POLICY_ONCE_TYPE', 'L54'],
+  ['RULE_POLICY_MODE', 'L54'],
+  ['RULE_POLICY_TIMEOUT_TYPE', 'L54'],
+  ['RULE_POLICY_TIMEOUT_RANGE', 'L54'],
+  ['RULE_POLICY_ON_TIMEOUT_TYPE', 'L54'],
+  ['RULE_POLICY_ON_TIMEOUT_IDLE', 'L54'],
+  ['RULE_POLICY_COOLDOWN', 'L54'],
+  ['RULE_POLICY_DWELL', 'L54'],
+  ['RULE_POLICY_DWELL_ZERO', 'L90'],
+  // 规则条件树（L55；可达性 / 自引用另归 L86 / L88 / L90）
+  ['RULE_CONDITION_NODE_TYPE', 'L55'],
+  ['RULE_CONDITION_TYPE_MISSING', 'L55'],
+  ['RULE_CONDITION_TYPE_UNKNOWN', 'L55'],
+  ['RULE_CONDITION_UNKNOWN_KEY', 'L55'],
+  ['RULE_CONDITION_LIST_TYPE', 'L55'],
+  ['RULE_CONDITION_LIST_EMPTY', 'L55'],
+  ['RULE_CONDITION_DEPTH', 'L55'],
+  ['RULE_CONDITION_CHILD_TYPE', 'L55'],
+  ['RULE_CONDITION_CHILD_DATA_TYPE', 'L55'],
+  ['RULE_CONDITION_TIME_EMPTY', 'L55'],
+  ['RULE_CONDITION_TIME_MUTEX', 'L55'],
+  ['RULE_CONDITION_TIME_AT', 'L55'],
+  ['RULE_CONDITION_TIME_FROM', 'L55'],
+  ['RULE_CONDITION_TIME_TO', 'L55'],
+  ['RULE_CONDITION_LOCATION_DIMENSION', 'L55'],
+  ['RULE_CONDITION_LOCATION_EMPTY', 'L55'],
+  ['RULE_CONDITION_CAMERA_POS_EMPTY', 'L55'],
+  ['RULE_CONDITION_CAMERA_POS_BOTH', 'L55'],
+  ['RULE_CONDITION_BOX_PAIR', 'L55'],
+  ['RULE_CONDITION_SPHERE_POSITION', 'L55'],
+  ['RULE_CONDITION_SPHERE_RADIUS', 'L55'],
+  ['RULE_CONDITION_FOV_EMPTY', 'L55'],
+  ['RULE_CONDITION_FOV_FROM', 'L55'],
+  ['RULE_CONDITION_FOV_TO', 'L55'],
+  ['RULE_CONDITION_CLIP_MISSING', 'L55'],
+  ['RULE_CONDITION_CLIP_UNKNOWN', 'L55'],
+  ['RULE_CONDITION_CLIP_UNREACHABLE', 'L88'],
+  ['RULE_CONDITION_TIMELINE_MISSING', 'L90'],
+  ['RULE_CONDITION_BINDING_MISSING', 'L55'],
+  ['RULE_CONDITION_BINDING_UNKNOWN', 'L55'],
+  ['RULE_CONDITION_BINDING_SELF', 'L86'],
+  ['RULE_CONDITION_FACT_MISSING', 'L55'],
+  ['RULE_CONDITION_FACT', 'L55'],
+  // 动作（L58–L68）
+  ['ACTION_TYPE', 'L58'],
+  ['ACTION_TYPE_MISSING', 'L58'],
+  ['ACTION_TYPE_UNKNOWN', 'L58'],
+  // pause 无释放者属运行期告警并自动释放（`RuleRuntime.java:57-58`），不阻止加载；
+  // L58–L68 无「配对缺失」行，按既有先例（`RULE_POLICY_DWELL_ZERO` / `BINDING_EXIT_SYNONYM_MIX`）落提示桶 L90。
+  ['ACTION_PAUSE_UNPAIRED', 'L90'],
+  ['ACTION_RESUME_UNPAIRED', 'L90'],
+  ['ACTION_GOTO_TRACK_LEGACY', 'L59'],
+  ['ACTION_GOTO_AT_LEGACY', 'L59'],
+  ['ACTION_GOTO_CLIP_MISSING', 'L59'],
+  ['ACTION_GOTO_CLIP_UNKNOWN', 'L59'],
+  ['ACTION_GOTO_ENTRY_TIME', 'L59'],
+  ['ACTION_CAMERA_CHANNELS_EMPTY', 'L60'],
+  ['ACTION_CAMERA_CHANNEL_TYPE', 'L60'],
+  ['ACTION_CAMERA_CHANNEL_UNKNOWN', 'L60'],
+  ['ACTION_CAMERA_CHANNEL_DUPLICATE', 'L60'],
+  ['ACTION_CAMERA_VALUE_MISSING', 'L60'],
+  ['ACTION_CAMERA_VALUE_UNSELECTED', 'L60'],
+  ['ACTION_CAMERA_MODE', 'L60'],
+  ['ACTION_CAMERA_PRIORITY', 'L60'],
+  ['ACTION_CAMERA_POSITION', 'L60'],
+  ['ACTION_OVERLAY_TYPE', 'L61'],
+  ['ACTION_OVERLAY_COLOR', 'L61'],
+  ['ACTION_OVERLAY_OPACITY', 'L61'],
+  ['ACTION_OVERLAY_Z_INDEX', 'L61'],
+  ['ACTION_ADJUST_EMPTY', 'L62'],
+  ['ACTION_ADJUST_CHANNEL', 'L62'],
+  ['ACTION_NO_PARAM', 'L63'],
+  ['ACTION_SOUND_MISSING', 'L64'],
+  ['ACTION_SOUND_VOLUME', 'L64'],
+  ['ACTION_SOUND_PITCH', 'L64'],
+  ['ACTION_COMMAND_MISSING', 'L65'],
+  ['ACTION_COMMAND_SLASH', 'L66'],
+  ['ACTION_UNKNOWN_KEY', 'L67'],
+  ['ACTION_COMMAND_IN_TIMEOUT', 'L68'],
+  // 绑定（L56；持有可达性 L57；边界提示 L90）
+  ['BINDING_HOLD_FUTURE_TIME', 'L57'],
+  ['BINDING_HOLD_UNREACHABLE_CLIP', 'L57'],
+  ['BINDING_TIMELINE_MISSING', 'L90'],
+  ['BINDING_EXIT_SYNONYM_MIX', 'L90'],
+])
+
+/** 内部问题码路由到合同码；已是 L 码则原样保留。 */
+function contractCodeOf(problem: BehaviorProblem): string {
+  if (problem.code.startsWith('L')) {
+    return problem.code
+  }
+  const direct = INTERNAL_TO_CONTRACT.get(problem.code)
+  if (direct !== undefined) {
+    return direct
+  }
+  if (problem.code.startsWith('BINDING_')) return 'L56'
+  if (problem.code.startsWith('ACTION_')) return 'L58'
+  if (problem.code.startsWith('RULE_CONDITION_')) return 'L55'
+  if (problem.code.startsWith('RULE_POLICY_')) return 'L54'
+  if (problem.code.startsWith('RULE_')) return 'L53'
+  if (problem.code.startsWith('COMBINATOR_')) return 'L46'
+  if (problem.code.startsWith('COND_FIELD_')) return 'L45'
+  if (problem.code.startsWith('TRIGGER_')) return 'L45'
+  if (problem.code.startsWith('REQ_')) return 'L43'
+  return 'L90'
+}
+
+/** 把行为域问题装配成本地 DocIssue；级别取合同码判级，不沿用内部级别。 */
+function appendBehaviorProblems(issues: DocIssue[], problems: readonly BehaviorProblem[]): void {
+  for (const problem of problems) {
+    const code = contractCodeOf(problem)
+    issues.push({
+      code,
+      severity: severityForContract(code),
+      message: problem.message,
+      jsonPath: problem.jsonPath,
+      ...(problem.clipKey === undefined ? {} : { clipKey: problem.clipKey }),
+      ...(problem.objectPath === undefined ? {} : { objectPath: problem.objectPath }),
+      source: 'local',
+    })
+  }
+}
 
 /** 值 token：数字归一化，避免 `1` 与 `1.0` 不等（`ObjectValidator.token`）。 */
 function tokenOf(value: JsonValue | undefined): string {
@@ -266,6 +524,9 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
       const context = readClipInto(clips[clipIndexInTrack], true, type, clipPath, ctx, issues)
       if (context === undefined) {
         continue
+      }
+      if (PINGPONG_REJECT_TRACKS.has(type) && readLoopMode(clips[clipIndexInTrack]) === 'pingpong') {
+        add(severityForContract('L85'), 'L85', `${type} 轨道不支持 pingpong（该轨没有反向时间语义）`, memberPath(clipPath, 'loop_mode'))
       }
       clipContexts.push(context)
       const id = clipIdOf(context.clip)
@@ -572,6 +833,90 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
     }
     add('info', 'L34', `根键 ${key} 运行时忽略；编辑器保留原样（不删、不改）`, key)
   }
+
+  // ── 11 轮行为合同（L35–L90）：规则 / 绑定 / 触发器 / 事件 / 事实引用 ────────
+  const clipDurations = new Map<string, number>()
+  for (const [clipId, context] of clipIndex) {
+    clipDurations.set(clipId, context.shape.duration)
+  }
+  const behaviorRefs: BehaviorRefs = {
+    clipIds: new Set(clipIndex.keys()),
+    clipDurations,
+    ruleIds,
+    bindingIds,
+  }
+
+  // 前置 / 事实跨脚本存在性：索引转发给域层；未提供索引时域层降级 unresolved（不阻断）。
+  const selfScriptId = typeof meta.id === 'string' && meta.id.length > 0 ? meta.id : undefined
+  const knownScriptSet = new Set<string>(ctx.knownScriptIds ?? [])
+
+  appendBehaviorProblems(issues, validateRules(doc.root, behaviorRefs))
+  appendBehaviorProblems(issues, validateBindings(doc.root, behaviorRefs))
+
+  // 触发器：身份 / 时序适用性 / 条件树 / 前置条目。
+  const triggerRaw = meta.triggers
+  if (Array.isArray(triggerRaw)) {
+    const triggerNodes = triggerRaw
+      .filter(isJsonObject)
+      .map((raw, index) => parseTriggerNode(raw, index))
+    const duplicateTriggerIds = findDuplicateIds(triggerNodes)
+    for (const [triggerId, indexes] of duplicateTriggerIds) {
+      for (const index of indexes) {
+        add(severityForContract('L42'), 'L42', `重复的触发器 id: ${triggerId}`, `meta.triggers[${index}].id`)
+      }
+    }
+    const requirementCtx = {
+      selfScriptId,
+      knownScriptIds: ctx.knownScriptIds ?? [],
+    }
+    triggerRaw.forEach((raw, index) => {
+      const triggerPath = `meta.triggers[${index}]`
+      if (!isJsonObject(raw)) {
+        add(severityForContract('L40'), 'L40', '触发器需要对象', triggerPath)
+        return
+      }
+      const rawId = raw.id
+      if (rawId !== undefined && (typeof rawId !== 'string' || !TRIGGER_ID_PATTERN.test(rawId))) {
+        add(severityForContract('L42'), 'L42', `触发器 id 必须匹配 ${TRIGGER_ID_PATTERN.source}，实际: ${String(rawId)}`, `${triggerPath}.id`)
+      }
+      const node = parseTriggerNode(raw, index)
+      appendBehaviorProblems(issues, triggerTimingIssues(node))
+      appendBehaviorProblems(issues, validateTriggerConditions(node, requirementCtx))
+      requirementEntries(node).forEach((entry, entryIndex) => {
+        const entryPath = `${triggerPath}.requires[${entryIndex}]`
+        if (entry.kind === 'object') {
+          appendBehaviorProblems(issues, validateRequirementFields(entry.type, entry.data, entryPath, requirementCtx))
+          return
+        }
+        if (entry.kind === 'string') {
+          appendBehaviorProblems(issues, validateStringRequirement(entry, entryPath, requirementCtx))
+          return
+        }
+        if (entry.kind === 'malformed') {
+          appendBehaviorProblems(issues, [{
+            code: 'REQ_TYPE_MISSING',
+            severity: 'error',
+            message: '前置条目形态非法（字符串脚本 id 或对象型前置条件）',
+            jsonPath: entryPath,
+          }])
+        }
+      })
+    })
+  }
+
+  // 事件记录：EVENT / MOD_EVENT 记录体、同刻冲突、超时长、多轨、乒乓事件轨。
+  for (const eventNode of eventRecords(doc.root)) {
+    appendBehaviorProblems(issues, eventNode.problems)
+  }
+
+  // 事实引用：规则事实自引用 / 成环 / 冻结态不可达 / 缺失引用。
+  const factResult = factIndex(doc.root, {
+    scriptIds: knownScriptSet,
+    clipIds: behaviorRefs.clipIds,
+    bindingIds: behaviorRefs.bindingIds,
+    ...(selfScriptId === undefined ? {} : { selfScriptId }),
+  })
+  appendBehaviorProblems(issues, factResult.diagnostics)
 
   return issues
 }

@@ -224,6 +224,12 @@ export interface DocumentService {
    * 无文档时返回 `null`。
    */
   metaObject(): JsonObject | null
+  /**
+   * 当前文档根的只读深拷贝（meta / timeline / clips / paths / rules / rule_bindings 全量）。
+   *
+   * 面板每次现算，不缓存文档副本；无文档返回 `null`。
+   */
+  root(): JsonObject | null
   /** 片段 `objects` 的只读克隆；片段不存在为 `null`。 */
   clipObjects(clipKey: string): JsonObject | null
   /** 主轴会话快照（播放头 / 缩放 / 标记 / 预览范围 / 轨道状态）。 */

@@ -8,11 +8,11 @@
  */
 import type { CatalogIndex } from '../../core/schema/index.ts'
 import { DocIo } from '../../core/doc/io.ts'
-import { serializeDoc } from '../../core/doc/serialize.ts'
 import type { DocTransport, OpenResult, SaveResult } from '../../core/doc/io.ts'
 import { collectClipReferences, liveClipKeys } from '../../core/doc/identity.ts'
 import type { ClipRegistry } from '../../core/doc/identity.ts'
 import { cloneJson, isJsonObject } from '../../core/doc/json.ts'
+import { serializeDoc } from '../../core/doc/serialize.ts'
 import { metaKeys } from '../../core/doc/keys.ts'
 import { DocStore } from '../../core/doc/store.ts'
 import type { CommitResult } from '../../core/doc/store.ts'
@@ -461,6 +461,14 @@ export class DocumentServiceImpl implements DocumentService, DocumentCommands {
       return null
     }
     return isJsonObject(doc.meta) ? cloneJson(doc.meta) as JsonObject : null
+  }
+
+  root(): JsonObject | null {
+    const doc = this.store.doc
+    if (doc === null) {
+      return null
+    }
+    return cloneJson(doc.root) as JsonObject
   }
 
   clipObjects(clipKey: string): JsonObject | null {
