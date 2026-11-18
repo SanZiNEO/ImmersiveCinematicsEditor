@@ -69,6 +69,24 @@ import {
 import { TimelineViewState } from './viewState.ts'
 import { TimelineInteractionState } from './interactionState.ts'
 import type { TimelineClipboardEntry, TimelineTool } from './interactionState.ts'
+import {
+  eventMarkers,
+  eventRecords,
+  markerDrag,
+  SEEK_SEMANTICS,
+  type EventRecordNode,
+} from '../../features/behavior/events.ts'
+import { requestFocus } from '../../features/behavior/focus.ts'
+import { propertyRowsFor } from '../../features/effects/clipContext.ts'
+import { moveRecordCommand } from '../../features/effects/eventRecords.ts'
+import {
+  canPreview,
+  groupMarkers,
+  previewStartOf,
+  resolveMarkers,
+  type EventMarkerGroup,
+  type EventMarkerView,
+} from './eventMarkers.ts'
 
 // 06-12 拆分后，这两类状态的唯一定义在各自模块；这里 re-export 保持调用点不变。
 export type { TimelineClipboardEntry, TimelineTool } from './interactionState.ts'
@@ -79,6 +97,15 @@ export { TimelineInteractionState } from './interactionState.ts'
 export interface AddClipCheck {
   ok: boolean
   reason?: string
+}
+
+/** 一次标记拖动的会话态（只改局部时间；松手提交一条命令或取消）。 */
+interface MarkerDragSession {
+  view: EventMarkerView
+  pointerId: number
+  pendingLocalTime: number | null
+  invalidReason: string | null
+  moved: boolean
 }
 
 const NO_SELECTION: SelectionSnapshot = {
@@ -155,6 +182,15 @@ export class TimelineController {
   readonly panelHeight: Ref<number>
   /** 当前活动轨道（工具栏「新建片段」的目标）。 */
   readonly activeTrackId: Ref<string | null>
+
+  /** 事件标记层开关（会话态：不进文档 / 撤销 / localStorage）。 */
+  readonly markersVisible: Ref<boolean> = ref(true)
+  /** 当前选中记录身份键（面板会话态，不写主选择）。 */
+  readonly selectedRefKey: Ref<string | null> = ref(null)
+  /** 已展开的聚合分组键（会话态）。 */
+  readonly expandedGroups: Ref<Set<string>> = ref(new Set())
+  /** 标记拖动态（会话态；松手提交一次命令或取消）。 */
+  readonly markerDragState: Ref<MarkerDragSession | null> = ref(null)
 
   /** 视图状态（06-12 拆分：滚动 / 尺寸 / 紧凑档）。 */
   private readonly viewState = new TimelineViewState()
@@ -376,6 +412,44 @@ export class TimelineController {
     () => this.hasDocument.value && this.clipboard.value.length > 0,
   )
 
+  // ── 事件标记层（11-14：标记是派生视图，不存盘） ──────────────
+
+  private readonly rootSnapshot: ComputedRef<JsonObject | null> = computed(() =>
+    this.documents.root(),
+  )
+
+  /** 全脚本事件记录（只读；身份 / 校验来自 `features/behavior/events.ts`）。 */
+  readonly eventNodes: ComputedRef<readonly EventRecordNode[]> = computed(() => {
+    const root = this.rootSnapshot.value
+    return root === null ? [] : eventRecords(root)
+  })
+
+  /** 标记对齐到活片段几何后的可渲染视图。 */
+  readonly markerViews: ComputedRef<readonly EventMarkerView[]> = computed(() => {
+    const root = this.rootSnapshot.value
+    if (root === null) {
+      return []
+    }
+    return resolveMarkers(eventMarkers(root), root, this.view.value, this.documents.clips())
+  })
+
+  /** 聚合分组（同轨同位置合并；展开 / 收起是会话态）。 */
+  readonly markerGroups: ComputedRef<readonly EventMarkerGroup[]> = computed(() =>
+    groupMarkers(this.markerViews.value),
+  )
+
+  /** 取不到活片段起点 / 时长的记录：不画横坐标，只进无起点提示区。 */
+  readonly unpositionedMarkers: ComputedRef<readonly EventMarkerView[]> = computed(() =>
+    this.markerViews.value.filter((view) => !view.positioned),
+  )
+
+  readonly markerCount: ComputedRef<number> = computed(
+    () => this.markerViews.value.length,
+  )
+
+  /** seek / 触发语义常量表（面板图例只读展示，不模拟运行时）。 */
+  readonly seekSemantics = SEEK_SEMANTICS
+
   // ── 会话 / 视图读取 ──────────────────────────────────────────
 
   /** `trackId` → 会话状态；缺失时用默认可见/未锁定/未静音。 */
@@ -437,6 +511,167 @@ export class TimelineController {
       return
     }
     this.documents.setPlayhead(Math.max(0, time))
+  }
+
+  // ── 事件标记层交互（11-14） ──────────────────────────────────
+
+  /** 标记层开关：只隐藏 / 显示，不删记录（会话态）。 */
+  toggleMarkersVisible(): void {
+    this.markersVisible.value = !this.markersVisible.value
+  }
+
+  /** 记录是否被选中（面板会话态，不进主选择）。 */
+  isMarkerSelected(refKey: string): boolean {
+    return this.selectedRefKey.value === refKey
+  }
+
+  /**
+   * 单击标记：只选中记录并经行为定位通道交给行为页抽屉；
+   * 不 seek、不播放、不改主选择之外的任何状态。
+   */
+  selectMarker(view: EventMarkerView): void {
+    this.selectedRefKey.value = view.refKey
+    requestFocus({
+      target: view.ref,
+      surface: 'behavior-drawer',
+      origin: 'core.timeline.main',
+    })
+  }
+
+  /** 双击 / 「定位到事件」：seek 到标记全局时间，不自动播放；该时刻记录本身不触发。 */
+  seekToMarker(view: EventMarkerView): void {
+    this.seek(view.globalTime)
+  }
+
+  /**
+   * 「预览此事件」：seek 到标记之前一小段再播放；时间为 0 或取不到几何的记录不可预览。
+   * 越界 / 不可预览时就地提示，不静默夹取。
+   */
+  previewMarker(view: EventMarkerView): void {
+    if (!view.positioned) {
+      this.notify('该记录所属片段无起点，无法预览事件', 'warning')
+      return
+    }
+    if (!canPreview(view)) {
+      this.notify('时间为 0 的记录无法通过 seek 预览，只能在新实例或首次推进时触发', 'warning')
+      return
+    }
+    if (!this.canPlay.value) {
+      this.notify(this.transportReason.value ?? '未连接播放端', 'warning')
+      return
+    }
+    const start = previewStartOf(view)
+    const end = view.infinite || view.duration <= 0
+      ? this.displayRange.value.end
+      : Math.max(start, view.start + view.duration)
+    void this.documents.seekPreview(start).then(() => {
+      this.preview?.play(start, end)
+    })
+  }
+
+  /** 展开 / 收起聚合分组（会话态）。 */
+  toggleGroup(groupKey: string): void {
+    const next = new Set(this.expandedGroups.value)
+    if (next.has(groupKey)) {
+      next.delete(groupKey)
+    } else {
+      next.add(groupKey)
+    }
+    this.expandedGroups.value = next
+  }
+
+  isGroupExpanded(groupKey: string): boolean {
+    return this.expandedGroups.value.has(groupKey)
+  }
+
+  /** 开始拖动标记（只改局部时间；几何跟随片段，不拖动片段本身）。 */
+  beginMarkerDrag(view: EventMarkerView, pointerId: number): void {
+    if (!view.attached) {
+      this.notify('该片段不在主轴轨道上，不能拖动标记', 'warning')
+      return
+    }
+    this.markerDragState.value = {
+      view,
+      pointerId,
+      pendingLocalTime: null,
+      invalidReason: null,
+      moved: false,
+    }
+  }
+
+  /** 拖动中：按全局时间换算局部时间，只做判定不落盘。 */
+  moveMarkerDrag(globalTime: number): void {
+    const session = this.markerDragState.value
+    if (session === null) {
+      return
+    }
+    const root = this.rootSnapshot.value
+    if (root === null) {
+      return
+    }
+    const targetLocalTime = globalTime - session.view.start
+    const result = markerDrag({ ref: session.view.ref, root, targetLocalTime })
+    session.moved = true
+    if (result.ok) {
+      session.pendingLocalTime = result.localTime
+      session.invalidReason = null
+    } else {
+      session.pendingLocalTime = null
+      session.invalidReason = result.reason
+    }
+  }
+
+  /** 松手：合法则走记录级命令一次拖动一条；越界 / 冲突不落盘并提示。 */
+  commitMarkerDrag(): void {
+    const session = this.markerDragState.value
+    this.markerDragState.value = null
+    if (session === null) {
+      return
+    }
+    const { view } = session
+    if (!session.moved || session.pendingLocalTime === null) {
+      if (session.invalidReason !== null) {
+        this.notify(`拖动被拒绝：${session.invalidReason}`, 'warning')
+      }
+      return
+    }
+    const to = session.pendingLocalTime
+    if (Math.abs(to - view.localTime) <= 1e-6) {
+      return
+    }
+    const objects = this.documents.clipObjects(view.registryKey)
+    if (objects === null || this.catalog === undefined) {
+      this.notify('片段对象不可用，不能移动记录', 'error')
+      return
+    }
+    const rows = propertyRowsFor({
+      clipKey: view.registryKey,
+      trackType: view.trackType,
+      objects,
+      catalog: this.catalog,
+      panel: 'effects',
+    })
+    const row = rows.find((item) => item.path === view.objectPath)
+    if (row === undefined) {
+      this.notify('事件行不存在，不能移动记录', 'error')
+      return
+    }
+    const edit = moveRecordCommand({
+      clipKey: view.registryKey,
+      row,
+      from: view.localTime,
+      to,
+    })
+    if (!edit.ok) {
+      this.notify(`拖动被拒绝：${edit.message}`, 'warning')
+      return
+    }
+    this.commit(edit.command)
+  }
+
+  /** 取消拖动：不落盘。 */
+  cancelMarkerDrag(): void {
+    this.markerDragState.value = null
   }
 
   setPreviewRange(range: PreviewRange | null): void {

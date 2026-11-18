@@ -73,7 +73,13 @@ import {
 } from '../../../features/paths/integrity.ts'
 import type { AffectedPath } from '../../../features/paths/integrity.ts'
 import DiagnosticsBar from '../../../features/effects/panels/DiagnosticsBar.vue'
-import EventRecordEditor from '../../core.clip-effects/panels/EventRecordEditor.vue'
+import { requestFocus } from '../../../features/behavior/focus.ts'
+import type { ClipEventContext } from '../../../features/behavior/events.ts'
+import {
+  summariesForClip,
+  recordRefAt,
+} from '../../core.clip-effects/panels/eventRecordSummary.ts'
+import type { OpenEventEditorPayload } from '../../../features/effects/panels/effectRowEvents.ts'
 import { GROUP_HEADER_HEIGHT, propertyRowHeight } from './rowLayout.ts'
 
 const ctx = usePanelContext()
@@ -583,16 +589,57 @@ function revealEffects(payload: { clipKey: string; path: string }): void {
   ctx.requestRevealInEffectControls({ clipKey: payload.clipKey, objectPath: payload.path })
 }
 
-// ── 事件记录编辑器（本面板内挂载；记录编辑是事件叶子的唯一入口） ──
+// ── 事件记录摘要（11-14：唯一详情编辑器在行为页抽屉，本面板只留摘要 + 跳转） ──
 
-const eventEditor = ref<{ clipKey: string; path: string; time: number } | null>(null)
+const eventContext = computed<ClipEventContext | null>(() => {
+  const found = clipContext.value
+  if (found === null) {
+    return null
+  }
+  const clip = found.clip
+  return {
+    clipStartTime: clip.start,
+    duration: clip.infinite ? -1 : clip.duration,
+    infinite: clip.infinite,
+  }
+})
 
-function openEventEditor(payload: { clipKey: string; path: string; time: number }): void {
-  eventEditor.value = payload
-}
+const eventSummary = computed(() => {
+  const key = clipKey.value
+  const ctxEvent = eventContext.value
+  if (key === null || ctxEvent === null || documentService === undefined) {
+    return null
+  }
+  return summariesForClip(documentService.root(), documentService.clips(), key, ctxEvent)
+})
 
-function closeEventEditor(): void {
-  eventEditor.value = null
+const eventSummaryMap = computed<ReadonlyMap<string, readonly string[]>>(() => {
+  const summary = eventSummary.value
+  const map = new Map<string, string[]>()
+  if (summary === null) {
+    return map
+  }
+  for (const entry of summary.entries) {
+    map.set(entry.path, entry.summaries)
+  }
+  return map
+})
+
+/** 行为抽屉页签 id（与 `core.behavior` manifest 的 drawerTab 注册一致）。 */
+const BEHAVIOR_DRAWER_TAB = 'behavior'
+
+/** 「在行为页打开」：先打开 / 激活行为抽屉页签，再把记录身份交给抽屉；不在本面板挂载第二套编辑器。 */
+function openInBehavior(payload: OpenEventEditorPayload): void {
+  const summary = eventSummary.value
+  const entry = summary?.entries.find((item) => item.path === payload.path)
+  const ref = entry === undefined ? null : recordRefAt(entry, payload.time)
+  if (ref === null) {
+    focusedPath.value = null
+    ctx.status.notify('该事件对象暂无记录，可在行为页新建', 'info')
+    return
+  }
+  ctx.requestOpenDrawer(BEHAVIOR_DRAWER_TAB)
+  requestFocus({ target: ref, surface: 'behavior-drawer', origin: ctx.panelId })
 }
 
 function onEnabled(payload: { clipKey: string; path: string; time: number }): void {
@@ -972,10 +1019,11 @@ const bannerComponent = computed<Component | null>(() => {
               :viewport-height="viewportHeight"
               :authoring-group-id="groupMatchFor(group).id"
               :authoring-group-name="groupMatchFor(group).name"
+              :event-summaries="eventSummaryMap"
               @open-group-popover="openGroupPopover"
               @toggle-collapse="toggleCollapse"
               @jump-effects="jumpToEffects"
-              @open-event-editor="openEventEditor"
+              @open-event-editor="openInBehavior"
               @reveal-effects="revealEffects"
               @focus-row="focusRow($event.path)"
               @enabled="onEnabled"
@@ -1003,14 +1051,6 @@ const bannerComponent = computed<Component | null>(() => {
             </section>
           </div>
 
-          <aside v-if="eventEditor !== null" class="props-panel__editor">
-            <EventRecordEditor
-              :clip-key="eventEditor.clipKey"
-              :path="eventEditor.path"
-              :time="eventEditor.time"
-              @close="closeEventEditor"
-            />
-          </aside>
 
           <aside v-if="modelEditor !== null" class="props-panel__drawer">
             <ModelEditorDrawer

@@ -36,6 +36,8 @@ const props = defineProps<{
   panel?: 'properties' | 'effects'
   /** 本行诊断（最高级别用于边框与文案）。 */
   diagnostics: readonly EffectDiagnostic[]
+  /** 事件记录摘要（按时间升序）；非事件行为空。 */
+  eventSummaries?: readonly string[]
   /** 由外壳决定的高亮（选中叶子 / 定位目标）。 */
   focused: boolean
 }>()
@@ -152,55 +154,13 @@ const rawPreview = computed(() => {
   }
 })
 
-/** 空事件的首条记录：初值来自 schema，形状不合就直接报错（不写半成品）。 */
-function addFirstRecord(): void {
-  const seed = seedRecordBody(props.row)
-  if (seed === null) {
-    error.value = '未知事件路径只读：不能添加记录'
-    return
-  }
-  const outcome = ctx.commands.commit({
-    kind: 'object.addKeyframe',
-    clipKey: props.row.clipKey,
-    path: props.row.path,
-    time: props.playhead,
-    value: seed as JsonValue,
-  })
-  if (!outcome.ok) {
-    error.value = outcome.error ?? '添加记录被拒绝'
-    return
-  }
-  error.value = ''
-  notice.value = `已在 t=${props.playhead.toFixed(3)}s 添加首条记录`
-  emit('open-event-editor', { clipKey: props.row.clipKey, path: props.row.path, time: props.playhead })
-}
-
-/** 打开记录编辑器：有记录时进第一条（或播放头命中的那条）。 */
-function openEditor(): void {
+/** 在行为页打开：有记录时定位到播放头命中的那条，否则交给抽屉新建。 */
+function openBehavior(): void {
   const frames = props.row.keyframes
-  if (frames.length === 0) {
-    addFirstRecord()
-    return
-  }
   const atPlayhead = frames.find((frame) => Math.abs(frame.time - props.playhead) <= 1e-4)
-  const time = atPlayhead?.time ?? frames[0].time
+  const time = atPlayhead?.time ?? frames[0]?.time ?? props.playhead
   emit('open-event-editor', { clipKey: props.row.clipKey, path: props.row.path, time })
 }
-
-const recordEventName = computed(() => {
-  if (props.row.keyframes.length === 0) {
-    return definition.value.name
-  }
-  const first = props.row.keyframes[0]
-  const body = readRecordBody(props.row, first.time)
-  if (body !== null && typeof body.event_type === 'string' && body.event_type.length > 0) {
-    return body.event_type
-  }
-  if (body !== null && typeof body.command === 'string' && body.command.length > 0) {
-    return body.command
-  }
-  return definition.value.name
-})
 
 function focusRow(): void {
   emit('focus-row', { path: props.row.path })
@@ -268,18 +228,15 @@ function onFailed(payload: { clipKey: string; path: string; message: string }): 
 
       <!-- 事件：记录入口 -->
       <template v-else-if="isEvent">
-        <button type="button" class="prop-row__button" @click="openEditor">
-          {{ recordCount === 0 ? '添加首条记录' : '编辑记录' }}
-        </button>
-        <span class="prop-row__record-name">{{ recordEventName }}</span>
-        <span v-if="recordCount > 0" class="prop-row__count">{{ recordCount }} 条 · 在效果面板</span>
-        <button
-          v-if="recordCount > 0"
-          type="button"
-          class="prop-row__link"
-          @click.stop="revealEffects"
-        >
-          在效果面板
+        <ul v-if="eventSummaries && eventSummaries.length > 0" class="prop-row__event-list">
+          <li v-for="(summary, index) in eventSummaries" :key="index" class="prop-row__event-item">
+            {{ summary }}
+          </li>
+        </ul>
+        <span v-else class="prop-row__record-name">暂无记录</span>
+        <span v-if="recordCount > 0" class="prop-row__count">{{ recordCount }} 条记录</span>
+        <button type="button" class="prop-row__link" @click.stop="openBehavior">
+          在行为页打开
         </button>
       </template>
 
@@ -504,6 +461,26 @@ function onFailed(payload: { clipKey: string; path: string; message: string }): 
 .prop-row__count {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.prop-row__event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 48px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prop-row__event-item {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prop-row__error {

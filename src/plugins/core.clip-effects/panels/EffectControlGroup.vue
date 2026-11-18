@@ -48,6 +48,8 @@ const props = defineProps<{
   snapCandidates?: readonly number[]
   /** 行中心（`layoutRows` 的 `centers`）：跨行框选与内容区坐标需要。 */
   rowCenters?: ReadonlyMap<string, number>
+  /** 事件行摘要（路径 → 摘要列表）；由外壳按事件记录读取模型计算。 */
+  eventSummaries?: ReadonlyMap<string, readonly string[]>
 }>()
 
 const emit = defineEmits<{
@@ -212,6 +214,7 @@ function onSelectSegment(payload: { clipKey: string; path: string; fromTime: num
         :read-only="row.unknown"
         :snap-candidates="snapCandidates"
         :row-top="rowTopOf(row.path)"
+        :event-summaries="eventSummaries?.get(row.path)"
         @select-node="onSelectNode"
         @move-nodes="onMoveNodes"
         @remove-keyframes="onRemoveKeyframes"

@@ -56,6 +56,8 @@ const props = defineProps<{
   snapCandidates?: readonly number[]
   /** 本行在关键帧内容区里的顶部纵坐标（`layoutRows` 的行顶）；跨行框选需要。 */
   rowTop?: number
+  /** 事件记录摘要（按时间升序）；非事件行为空。 */
+  eventSummaries?: readonly string[]
 }>()
 
 const emit = defineEmits<EffectRowEmitMap>()
@@ -274,15 +276,21 @@ const valueFormKey = computed(() => props.row.path)
         @jump-keyframe="onJumpKeyframe"
       />
 
-      <button
-        v-else
-        type="button"
-        class="effect-row__record"
-        :title="`在 t=${playhead.toFixed(3)} 打开记录编辑器（${row.keyframes.length} 条记录）`"
-        @click="openEventEditor"
-      >
-        记录（{{ row.keyframes.length }}）
-      </button>
+      <div v-else class="effect-row__event">
+        <ul v-if="eventSummaries && eventSummaries.length > 0" class="effect-row__event-list">
+          <li v-for="(summary, index) in eventSummaries" :key="index" class="effect-row__event-item">
+            {{ summary }}
+          </li>
+        </ul>
+        <button
+          type="button"
+          class="effect-row__record"
+          :title="`在行为页打开 ${row.keyframes.length} 条记录`"
+          @click="openEventEditor"
+        >
+          在行为页打开
+        </button>
+      </div>
 
       <span class="effect-row__stats" :title="`值来源：${valueKindLabel}`">
         <span v-if="!isStaticCompanion && !isEvent">{{ row.keyframes.length }} 帧</span>
@@ -318,7 +326,8 @@ const valueFormKey = computed(() => props.row.path)
           type="button"
           role="menuitem"
           class="effect-row__menu-item"
-          :disabled="nodeAtPlayhead === null"
+          :disabled="isEvent || nodeAtPlayhead === null"
+          :title="isEvent ? '记录的删除在行为页进行' : undefined"
           @click="removeCurrentFrame"
         >
           删除当前帧
@@ -451,6 +460,33 @@ const valueFormKey = computed(() => props.row.path)
 .effect-row__record:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -1px;
+}
+
+.effect-row__event {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.effect-row__event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 48px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.effect-row__event-item {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .effect-row__stats {

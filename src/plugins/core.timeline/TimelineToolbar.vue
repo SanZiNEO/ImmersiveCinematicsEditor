@@ -32,6 +32,10 @@ const props = defineProps<{
   canTransport: boolean
   transportReason?: string
   playing: boolean
+  /** 事件标记层开关（会话态）。 */
+  markersVisible: boolean
+  /** 当前事件标记总数。 */
+  markerCount: number
 }>()
 
 const emit = defineEmits<{
@@ -51,6 +55,8 @@ const emit = defineEmits<{
   stop: []
   toggleSnap: []
   paste: []
+  toggleMarkers: []
+  showMarkerHelp: []
 }>()
 
 const addTrackRoot = ref<HTMLElement | null>(null)
@@ -344,6 +350,32 @@ onBeforeUnmount(() => {
       >
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.4" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="timeline-toolbar__button"
+        :class="{ 'timeline-toolbar__button--on': markersVisible }"
+        :aria-pressed="markersVisible"
+        aria-label="事件标记层开关"
+        :title="`事件标记（${markerCount} 条）；关闭只隐藏，不删记录`"
+        @click="emit('toggleMarkers')"
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <circle cx="8" cy="8" r="3" fill="currentColor" />
+          <path d="M8 1v3M8 12v3M1 8h3M12 8h3" stroke="currentColor" stroke-width="1.2" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="timeline-toolbar__button"
+        aria-label="事件触发与 seek 语义说明"
+        title="事件触发与 seek 语义说明"
+        @click="emit('showMarkerHelp')"
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M6 5a2 2 0 1 1 4 0c0 1.3-2 1.6-2 3" fill="none" stroke="currentColor" stroke-width="1.3" />
+          <circle cx="8" cy="12" r="0.9" fill="currentColor" />
         </svg>
       </button>
     </div>

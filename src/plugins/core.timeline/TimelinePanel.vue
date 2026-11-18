@@ -30,6 +30,13 @@ import {
   type TimelineMenuItem,
 } from './model.ts'
 import { useTimelineController } from './state.ts'
+import {
+  canPreview,
+  MARKER_KIND_META,
+  previewStartOf,
+  type EventMarkerGroup,
+  type EventMarkerView,
+} from './eventMarkers.ts'
 
 const ctx = usePanelContext()
 const controller = useTimelineController(ctx)
@@ -71,6 +78,108 @@ const hiddenTracks = computed(() =>
     .map((track) => ({ trackId: track.trackId, label: controller.trackName(track) })),
 )
 const hasClips = computed(() => controller.tracks.value.some((track) => track.clips.length > 0))
+
+// ── 事件标记层（11-14：长在既有主轴上，不新建第二时间轴） ──
+
+const helpOpen = ref(false)
+const hoverGroup = ref<string | null>(null)
+/** 行为抽屉页签 id（与 `core.behavior` manifest 的 drawerTab 注册一致）。 */
+const BEHAVIOR_DRAWER_TAB = 'behavior'
+/** 本次标记拖动是否越过位移阈值；拖动松手后的 click 不应当作选中。 */
+let markerDragMoved = false
+
+const markerGroups = computed<readonly EventMarkerGroup[]>(() => {
+  if (!controller.markersVisible.value) {
+    return []
+  }
+  return controller.markerGroups.value.filter((group) => group.positioned)
+})
+
+/** 取不到活片段起点 / 时长的记录：不画横坐标，只进无起点提示区。 */
+const unpositionedMarkers = computed<readonly EventMarkerView[]>(() => {
+  if (!controller.markersVisible.value) {
+    return []
+  }
+  return controller.unpositionedMarkers.value
+})
+
+function markerTop(group: EventMarkerGroup): number | null {
+  // 独立片段不在主轴行内：按全局时间画在轨道区下方的独立片段带。
+  if (group.standalone) {
+    return totalHeight.value + 4
+  }
+  const top = rowTop(group.trackId)
+  if (top === null) {
+    return null
+  }
+  return top + Math.max(0, (rowHeight.value - clipHeight.value) / 2)
+}
+
+function markerLeft(group: EventMarkerGroup): number {
+  return group.globalTime * pxPerSecond.value
+}
+
+/** 先打开 / 激活行为抽屉页签，再由定位通道把记录身份交过去。 */
+function openBehaviorDrawer(): void {
+  ctx.requestOpenDrawer(BEHAVIOR_DRAWER_TAB)
+}
+
+function onMarkerPointerDown(event: PointerEvent, view: EventMarkerView): void {
+  if (event.button !== 0) {
+    return
+  }
+  event.stopPropagation()
+  event.preventDefault()
+  focusPanel()
+  markerDragMoved = false
+  // 拖动只作用于主轴行内片段；独立片段 / 无起点记录不进入拖动手势。
+  if (!view.attached) {
+    return
+  }
+  controller.beginMarkerDrag(view, event.pointerId)
+  beginGesture({ kind: 'marker', pointerId: event.pointerId, view, moved: false })
+}
+
+function onMarkerClick(view: EventMarkerView): void {
+  if (markerDragMoved) {
+    markerDragMoved = false
+    return
+  }
+  openBehaviorDrawer()
+  controller.selectMarker(view)
+}
+
+function onMarkerDoubleClick(view: EventMarkerView): void {
+  if (markerDragMoved) {
+    markerDragMoved = false
+    return
+  }
+  controller.seekToMarker(view)
+}
+
+function onMarkerGroupToggle(group: EventMarkerGroup): void {
+  controller.toggleGroup(group.key)
+}
+
+function onSeekToMarker(view: EventMarkerView): void {
+  controller.seekToMarker(view)
+}
+
+function onPreviewMarker(view: EventMarkerView): void {
+  controller.previewMarker(view)
+}
+
+function markerKindMeta(kind: EventMarkerView['kind']) {
+  return MARKER_KIND_META[kind]
+}
+
+function markerPreviewable(view: EventMarkerView): boolean {
+  return canPreview(view)
+}
+
+function markerPreviewStart(view: EventMarkerView): string {
+  return formatSeconds(previewStartOf(view))
+}
 
 // ── 自动滚动 / 尺寸 ─────────────────────────────────────────
 
@@ -230,6 +339,12 @@ type Gesture =
       baseKeys: readonly string[]
       moved: boolean
     }
+  | {
+      kind: 'marker'
+      pointerId: number
+      view: EventMarkerView
+      moved: boolean
+    }
 
 const gesture = ref<Gesture | null>(null)
 let autoScrollFrame = 0
@@ -302,6 +417,7 @@ function cancelGesture(): void {
 
 /** 手势取消（Esc / pointercancel）：不提交。 */
 function abortGesture(): void {
+  controller.cancelMarkerDrag()
   cancelGesture()
 }
 
@@ -345,6 +461,13 @@ function onWindowPointerMove(event: PointerEvent): void {
   lastAltKey = event.altKey
   if (active.kind === 'scrub') {
     controller.seek(timeAtClientX(event.clientX))
+    return
+  }
+  if (active.kind === 'marker') {
+    const moved = Math.abs(timeAtClientX(event.clientX) - active.view.globalTime) > 2 / pxPerSecond.value
+    active.moved = moved
+    markerDragMoved = moved
+    controller.moveMarkerDrag(timeAtClientX(event.clientX))
     return
   }
   updateGestureAt(event.clientX, event.clientY, event.altKey)
@@ -574,6 +697,10 @@ function onWindowPointerUp(event: PointerEvent): void {
     return
   }
   cancelGesture()
+  if (active.kind === 'marker') {
+    controller.commitMarkerDrag()
+    return
+  }
   if (active.kind === 'move') {
     if (active.moved && (Math.abs(active.delta) > 0.0005 || active.targetTrackId !== null)) {
       controller.moveClips(active.keys, active.delta, active.targetTrackId ?? undefined)
@@ -1367,6 +1494,8 @@ function trackColorOf(type: string): string {
       :can-transport="controller.canPlay.value"
       :transport-reason="controller.transportReason.value"
       :playing="controller.playing.value"
+      :markers-visible="controller.markersVisible.value"
+      :marker-count="controller.markerCount.value"
       @update:tool="controller.setTool($event)"
       @update:add-track-open="addTrackOpen = $event"
       @add-clip="onToolbarAddClip"
@@ -1383,6 +1512,8 @@ function trackColorOf(type: string): string {
       @stop="controller.stop()"
       @toggle-snap="controller.toggleSnap()"
       @paste="onToolbarPaste"
+      @toggle-markers="controller.toggleMarkersVisible()"
+      @show-marker-help="helpOpen = !helpOpen"
     />
 
     <div v-if="view === null" class="timeline-panel__empty">
@@ -1518,6 +1649,101 @@ function trackColorOf(type: string): string {
               }"
               aria-hidden="true"
             ></div>
+
+            <!-- 事件标记层（11-14）：长在既有主轴上，标记跟随片段几何 -->
+            <div
+              v-if="controller.markersVisible.value"
+              class="timeline-panel__markers"
+              role="group"
+              aria-label="事件标记"
+            >
+              <div
+                v-for="group in markerGroups"
+                :key="group.key"
+                class="event-marker-group"
+                :data-group-key="group.key"
+                :style="{ left: `${markerLeft(group)}px`, top: `${markerTop(group) ?? 0}px` }"
+                @mouseenter="hoverGroup = group.key"
+                @mouseleave="hoverGroup = null"
+              >
+                <template v-if="group.views.length > 1 && !controller.isGroupExpanded(group.key)">
+                  <button
+                    type="button"
+                    class="event-marker event-marker--aggregate"
+                    :aria-label="`聚合 ${group.views.length} 个事件，点击展开`"
+                    :title="`${group.views.length} 个事件 · 点击展开`"
+                    @click="onMarkerGroupToggle(group)"
+                  >
+                    {{ group.views.length }}
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    v-for="view in group.views"
+                    :key="view.refKey"
+                    type="button"
+                    class="event-marker"
+                    :class="[markerKindMeta(view.kind).styleClass, { 'event-marker--selected': controller.isMarkerSelected(view.refKey) }]"
+                    :aria-label="markerKindMeta(view.kind).label"
+                    :title="view.label"
+                    @pointerdown="onMarkerPointerDown($event, view)"
+                    @click="onMarkerClick(view)"
+                    @dblclick="onMarkerDoubleClick(view)"
+                    @contextmenu.prevent
+                  ></button>
+                  <button
+                    v-if="group.views.length > 1"
+                    type="button"
+                    class="event-marker event-marker--collapse"
+                    aria-label="收起聚合"
+                    title="收起聚合"
+                    @click="onMarkerGroupToggle(group)"
+                  >−</button>
+                </template>
+
+                <div v-if="hoverGroup === group.key" class="event-marker__card" role="tooltip">
+                  <ul class="event-marker__card-list">
+                    <li v-for="view in group.views" :key="view.refKey" class="event-marker__card-item">
+                      <span class="event-marker__card-kind">{{ markerKindMeta(view.kind).label }}</span>
+                      <span class="event-marker__card-label">{{ view.label }}</span>
+                      <span v-if="group.standalone" class="event-marker__card-source">来源：{{ view.sourceLabel }}</span>
+                      <div class="event-marker__card-actions">
+                        <button type="button" class="event-marker__card-button" @click="onSeekToMarker(view)">
+                          定位到事件
+                        </button>
+                        <button
+                          type="button"
+                          class="event-marker__card-button"
+                          :disabled="!markerPreviewable(view)"
+                          :title="markerPreviewable(view) ? `从 ${markerPreviewStart(view)}s 开始预览` : '时间为 0 或无起点的记录无法预览'"
+                          @click="onPreviewMarker(view)"
+                        >
+                          预览此事件
+                        </button>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- 无起点记录：不伪造位置，在标记层给出可见提示 -->
+              <div
+                v-if="unpositionedMarkers.length > 0"
+                class="event-marker__unpositioned"
+                :style="{ top: `${totalHeight + 22}px` }"
+                role="note"
+              >
+                <p class="event-marker__unpositioned-title">以下记录所属片段无起点，无法定位：</p>
+                <ul class="event-marker__unpositioned-list">
+                  <li v-for="view in unpositionedMarkers" :key="view.refKey" class="event-marker__unpositioned-item">
+                    <span class="event-marker__unpositioned-label">{{ view.sourceLabel }} · {{ view.label }}</span>
+                    <button type="button" class="event-marker__card-button" @click="onMarkerClick(view)">
+                      在行为页查看
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1714,6 +1940,244 @@ function trackColorOf(type: string): string {
   border: 1px solid var(--selection-outline);
   background: var(--bg-selected);
   opacity: 0.4;
+}
+
+/* ── 事件标记层（11-14） ── */
+
+.timeline-panel__markers {
+  position: absolute;
+  inset: 0;
+  z-index: 22;
+  pointer-events: none;
+}
+
+.event-marker-group {
+  position: absolute;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  pointer-events: auto;
+  transform: translateX(-50%);
+}
+
+.event-marker {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  cursor: grab;
+  touch-action: none;
+}
+
+.event-marker:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.event-marker--selected {
+  box-shadow: 0 0 0 2px var(--selection-outline);
+}
+
+/* 命令：实心 */
+.event-marker--command {
+  background: var(--accent);
+}
+
+/* 移动：空心 */
+.event-marker--move {
+  background: transparent;
+}
+
+/* 命令 + 移动：双色（左命令 / 右移动） */
+.event-marker--both {
+  background: linear-gradient(to right, var(--accent) 50%, transparent 50%);
+}
+
+/* 占位：虚线 */
+.event-marker--placeholder {
+  border-style: dashed;
+  border-color: var(--text-muted);
+  background: transparent;
+}
+
+/* 扩展事件：菱形 */
+.event-marker--extension {
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+/* 超时长：红色 */
+.event-marker--over-duration {
+  border-color: var(--error);
+  background: var(--error);
+}
+
+.event-marker--aggregate,
+.event-marker--collapse {
+  width: auto;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 12px;
+  cursor: pointer;
+}
+
+.event-marker__card {
+  position: absolute;
+  top: 16px;
+  left: 0;
+  z-index: 30;
+  width: 240px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.event-marker__card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.event-marker__card-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.event-marker__card-kind {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.event-marker__card-label {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.event-marker__card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.event-marker__card-button {
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.event-marker__card-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.event-marker__card-source {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.event-marker__unpositioned {
+  position: absolute;
+  left: 0;
+  z-index: 24;
+  max-width: 320px;
+  padding: 6px 8px;
+  border: 1px dashed var(--warning);
+  border-radius: 5px;
+  background: var(--bg-raised);
+  pointer-events: auto;
+}
+
+.event-marker__unpositioned-title {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.event-marker__unpositioned-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.event-marker__unpositioned-item {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.event-marker__unpositioned-label {
+  color: var(--text);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.timeline-panel__help {
+  position: absolute;
+  top: 48px;
+  right: 12px;
+  z-index: 40;
+  width: 320px;
+  max-height: 60%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.timeline-panel__help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.timeline-panel__help-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(60% - 32px);
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline-panel__help-title {
+  display: block;
+  font-size: 11px;
+}
+
+.timeline-panel__help-detail {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .timeline-panel__empty {

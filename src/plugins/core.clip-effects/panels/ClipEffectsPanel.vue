@@ -60,8 +60,10 @@ import EffectControlsToolbar from './EffectControlsToolbar.vue'
 import EffectControlsRuler from './EffectControlsRuler.vue'
 import DiagnosticsBar from '../../../features/effects/panels/DiagnosticsBar.vue'
 import EasingEditor from './EasingEditor.vue'
-import EventRecordEditor from './EventRecordEditor.vue'
-import type { NodeMovePayload, NodeSelectPayload } from '../../../features/effects/panels/effectRowEvents.ts'
+import type { NodeMovePayload, NodeSelectPayload, OpenEventEditorPayload } from '../../../features/effects/panels/effectRowEvents.ts'
+import { requestFocus } from '../../../features/behavior/focus.ts'
+import type { ClipEventContext } from '../../../features/behavior/events.ts'
+import { summariesForClip, recordRefAt } from './eventRecordSummary.ts'
 import { usePanelRevision } from '../usePanelRevision.ts'
 
 const ctx = usePanelContext()
@@ -75,7 +77,6 @@ const sessions = reactive(new Map<string, EffectPanelSession>())
 const columnRatio = ref(0.42)
 const message = ref('')
 const messageKind = ref<'info' | 'error'>('info')
-const eventEditorOpen = ref(false)
 /** 07-05 §四：位置节点编辑打断路径时的待确认计划（非空时暂停提交）。 */
 const pendingGuard = ref<{ affected: AffectedPath[]; command: unknown } | null>(null)
 
@@ -257,12 +258,56 @@ const selectedRowForSegment = computed<PropertyRow | undefined>(() => {
   return allRows.value.find((row) => row.path === segment.path)
 })
 
-const eventRow = computed<PropertyRow | undefined>(() => {
-  if (!eventEditorOpen.value) {
-    return undefined
+/** 片段时间上下文（事件摘要生成处需要局部时间换算口径）。 */
+const eventContext = computed<ClipEventContext | null>(() => {
+  const entry = clipEntry.value
+  if (entry === undefined) {
+    return null
   }
-  return allRows.value.find((row) => row.mode === 'event')
+  return {
+    clipStartTime: entry.start,
+    duration: entry.infinite ? -1 : entry.duration,
+    infinite: entry.infinite,
+  }
 })
+
+/** 当前片段的事件记录摘要（身份经 behavior focus 通道交给行为页抽屉）。 */
+const eventSummary = computed(() => {
+  const key = selectedClipKey.value
+  const ctxEvent = eventContext.value
+  if (key === null || ctxEvent === null || documentService === undefined) {
+    return null
+  }
+  return summariesForClip(documentService.root(), documentService.clips(), key, ctxEvent)
+})
+
+const eventSummaryMap = computed<ReadonlyMap<string, readonly string[]>>(() => {
+  const summary = eventSummary.value
+  const map = new Map<string, string[]>()
+  if (summary === null) {
+    return map
+  }
+  for (const entry of summary.entries) {
+    map.set(entry.path, entry.summaries)
+  }
+  return map
+})
+
+/** 行为抽屉页签 id（与 `core.behavior` manifest 的 drawerTab 注册一致）。 */
+const BEHAVIOR_DRAWER_TAB = 'behavior'
+
+/** 「在行为页打开」：先打开 / 激活行为抽屉页签，再把记录身份交给抽屉；不在本面板挂载第二套编辑器。 */
+function openInBehavior(payload: OpenEventEditorPayload): void {
+  const summary = eventSummary.value
+  const entry = summary?.entries.find((item) => item.path === payload.path)
+  const ref = entry === undefined ? null : recordRefAt(entry, payload.time)
+  if (ref === null) {
+    report('该事件对象暂无记录，可在行为页新建', 'info')
+    return
+  }
+  ctx.requestOpenDrawer(BEHAVIOR_DRAWER_TAB)
+  requestFocus({ target: ref, surface: 'behavior-drawer', origin: ctx.panelId })
+}
 
 function report(text: string, kind: 'info' | 'error'): void {
   message.value = text
@@ -604,14 +649,6 @@ function closeSegment(): void {
   session.value.selectedSegment = null
 }
 
-function openEventEditor(): void {
-  eventEditorOpen.value = true
-}
-
-function closeEventEditor(): void {
-  eventEditorOpen.value = false
-}
-
 function revealDiagnostic(): void {
   ctx.requestOpenDrawer('diagnostics')
 }
@@ -657,7 +694,6 @@ const stopWatch = setInterval(() => {
     return
   }
   lastClipKey = current
-  eventEditorOpen.value = false
   if (current === null) {
     return
   }
@@ -748,13 +784,14 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
               :selection="session.selectedNodes"
               :session="session"
               :row-centers="rowCenters.centers"
+              :event-summaries="eventSummaryMap"
               @toggle-collapse="toggleCollapse(group.key)"
               @select-node="onSelectNode"
               @move-nodes="onMoveNodes"
               @remove-keyframes="onRemoveKeyframes"
               @disable-animation="onDisableAnimation"
               @select-segment="onSelectSegment"
-              @open-event-editor="openEventEditor"
+              @open-event-editor="openInBehavior"
               @reveal-diagnostic="revealDiagnostic"
               @toggle-keyframe="onToggleKeyframe"
               @toggle-animation="onToggleAnimation"
@@ -779,14 +816,6 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
           每秒 {{ Math.round(viewport.pxPerSecond) }}px · 节点 {{ stats.frameCount }} 个
         </p>
       </template>
-
-      <EventRecordEditor
-        v-if="eventEditorOpen && eventRow !== undefined"
-        :clip-key="eventRow.clipKey"
-        :path="eventRow.path"
-        :time="playhead"
-        @close="closeEventEditor"
-      />
 
       <DiagnosticsBar scope="effects" :clip-key="selectedClipKey ?? undefined" />
 

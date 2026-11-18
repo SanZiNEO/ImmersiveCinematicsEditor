@@ -23,6 +23,8 @@ const props = defineProps<{
   playhead: number
   objects: JsonObject
   panel: RowPanel
+  /** 事件行摘要（路径 → 摘要列表）；由外壳按事件记录读取模型计算。 */
+  eventSummaries?: ReadonlyMap<string, readonly string[]>
   collapsed: boolean
   /** 该组在效果面板里的叶子数（0 表示整组都在属性面板）。 */
   effectCount: number
@@ -150,6 +152,7 @@ function jumpToEffects(): void {
             :panel="panel"
             :playhead="playhead"
             :diagnostics="rowDiagnostics(row.path)"
+            :event-summaries="eventSummaries?.get(row.path)"
             :focused="focusedPath === row.path"
             @open-event-editor="emit('open-event-editor', $event)"
             @reveal-effects="emit('reveal-effects', $event)"
