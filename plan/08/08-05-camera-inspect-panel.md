@@ -1,6 +1,6 @@
 # 镜头检查面板
 
-> 状态：未实现
+> 状态：已实现
 > 范围：文档级只读面板，承载 lane 列表、连续性诊断、玩家移动预演、回放检查四个 tab
 > 关联：08-04 lane 视图模型、08-06 连续性诊断、08-07 玩家移动预演、08-08 回放检查、04 面板宿主
 
@@ -130,10 +130,13 @@ tab 选择存会话，切页或重开面板恢复上次的 tab。内容区滚动
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-尚未开工；面板外壳、四个 tab 的取数口径、只读边界按上述设计执行，无实现偏差可记。
+实现落在 `src/plugins/core.camera-inspect/`：插件 `core.camera-inspect`、面板 `camera.inspect`、槽 `document.drawer`（默认收起）、`singleton` / `keepAlive` / `closable`；四个 tab（lanes / continuity / player / playback）只读取派生视图，不写文档。命令 `camera.inspect.open`、`camera.inspect.locate`（要求选区是片段，把 clipKey 写入会话并切到 lane tab）、`camera.playback.open`，均通过 `LAYOUT_SERVICE.showPanel` 打开/聚焦；面板会话状态（tab、玩家预览原点、定位目标）在 `src/features/camera/inspect/session.ts`，进程内会话级、不写盘、不写选区。
+
+验证：三条命令的中英文文案各一条；`verify-08.ts` 覆盖 lane 表与回放 tab 的派生数据；`vue-tsc` 对该插件无报错。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 面板会话状态存会话 | 新建模块级 reactive 单例 `inspect/session.ts` | 工作台没有既有的面板会话服务，且该状态明确不写盘，模块级单例最小且不新增宿主类型 |
+
