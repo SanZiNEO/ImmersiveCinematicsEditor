@@ -29,9 +29,15 @@ const props = defineProps<{
   localTop: number
   scrollTop: number
   viewportHeight: number
+  /** 07-01：该组命中的组合定义 id（null = 没有匹配，弹层会建议新建自定义组）。 */
+  authoringGroupId?: string | null
+  /** 07-01：组合定义显示名（组头按钮提示用）。 */
+  authoringGroupName?: string | null
 }>()
 
 const emit = defineEmits<{
+  /** 07-01：组头「组合」入口（弹层由外壳挂载）。 */
+  'open-group-popover': [groupKey: string]
   'toggle-collapse': [groupKey: string]
   'jump-effects': [groupKey: string]
   'open-event-editor': [{ clipKey: string; path: string; time: number }]
@@ -112,6 +118,16 @@ function jumpToEffects(): void {
         {{ effectCount }} 项在效果面板
       </button>
       <span v-if="group.unknown" class="prop-group__unknown">未知 / 扩展 · 只读</span>
+      <button
+        type="button"
+        class="prop-group__authoring"
+        :title="authoringGroupName === null || authoringGroupName === undefined
+          ? '该组没有匹配的组合定义：可在弹层里新建自定义组'
+          : `组合定义：${authoringGroupName}`"
+        @click="emit('open-group-popover', props.group.key)"
+      >
+        {{ authoringGroupName === null || authoringGroupName === undefined ? '组合' : `组合 · ${authoringGroupName}` }}
+      </button>
     </header>
 
     <div v-if="!collapsed" class="prop-group__rows" :style="{ height: `${contentHeight}px` }">
@@ -223,6 +239,28 @@ function jumpToEffects(): void {
   margin-left: auto;
   color: var(--warning);
   white-space: nowrap;
+}
+
+.prop-group__authoring {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.prop-group__authoring:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.prop-group__authoring:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
 }
 
 .prop-group__rows {

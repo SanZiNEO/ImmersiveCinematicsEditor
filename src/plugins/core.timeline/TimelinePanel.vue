@@ -1552,6 +1552,35 @@ function trackColorOf(type: string): string {
       <span v-if="rename.error.length > 0" class="timeline-panel__rename-error" role="alert">{{ rename.error }}</span>
     </form>
 
+    <!-- 07-05 §四：删除被路径引用片段时的「阻止 + 处理选项」 -->
+    <div v-if="controller.pendingDelete.value !== null" class="timeline-panel__guard" role="alert">
+      <p class="timeline-panel__guard-text">
+        选中片段被 {{ controller.pendingDelete.value.affected.length }} 条路径引用，直接删除会让它们失效：
+      </p>
+      <ul class="timeline-panel__guard-list">
+        <li v-for="item in controller.pendingDelete.value.affected" :key="item.id" class="timeline-panel__guard-id">
+          {{ item.id }} · {{ item.reason }}
+        </li>
+      </ul>
+      <div class="timeline-panel__guard-actions">
+        <button type="button" class="timeline-panel__cta timeline-panel__cta--small" @click="controller.confirmDelete()">删除这些路径并继续</button>
+        <button type="button" class="timeline-panel__cta timeline-panel__cta--small" @click="controller.cancelDelete()">取消</button>
+      </div>
+    </div>
+
+    <div v-if="helpOpen" class="timeline-panel__help" role="dialog" aria-label="事件触发与 seek 语义">
+      <header class="timeline-panel__help-head">
+        <span>事件触发与 seek 语义</span>
+        <button type="button" class="timeline-panel__cta timeline-panel__cta--small" @click="helpOpen = false">关闭</button>
+      </header>
+      <ul class="timeline-panel__help-list">
+        <li v-for="entry in controller.seekSemantics" :key="entry.id" class="timeline-panel__help-item">
+          <strong class="timeline-panel__help-title">{{ entry.title }}</strong>
+          <p class="timeline-panel__help-detail">{{ entry.detail }}</p>
+        </li>
+      </ul>
+    </div>
+
     <TimelineContextMenu
       v-if="menu !== null"
       :x="menu.x"
@@ -1786,5 +1815,40 @@ function trackColorOf(type: string): string {
 .timeline-panel__rename-error {
   color: var(--error);
   font-size: 10px;
+}
+
+.timeline-panel__guard {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  z-index: 35;
+  width: min(320px, calc(100% - 24px));
+  padding: 8px 10px;
+  border: 1px solid var(--warning);
+  border-radius: 5px;
+  background: var(--bg-raised);
+  box-shadow: 0 6px 18px var(--shadow);
+  transform: translateX(-50%);
+}
+
+.timeline-panel__guard-text {
+  margin: 0 0 4px;
+  font-size: 11px;
+}
+
+.timeline-panel__guard-list {
+  margin: 0 0 8px;
+  padding-left: 16px;
+  font-size: 11px;
+}
+
+.timeline-panel__guard-id {
+  font-family: var(--font-mono, monospace);
+  overflow-wrap: anywhere;
+}
+
+.timeline-panel__guard-actions {
+  display: flex;
+  gap: 6px;
 }
 </style>

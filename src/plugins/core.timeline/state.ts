@@ -15,6 +15,9 @@ import type { DocCommand } from '../../core/doc/commands.ts'
 import { cloneJson } from '../../core/doc/json.ts'
 import type { JsonObject, JsonValue } from '../../core/doc/types.ts'
 import type { CatalogIndex } from '../../core/schema/index.ts'
+import { documentSnapshot } from '../../features/paths/docAccess.ts'
+import { pathsOfClip } from '../../features/paths/integrity.ts'
+import type { AffectedPath } from '../../features/paths/integrity.ts'
 import {
   clampPxPerSecond,
   computeDisplayRange,
@@ -136,6 +139,13 @@ export class TimelineController {
   readonly snapEnabled: Ref<boolean>
   /** 会话剪贴板（不写系统剪贴板、不写文件）。 */
   readonly clipboard: ShallowRef<readonly TimelineClipboardEntry[]>
+
+  /** 07-05 §四：删除被路径引用片段前的待确认计划（非空时暂停提交）。 */
+  readonly pendingDelete = ref<{
+    affected: AffectedPath[]
+    command: unknown
+    clipboard: readonly TimelineClipboardEntry[] | null
+  } | null>(null)
 
   /** 轨道区横向滚动（像素）；只属于主轴视图。 */
   readonly scrollLeft: Ref<number>
@@ -747,9 +757,79 @@ export class TimelineController {
           return this.fail('无限片段不能波纹删除')
         }
       }
-      return this.commit({ kind: 'timeline.rippleDelete', clipKeys: [...keys] })
     }
-    return this.commit({ kind: 'timeline.deleteClips', clipKeys: [...keys] })
+    const affected = this.inspectDeletion(keys)
+    if (affected.length > 0) {
+      this.pendingDelete.value = {
+        affected,
+        command: this.deletionCommand(keys, ripple, affected),
+        clipboard: null,
+      }
+      return this.fail(`片段被 ${affected.length} 条路径引用，需要确认后删除`)
+    }
+    return this.commit(
+      ripple ? { kind: 'timeline.rippleDelete', clipKeys: [...keys] } : { kind: 'timeline.deleteClips', clipKeys: [...keys] },
+    )
+  }
+
+  /** 07-05 §四：删除前扫描选中片段被哪些路径引用（按路径 id 去重）。 */
+  private inspectDeletion(keys: readonly string[]): AffectedPath[] {
+    const doc = documentSnapshot(this.documents, this.catalog)
+    if (doc === null) {
+      return []
+    }
+    const affected: AffectedPath[] = []
+    for (const key of keys) {
+      const clipId = this.clipOf(key)?.clip.clipId
+      if (clipId === undefined || clipId === '') {
+        continue
+      }
+      for (const item of pathsOfClip(doc, clipId)) {
+        if (!affected.some((existing) => existing.id === item.id)) {
+          affected.push(item)
+        }
+      }
+    }
+    return affected
+  }
+
+  /** 合成「删路径 + 删片段」的一次 compound（一次撤销全回退）。 */
+  private deletionCommand(
+    keys: readonly string[],
+    ripple: boolean,
+    affected: readonly AffectedPath[],
+  ): DocCommand {
+    const ids = [...new Set(affected.map((item) => item.id))]
+    const removal: DocCommand | null = ids.length === 0
+      ? null
+      : { kind: 'path.writeBatch', removeIds: ids, entries: [] }
+    const deleteCommand: DocCommand = ripple
+      ? { kind: 'timeline.rippleDelete', clipKeys: [...keys] }
+      : { kind: 'timeline.deleteClips', clipKeys: [...keys] }
+    if (removal === null) {
+      return deleteCommand
+    }
+    // 先删路径再删片段：片段删除预检看不到路径引用；其余引用仍由命令层如实拦下。
+    return { kind: 'compound', commands: [removal, deleteCommand] }
+  }
+
+  /** 作者确认：删除受影响路径并继续（片段与路径同一次 compound）。 */
+  confirmDelete(): void {
+    const pending = this.pendingDelete.value
+    if (pending === null) {
+      return
+    }
+    this.pendingDelete.value = null
+    const outcome = this.commit(pending.command as DocCommand)
+    if (outcome.ok && pending.clipboard !== null) {
+      this.clipboard.value = pending.clipboard
+    }
+  }
+
+  /** 作者取消：片段与路径都不改。 */
+  cancelDelete(): void {
+    this.pendingDelete.value = null
+    this.notify('已取消（路径与片段都没有改动）', 'info')
   }
 
   toggleLoopSelection(): CommitOutcome {
@@ -806,6 +886,16 @@ export class TimelineController {
     }
     if (this.selectionLocked.value) {
       this.notify('轨道已锁定，不能剪切片段', 'warning')
+      return false
+    }
+    const affected = this.inspectDeletion(keys)
+    if (affected.length > 0) {
+      this.pendingDelete.value = {
+        affected,
+        command: this.deletionCommand(keys, false, affected),
+        clipboard: entries,
+      }
+      this.notify(`片段被 ${affected.length} 条路径引用，需要确认后剪切`, 'warning')
       return false
     }
     const outcome = this.commit({ kind: 'timeline.deleteClips', clipKeys: [...keys] })

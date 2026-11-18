@@ -12,7 +12,8 @@
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import type { DocCommand } from '../../../core/doc/commands.ts'
-import type { JsonObject } from '../../../core/doc/types.ts'
+import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
+import { isJsonObject } from '../../../core/doc/json.ts'
 import type { ClipSelectionState } from '../../../workbench/api/context.ts'
 import {
   clipTimingOf,
@@ -45,6 +46,26 @@ import { usePanelRevision } from '../usePanelRevision.ts'
 import ClipPropertiesHeader from './ClipPropertiesHeader.vue'
 import ClipPropertiesToolbar from './ClipPropertiesToolbar.vue'
 import ClipPropertyGroup from './ClipPropertyGroup.vue'
+import MotionChannelRow from './MotionChannelRow.vue'
+import ModelEditorDrawer from './ModelEditorDrawer.vue'
+import { MOTION_CHANNELS, channelDomain, isChannelField } from '../../../features/paths/modelEditor.ts'
+import { decoratePositionRows } from '../../../features/authoring/ui/positionFields.ts'
+import { decorateOrientationRows } from '../../../features/authoring/ui/orientationFields.ts'
+import type { ApplyItem } from '../../../features/authoring/ui/positionFields.ts'
+import {
+  loadAuthoringGroups,
+  type AuthoringGroup,
+  type GroupRegistry,
+} from '../../../features/authoring/groups.ts'
+import { matchAuthoringGroup, rowPaths, customGroupsToJson } from '../../../features/authoring/ui/groupPopover.ts'
+import PositionGroupEditor from './PositionGroupEditor.vue'
+import OrientationGroupEditor from './OrientationGroupEditor.vue'
+import GroupEditPopover from './GroupEditPopover.vue'
+import { documentSnapshot } from '../../../features/paths/docAccess.ts'
+import {
+  POSITION_NODE_PATHS, pathsBreakingOnInsert, pathsUsingEndpoint, withPathRemoval,
+} from '../../../features/paths/integrity.ts'
+import type { AffectedPath } from '../../../features/paths/integrity.ts'
 import DiagnosticsBar from '../../../features/effects/panels/DiagnosticsBar.vue'
 import EventRecordEditor from '../../core.clip-effects/panels/EventRecordEditor.vue'
 import { GROUP_HEADER_HEIGHT, propertyRowHeight } from './rowLayout.ts'
@@ -133,8 +154,26 @@ const rows = computed<PropertyRow[]>(() => {
   // 只由片段头给一个"在时间轴编辑"的跳转（06-09 §4.4）。这里把它们从行集合里剔除，
   // 避免出现"看起来能改时长、实际该去主轴"的误导控件。
   const withoutGeometry = built.filter((row) => !CLIP_GEOMETRY_PATHS.has(row.path))
-  const separated = separateUnknownGroup(withoutGeometry)
-  return withAvailability(separated, catalog, found.trackType, currentObjects)
+  // 07-09：motion_* 六个模型通道由面板底部「模型」区专用行渲染，不再进通用行，
+  // 避免同一个字段既出现 JSON 只读控件又出现模型编辑器入口。
+  const separated = separateUnknownGroup(withoutGeometry.filter((row) => !isChannelField(row.path)))
+  const available = withAvailability(separated, catalog, found.trackType, currentObjects)
+  // 07-02 / 07-04：位置与朝向按 core 的可见性矩阵装饰行——轴标签换 fwd/up/right、
+  // 「不读取」分支设 unavailableReason（行组件已会把值控件/时钟禁用并给原因）、
+  // 该隐藏的分支叶子从行集合里过滤（不改 path，不改值）。
+  const positionDecored = decoratePositionRows(available, {
+    trackType: found.trackType,
+    objects: currentObjects,
+    catalog,
+  })
+  const orientationDecored = decorateOrientationRows(positionDecored.rows, {
+    trackType: found.trackType,
+    objects: currentObjects,
+    catalog,
+    flags: {},
+  })
+  const hiddenSet = new Set(positionDecored.hidden)
+  return orientationDecored.rows.filter((row) => !hiddenSet.has(row.path))
 })
 
 const allGroups = computed<EffectGroup[]>(() => buildGroups(rows.value, timing.value))
@@ -206,6 +245,8 @@ const focusedPath = ref<string | null>(null)
 /** 菱形/时钟操作的反馈（成功与失败都给真实结果，不静默）。 */
 const focusMessage = ref('')
 const focusMessageKind = ref<'info' | 'error'>('info')
+/** 07-05 §四：位置节点编辑打断路径时的待确认计划（非空时暂停提交）。 */
+const pendingGuard = ref<{ affected: AffectedPath[]; command: DocCommand } | null>(null)
 
 /** 片段切换时恢复该片段自己的折叠 / 过滤 / 滚动。 */
 watch(
@@ -501,30 +542,83 @@ function onFailed(payload: { clipKey: string; path: string; message: string }): 
  *
  * 初值按 06-05 的回退链（播放头采样 → 静态值 → 目录默认值）；都没有则提示先输入静态值。
  * 与效果面板同一套命令，保证两个面板行为一致。
+ *
+ * 07-05 §四：位置三轴的节点被删 / 被插时，先扫描受影响的路径；有影响就**阻止**并让作者
+ * 显式选「删除这些路径并继续 / 取消」，删除与帧操作在同一次 `compound` 里。
  */
 function onToggleKeyframe(payload: { clipKey: string; path: string; time: number; create: boolean }): void {
   const row = rows.value.find((item) => item.path === payload.path)
   if (row === undefined) {
     return
   }
+  let frameCommand: DocCommand | null
+  let text: string
   if (!payload.create) {
-    commitKeyframeCommand(removeKeyframeCommands(payload.clipKey, [{ path: payload.path, time: payload.time }]),
-      `已删除 ${payload.path} 在 ${payload.time.toFixed(2)}s 的关键帧。`)
+    frameCommand = removeKeyframeCommands(payload.clipKey, [{ path: payload.path, time: payload.time }])
+    text = `已删除 ${payload.path} 在 ${payload.time.toFixed(2)}s 的关键帧。`
+  } else {
+    const sampled = sampleValue({
+      frames: row.keyframes,
+      interp: row.interp,
+      time: payload.time,
+      timing: timing.value,
+    })
+    const seed = seedForNewNode(row, sampled.ok ? sampled.value : undefined, payload.time)
+    if (!seed.ok || seed.value === undefined) {
+      focusedPath.value = payload.path
+      return
+    }
+    frameCommand = addKeyframeCommand(payload.clipKey, row, payload.time, seed.value)
+    text = `已在 ${payload.time.toFixed(2)}s 创建 ${payload.path} 的关键帧。`
+  }
+  if (frameCommand === null) {
     return
   }
-  const sampled = sampleValue({
-    frames: row.keyframes,
-    interp: row.interp,
-    time: payload.time,
-    timing: timing.value,
-  })
-  const seed = seedForNewNode(row, sampled.ok ? sampled.value : undefined, payload.time)
-  if (!seed.ok || seed.value === undefined) {
-    focusedPath.value = payload.path
+  const guard = nodeEditGuard(payload.path, payload.time, payload.create, frameCommand)
+  if (guard !== null) {
+    pendingGuard.value = guard
     return
   }
-  commitKeyframeCommand(addKeyframeCommand(payload.clipKey, row, payload.time, seed.value),
-    `已在 ${payload.time.toFixed(2)}s 创建 ${payload.path} 的关键帧。`)
+  commitKeyframeCommand(frameCommand, text)
+}
+
+/** 位置节点编辑的引用完整性扫描；没有受影响路径时返回 `null`（直接提交）。 */
+function nodeEditGuard(
+  path: string,
+  time: number,
+  create: boolean,
+  frameCommand: DocCommand,
+): { affected: AffectedPath[]; command: DocCommand } | null {
+  if (!POSITION_NODE_PATHS.includes(path) || documentService === undefined || catalog === undefined) {
+    return null
+  }
+  const doc = documentSnapshot(documentService, catalog)
+  const clipId = clipContext.value?.clip.clipId ?? ''
+  if (doc === null || clipId === '') {
+    return null
+  }
+  const affected = create
+    ? pathsBreakingOnInsert(doc, clipId, time)
+    : pathsUsingEndpoint(doc, clipId, time)
+  if (affected.length === 0) {
+    return null
+  }
+  return { affected, command: withPathRemoval(frameCommand, affected) }
+}
+
+function confirmGuard(): void {
+  const pending = pendingGuard.value
+  if (pending === null) {
+    return
+  }
+  pendingGuard.value = null
+  commitKeyframeCommand(pending.command, `已删除 ${pending.affected.length} 条受影响路径并继续。`)
+}
+
+function cancelGuard(): void {
+  pendingGuard.value = null
+  focusMessage.value = '已取消（路径与关键帧都没有改动）。'
+  focusMessageKind.value = 'info'
 }
 
 /** 时钟：开/关动画。关闭时命令层保留最后值。 */
@@ -562,6 +656,127 @@ function commitKeyframeCommand(command: DocCommand | null, successText: string):
   focusMessage.value = outcome.error ?? '命令被拒绝。'
   focusMessageKind.value = 'error'
 }
+
+// ── 07 位置组 / 朝向组控制条 + 组合弹层 ───────────────────────
+
+const authoringGroupRegistry = computed<GroupRegistry>(() => {
+  void revision.value
+  const config: GroupRegistry = catalog === undefined
+    ? { groups: [], errors: [] }
+    : loadAuthoringGroups(catalog)
+  // 自定义组只活在内存（`doc.authoring.groups`），不写盘、不进撤销。
+  const custom = ctx.commands.authoringGroups() as unknown as AuthoringGroup[]
+  return { groups: [...config.groups, ...custom], errors: config.errors }
+})
+
+/** 组头按钮要显示的组合名：按组内行路径与注册表组的最长交集匹配。 */
+function groupMatchFor(group: EffectGroup): { id: string | null; name: string | null } {
+  const match = matchAuthoringGroup(rowPaths(group.rows), authoringGroupRegistry.value, group.key)
+  return { id: match.group?.id ?? null, name: match.group?.name ?? null }
+}
+
+const popoverGroupKey = ref<string | null>(null)
+const popoverGroup = computed<EffectGroup | null>(() => {
+  const key = popoverGroupKey.value
+  if (key === null) {
+    return null
+  }
+  return filteredGroups.value.find((group) => group.key === key) ?? null
+})
+
+function openGroupPopover(groupKey: string): void {
+  popoverGroupKey.value = groupKey
+}
+
+function closeGroupPopover(): void {
+  popoverGroupKey.value = null
+}
+
+/** 组合四动作 / 控制条的写入计划：多条并成一次 compound，一次撤销全回退。 */
+function applyItems(items: ApplyItem[]): void {
+  if (items.length === 0) {
+    return
+  }
+  const commands = items.map((item) => item.command)
+  const command: DocCommand = commands.length === 1 ? commands[0] : { kind: 'compound', commands }
+  const outcome = ctx.commands.commit(command)
+  if (outcome.ok) {
+    focusMessage.value = items[items.length - 1].successText
+    focusMessageKind.value = 'info'
+    return
+  }
+  focusMessage.value = outcome.error ?? '组合写入被拒绝。'
+  focusMessageKind.value = 'error'
+}
+
+/** 自定义组合定义：只改内存态，保存 / 推送 / 导出都不含它。 */
+function onGroupsChange(groups: AuthoringGroup[]): void {
+  const outcome = ctx.commands.setAuthoringGroups(customGroupsToJson(groups))
+  if (outcome.ok) {
+    focusMessage.value = '自定义组合定义已更新（不进撤销、不写盘）。'
+    focusMessageKind.value = 'info'
+    return
+  }
+  focusMessage.value = outcome.error ?? '组合定义被拒绝。'
+  focusMessageKind.value = 'error'
+}
+
+// ── 模型通道（07-09）：六行摘要 + 右侧滑出编辑器 ─────────────
+
+interface ModelEditorTarget {
+  clipKey: string
+  path: string
+  domain: string
+}
+
+const modelEditor = ref<ModelEditorTarget | null>(null)
+
+/** `clips[].objects[path].value`；字段缺失或不是对象都当「未设置」。 */
+function modelValueOf(path: string): JsonValue | undefined {
+  const objs = objects.value
+  if (objs === null) {
+    return undefined
+  }
+  const raw = objs[path]
+  if (!isJsonObject(raw)) {
+    return undefined
+  }
+  return raw.value
+}
+
+function openModelEditor(payload: { clipKey: string; path: string }): void {
+  modelEditor.value = { clipKey: payload.clipKey, path: payload.path, domain: channelDomain(payload.path) }
+}
+
+function closeModelEditor(): void {
+  modelEditor.value = null
+}
+
+/** 应用 / 重置：一次 commit 一次撤销；`undefined` = 回到未设置（删掉该字段条目）。 */
+function commitModel(value: JsonValue | undefined): void {
+  const target = modelEditor.value
+  if (target === null) {
+    return
+  }
+  const command: DocCommand = value === undefined
+    ? { kind: 'object.remove', clipKey: target.clipKey, path: target.path }
+    : { kind: 'object.setValue', clipKey: target.clipKey, path: target.path, value }
+  const outcome = ctx.commands.commit(command)
+  if (outcome.ok) {
+    focusMessage.value = `${target.path} 模型已写入（一次撤销可回退）。`
+    focusMessageKind.value = 'info'
+  } else {
+    focusMessage.value = outcome.error ?? '模型写入被拒绝。'
+    focusMessageKind.value = 'error'
+  }
+}
+
+const motionChannels = MOTION_CHANNELS
+
+const modelTargetModel = computed<JsonValue | undefined>(() => {
+  const target = modelEditor.value
+  return target === null ? undefined : modelValueOf(target.path)
+})
 
 // ── 状态辅助 ─────────────────────────────────────────────────
 
@@ -605,6 +820,48 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
             @clear="clearFilters"
           />
 
+          <!-- 07-05 §四：节点编辑打断路径时的「阻止 + 处理选项」 -->
+          <div v-if="pendingGuard !== null" class="props-panel__guard" role="alert">
+            <p class="props-panel__guard-text">
+              这个位置节点是 {{ pendingGuard.affected.length }} 条路径的端点或区间节点，直接改动会让它们失效：
+            </p>
+            <ul class="props-panel__guard-list">
+              <li v-for="item in pendingGuard.affected" :key="item.id" class="props-panel__mono">
+                {{ item.id }} · {{ item.reason }}
+              </li>
+            </ul>
+            <div class="props-panel__guard-actions">
+              <button type="button" class="props-panel__button" @click="confirmGuard">删除这些路径并继续</button>
+              <button type="button" class="props-panel__button" @click="cancelGuard">取消</button>
+            </div>
+          </div>
+
+          <!-- 07-02 / 07-04：位置组与朝向组的组头控制条（分支、轴标签、警告、清除）。
+               行值仍在下方组内，这里不重复值控件。 -->
+          <section
+            v-if="catalog !== undefined && hasPositionBars"
+            class="props-panel__bars"
+            aria-label="位置与朝向控制条"
+          >
+            <PositionGroupEditor
+              :clip-key="clipKey"
+              :objects="objects ?? {}"
+              :track-type="clipContext.trackType"
+              :catalog="catalog"
+              :time="playhead"
+              :effect-count="effectCountByGroup.get('position') ?? 0"
+              @apply="applyItems"
+            />
+            <OrientationGroupEditor
+              :clip-key="clipKey"
+              :objects="objects ?? {}"
+              :track-type="clipContext.trackType"
+              :catalog="catalog"
+              :time="playhead"
+              :effect-count="effectCountByGroup.get('orientation') ?? 0"
+              @apply="applyItems"
+            />
+          </section>
           <div ref="scrollRef" class="props-panel__scroll" @scroll="onScroll">
             <p v-if="totalRows === 0" class="props-panel__empty">
               该轨道没有可编辑字段（schema 未声明任何适用对象）。这里不提供添加入口。
@@ -625,6 +882,9 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
               :local-top="localTopOf(group.key)"
               :scroll-top="scrollTop"
               :viewport-height="viewportHeight"
+              :authoring-group-id="groupMatchFor(group).id"
+              :authoring-group-name="groupMatchFor(group).name"
+              @open-group-popover="openGroupPopover"
               @toggle-collapse="toggleCollapse"
               @jump-effects="jumpToEffects"
               @open-event-editor="openEventEditor"
@@ -636,6 +896,23 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
               @toggle-animation="onToggleAnimation"
               @jump-keyframe="onJumpKeyframe"
             />
+
+            <!-- 07-09：六个模型通道。没有时钟、没有「添加首帧」，只给模型编辑入口。 -->
+            <section v-if="clipKey !== null && hasMotionModels" class="props-panel__models" aria-label="模型">
+              <header class="props-panel__models-head">
+                <span class="props-panel__models-title">模型</span>
+                <span class="props-panel__models-hint">状态型模型不改位置，只改本片段内的运动响应。</span>
+              </header>
+              <MotionChannelRow
+                v-for="channel in motionChannels"
+                :key="channel.field"
+                :clip-key="clipKey"
+                :path="channel.field"
+                :model="modelValueOf(channel.field)"
+                :domain="channel.domain"
+                @open-editor="openModelEditor"
+              />
+            </section>
           </div>
 
           <aside v-if="eventEditor !== null" class="props-panel__editor">
@@ -644,6 +921,43 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
               :path="eventEditor.path"
               :time="eventEditor.time"
               @close="closeEventEditor"
+            />
+          </aside>
+
+          <aside v-if="modelEditor !== null" class="props-panel__drawer">
+            <ModelEditorDrawer
+              :clip-key="modelEditor.clipKey"
+              :path="modelEditor.path"
+              :model="modelTargetModel"
+              :domain="modelEditor.domain"
+              :open="modelEditor !== null"
+              @close="closeModelEditor"
+              @save="commitModel"
+              @reset="commitModel"
+            />
+          </aside>
+
+          <!-- 07-01：组合编辑弹层（挂在组头「组合」按钮上） -->
+          <aside
+            v-if="popoverGroup !== null && clipKey !== null && catalog !== undefined"
+            class="props-panel__popover"
+            aria-label="组合编辑"
+          >
+            <header class="props-panel__popover-head">
+              <span class="props-panel__popover-title">组合编辑 · {{ popoverGroup.label }}</span>
+              <button type="button" class="props-panel__button" @click="closeGroupPopover">关闭</button>
+            </header>
+            <GroupEditPopover
+              :groups="authoringGroupRegistry.groups"
+              :active-group-key="popoverGroup.key"
+              :rows="popoverGroup.rows"
+              :clip-key="clipKey"
+              :objects="objects ?? {}"
+              :track-type="clipContext.trackType"
+              :catalog="catalog"
+              :time="playhead"
+              @apply="applyItems"
+              @groups-change="onGroupsChange"
             />
           </aside>
 
@@ -815,5 +1129,93 @@ const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum
 .props-panel__button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+.props-panel__guard {
+  flex: 0 0 auto;
+  margin: 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--error);
+  border-radius: 4px;
+  background: var(--error-bg);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.props-panel__guard-text {
+  margin: 0 0 4px;
+}
+
+.props-panel__guard-list {
+  margin: 0 0 6px;
+  padding-left: 16px;
+  color: var(--text-secondary);
+}
+
+.props-panel__guard-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.props-panel__bars {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  max-height: 40%;
+  overflow: auto;
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+}
+
+.props-panel__popover {
+  flex: 0 0 auto;
+  max-height: 70%;
+  overflow: auto;
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+}
+
+.props-panel__popover-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.props-panel__popover-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.props-panel__models {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-strong);
+}
+
+.props-panel__models-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  padding: 0 10px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.props-panel__models-title {
+  font-weight: 600;
+}
+
+.props-panel__models-hint {
+  color: var(--text-muted);
+}
+
+.props-panel__drawer {
+  flex: 0 0 auto;
+  max-height: 60%;
+  overflow: auto;
+  border-top: 1px solid var(--border-strong);
 }
 </style>

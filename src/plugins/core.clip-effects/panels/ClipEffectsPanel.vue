@@ -37,6 +37,14 @@ import {
 } from '../../../features/effects/keyframeOps.ts'
 import { sampleValue } from '../../../features/effects/easing.ts'
 import { seedForNewNode } from '../../../features/effects/valueControls.ts'
+import { documentSnapshot } from '../../../features/paths/docAccess.ts'
+import {
+  POSITION_NODE_PATHS,
+  pathsBreakingOnInsert,
+  pathsBreakingOnMove,
+  pathsUsingEndpoint,
+} from '../../../features/paths/integrity.ts'
+import type { AffectedPath } from '../../../features/paths/integrity.ts'
 import type {
   EffectGroup,
   EffectPanelSession,
@@ -68,6 +76,8 @@ const columnRatio = ref(0.42)
 const message = ref('')
 const messageKind = ref<'info' | 'error'>('info')
 const eventEditorOpen = ref(false)
+/** 07-05 §四：位置节点编辑打断路径时的待确认计划（非空时暂停提交）。 */
+const pendingGuard = ref<{ affected: AffectedPath[]; command: unknown } | null>(null)
 
 const state = computed<ClipSelectionState>(() => {
   void revision.value
@@ -275,6 +285,90 @@ function commit(command: DocCommand | null, successText?: string): boolean {
   return false
 }
 
+/**
+ * 位置节点编辑的引用完整性扫描（07-05 §四）。
+ *
+ * 只扫 `position.x/y/z` 三个位置轴；受影响路径按 id 去重。
+ * 没有受影响路径时返回 `null`，调用方直接提交帧操作。
+ */
+function nodeEditGuard(
+  mode: 'delete' | 'insert' | 'move',
+  targets: ReadonlyArray<{ path: string; time: number }>,
+  moves: ReadonlyArray<{ path: string; from: number; to: number }>,
+  frameCommand: DocCommand,
+): { affected: AffectedPath[]; command: DocCommand } | null {
+  if (documentService === undefined || catalog === undefined) {
+    return null
+  }
+  const doc = documentSnapshot(documentService, catalog)
+  const clipId = clipEntry.value?.clipId ?? ''
+  if (doc === null || clipId === '') {
+    return null
+  }
+  const affected: AffectedPath[] = []
+  const push = (item: AffectedPath): void => {
+    if (!affected.some((existing) => existing.id === item.id)) {
+      affected.push(item)
+    }
+  }
+  if (mode === 'move') {
+    for (const move of moves) {
+      if (!POSITION_NODE_PATHS.includes(move.path)) {
+        continue
+      }
+      for (const item of pathsBreakingOnMove(doc, clipId, move.from, move.to)) {
+        push(item)
+      }
+    }
+  } else {
+    for (const target of targets) {
+      if (!POSITION_NODE_PATHS.includes(target.path)) {
+        continue
+      }
+      const hits = mode === 'insert'
+        ? pathsBreakingOnInsert(doc, clipId, target.time)
+        : pathsUsingEndpoint(doc, clipId, target.time)
+      for (const item of hits) {
+        push(item)
+      }
+    }
+  }
+  if (affected.length === 0) {
+    return null
+  }
+  // 先删路径再帧操作：帧命令的端点 / 区间预检看不到已移除的引用；同一次 compound，一次撤销全回退。
+  const removal = removalCommand(affected)
+  const command: DocCommand = removal === null
+    ? frameCommand
+    : { kind: 'compound', commands: [removal, frameCommand] }
+  return { affected, command }
+}
+
+/** 「删除这些路径」命令：只移除受影响条目，其余条目原样留在 `paths[]`。 */
+function removalCommand(affected: readonly AffectedPath[]): DocCommand | null {
+  const ids = [...new Set(affected.map((item) => item.id))]
+  if (ids.length === 0) {
+    return null
+  }
+  return { kind: 'path.writeBatch', removeIds: ids, entries: [] }
+}
+
+/** 作者确认：删除受影响路径并继续（帧操作与路径删除同一次 compound）。 */
+function confirmGuard(): void {
+  const pending = pendingGuard.value
+  if (pending === null) {
+    return
+  }
+  pendingGuard.value = null
+  commit(pending.command as DocCommand, `已删除 ${pending.affected.length} 条受影响路径并继续。`)
+}
+
+/** 作者取消：路径与关键帧都不改。 */
+function cancelGuard(): void {
+  pendingGuard.value = null
+  report('已取消（路径与关键帧都没有改动）。', 'info')
+}
+
 function setSearch(value: string): void {
   session.value.search = value
 }
@@ -405,11 +499,25 @@ function onMoveNodes(payload: NodeMovePayload): void {
         to: payload.moves[0].to,
       }
     : { kind: 'object.moveKeyframes', clipKey: payload.clipKey, moves: payload.moves }
+  const guard = nodeEditGuard('move', [], payload.moves, command)
+  if (guard !== null) {
+    pendingGuard.value = guard
+    return
+  }
   commit(command)
 }
 
 function onRemoveKeyframes(payload: { clipKey: string; targets: Array<{ path: string; time: number }> }): void {
-  commit(removeKeyframeCommands(payload.clipKey, payload.targets))
+  const command = removeKeyframeCommands(payload.clipKey, payload.targets)
+  if (command === null) {
+    return
+  }
+  const guard = nodeEditGuard('delete', payload.targets, [], command)
+  if (guard !== null) {
+    pendingGuard.value = guard
+    return
+  }
+  commit(command)
 }
 
 function onDisableAnimation(payload: { clipKey: string; path: string }): void {
@@ -428,10 +536,16 @@ function onToggleKeyframe(payload: { clipKey: string; path: string; time: number
     return
   }
   if (!payload.create) {
-    commit(
-      removeKeyframeCommands(payload.clipKey, [{ path: payload.path, time: payload.time }]),
-      `已删除 ${payload.path} 在 ${payload.time.toFixed(2)}s 的关键帧。`,
-    )
+    const command = removeKeyframeCommands(payload.clipKey, [{ path: payload.path, time: payload.time }])
+    if (command === null) {
+      return
+    }
+    const guard = nodeEditGuard('delete', [{ path: payload.path, time: payload.time }], [], command)
+    if (guard !== null) {
+      pendingGuard.value = guard
+      return
+    }
+    commit(command, `已删除 ${payload.path} 在 ${payload.time.toFixed(2)}s 的关键帧。`)
     return
   }
   const sampled = sampleValue({
@@ -445,8 +559,17 @@ function onToggleKeyframe(payload: { clipKey: string; path: string; time: number
     report(seed.message ?? '没有可用的初值，请先输入静态值。', 'error')
     return
   }
+  const command = addKeyframeCommand(payload.clipKey, row, payload.time, seed.value)
+  if (command === null) {
+    return
+  }
+  const guard = nodeEditGuard('insert', [{ path: payload.path, time: payload.time }], [], command)
+  if (guard !== null) {
+    pendingGuard.value = guard
+    return
+  }
   commit(
-    addKeyframeCommand(payload.clipKey, row, payload.time, seed.value),
+    command,
     `已在 ${payload.time.toFixed(2)}s 创建 ${payload.path} 的关键帧。`,
   )
 }
@@ -583,6 +706,22 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
         @collapse-all="collapseAll"
         @refresh="refresh"
       />
+
+      <!-- 07-05 §四：节点编辑打断路径时的「阻止 + 处理选项」 -->
+      <div v-if="pendingGuard !== null" class="effects-guard" role="alert">
+        <p class="effects-guard-text">
+          这个位置节点是 {{ pendingGuard.affected.length }} 条路径的端点或区间节点，直接改动会让它们失效：
+        </p>
+        <ul class="effects-guard-list">
+          <li v-for="item in pendingGuard.affected" :key="item.id" class="effects-mono">
+            {{ item.id }} · {{ item.reason }}
+          </li>
+        </ul>
+        <div class="effects-guard-actions">
+          <button type="button" class="effects-button" @click="confirmGuard">删除这些路径并继续</button>
+          <button type="button" class="effects-button" @click="cancelGuard">取消</button>
+        </div>
+      </div>
 
       <p v-if="empty" class="effects-empty">
         该片段还没有关键帧动画。在属性面板打开时钟后，这里显示对应属性。
@@ -788,6 +927,30 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
 .effects-mono {
   font-family: var(--font-mono, monospace);
   overflow-wrap: anywhere;
+}
+
+.effects-guard {
+  flex: 0 0 auto;
+  margin: 6px 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--warning);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.effects-guard-text {
+  margin: 0 0 4px;
+}
+
+.effects-guard-list {
+  margin: 0 0 8px;
+  padding-left: 16px;
+}
+
+.effects-guard-actions {
+  display: flex;
+  gap: 6px;
 }
 
 .effects-footer {
