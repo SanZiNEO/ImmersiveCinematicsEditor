@@ -1,0 +1,10 @@
+/** 09 覆盖层领域纯逻辑的统一出口（不依赖 Vue / 文档实例）。 */
+export * from './layers.ts'
+export * from './colorMask.ts'
+export * from './media.ts'
+export * from './subtitle.ts'
+export * from './geometry.ts'
+export * from './letterbox.ts'
+export * from './zorder.ts'
+export * from './presets.ts'
+export * from './validation.ts'
