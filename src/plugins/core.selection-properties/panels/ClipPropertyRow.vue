@@ -20,6 +20,7 @@ import type { EffectDiagnostic, PropertyRow } from '../../../features/effects/ty
 import { rangeHint, unitSuffix } from '../../../features/effects/valueControls.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
 import { customFieldFor, customFieldsRevision } from '../../../features/effects/customFields.ts'
+import { DOCUMENT_SERVICE } from '../../../workbench/api/tokens.ts'
 import PropertyValueForm from '../../../features/effects/panels/PropertyValueForm.vue'
 import AnimationClock from './AnimationClock.vue'
 
@@ -52,6 +53,7 @@ const emit = defineEmits<{
 }>()
 
 const ctx = usePanelContext()
+const documentService = ctx.services.get(DOCUMENT_SERVICE)
 /** 09：命中插件自定义字段时，用专用控件替代默认值控件。 */
 const trackType = computed(() => props.row.def?.scope[0] ?? '')
 const customField = computed(() => {
@@ -59,7 +61,11 @@ const customField = computed(() => {
   if (trackType.value === '') return undefined
   return customFieldFor(trackType.value, props.row.path)
 })
-const rowObjects = computed<JsonObject>(() => props.objects ?? {})
+/** 当前片段对象（09 控件入参；父级没传时从文档服务取只读克隆）。 */
+const rowObjects = computed<JsonObject>(() => {
+  if (props.objects !== undefined) return props.objects
+  return documentService?.clipObjects(props.row.clipKey) ?? {}
+})
 /**
  * 09 用户裁决：属性面板保留全部 OVERLAY / LETTERBOX 行；有帧行的值控件改为
  * “在效果面板编辑”指路，不再重复提供值控件。
