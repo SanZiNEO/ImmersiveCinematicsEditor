@@ -36,6 +36,19 @@ const coreBehavior: PluginManifest = {
         available: (ctx) => ctx.pageId === 'document',
       },
     ],
+    // 行为抽屉（11-01）：规则 / 绑定 / 事件的结构树与详情；触发器详情编辑器仍在右栏面板。
+    // 保留 ID `behavior`，keepAlive 切页保活；抽屉页签按 tabId 单例注册，不出现第二套 behavior 注册。
+    drawerTabs: [
+      {
+        tabId: 'behavior',
+        titleKey: '行为',
+        component: () => import('./drawer/BehaviorDrawer.vue').then((module) => module.default),
+        order: 30,
+        minHeight: 160,
+        keepAlive: true,
+        available: (ctx) => ctx.pageId === 'document',
+      },
+    ],
   },
   activate,
 }
