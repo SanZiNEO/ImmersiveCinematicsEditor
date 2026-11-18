@@ -20,7 +20,15 @@ import {
   LAYOUT_SERVICE,
   PREFERENCES_SERVICE,
   THEME_CONTROLLER,
+  CATALOG_SERVICE,
 } from '../../workbench/api/tokens.ts'
+import type { BakeSavePort, PendingBakeSegment } from '../../features/effects/bakeGuard.ts'
+import {
+  bakePendingSegments,
+  collectPendingSegments,
+  discardPendingSegments,
+  summarizePendingBake,
+} from '../../features/effects/bakeGuard.ts'
 
 /** 需要打开文件对话框的入口（宿主注入）。 */
 export interface ShellCommandDeps {
@@ -46,6 +54,13 @@ export interface ShellCommandDeps {
   openShortcutsHelp(): void
   /** 打开关于。 */
   openAbout(): void
+  /**
+   * 保存前的未烘焙缓动三选一（06-06 §4.2）。
+   *
+   * 返回按钮下标：0 烘焙后保存 / 1 仅保存节点 / 2 取消（`-1` = 关闭对话框，同样视为取消）。
+   * 只在确实存在未烘焙段时调用，因此"无未烘焙段不弹窗"由调用方保证。
+   */
+  confirmPendingBake(lines: readonly string[]): Promise<number>
 }
 
 let deps: ShellCommandDeps | null = null
@@ -65,6 +80,57 @@ function requireDeps(): ShellCommandDeps {
 /** 取文档服务。 */
 function documentsOf(ctx: CommandContext): DocumentService {
   return ctx.services.require(DOCUMENT_SERVICE)
+}
+
+/**
+ * 保存前的未烘焙缓动检查（06-06 §4.2）：三选一，不静默丢弃。
+ *
+ * - 无未烘焙段：调用方不进入这里（因此不会弹窗）；
+ * - 0 烘焙后保存：先提交 `object.bakeEasing` 并清会话缓动，失败则中止保存；
+ * - 1 仅保存节点：只清会话缓动（一次撤销项），节点按当前插值保存；
+ * - 2 取消 / 关闭对话框：真的中止（不落盘、不清 dirty）。
+ */
+async function resolvePendingBake(
+  commandCtx: CommandContext,
+  pending: readonly PendingBakeSegment[],
+): Promise<boolean> {
+  const summary = pendingBakeSummaryLines(pending)
+  const choice = await requireDeps().confirmPendingBake(summary)
+  if (choice === 2 || choice < 0) {
+    requireDeps().notify('已取消保存：会话缓动仍未烘焙', 'info')
+    return false
+  }
+  const commands = commandCtx.services.require(DOCUMENT_COMMANDS)
+  const documents = documentsOf(commandCtx)
+  const catalog = commandCtx.services.require(CATALOG_SERVICE)
+  const port: BakeSavePort = {
+    clips: () => documents.clips(),
+    clipObjects: (clipKey) => documents.clipObjects(clipKey),
+    commit: (command) => commands.commit(command),
+    commitClipAuthoring: (clipKey, mutate) => commands.commitClipAuthoring(clipKey, mutate),
+    catalog,
+  }
+  if (choice === 1) {
+    const discarded = discardPendingSegments(port, pending)
+    if (!discarded.ok) {
+      requireDeps().notify(discarded.message ?? '清理会话缓动失败，已中止保存', 'error')
+      return false
+    }
+    requireDeps().notify(discarded.message ?? '已丢弃会话缓动', 'info')
+    return true
+  }
+  const baked = bakePendingSegments(port, pending)
+  if (!baked.ok) {
+    requireDeps().notify(baked.message ?? '烘焙失败，已中止保存', 'error')
+    return false
+  }
+  requireDeps().notify(`已烘焙 ${baked.baked ?? 0} 段缓动`, 'info')
+  return true
+}
+
+/** 提示文案：列出受影响的路径与段数（不阻断其他片段的保存）。 */
+function pendingBakeSummaryLines(pending: readonly PendingBakeSegment[]): string[] {
+  return summarizePendingBake(pending).map((entry) => `${entry.clipKey} · ${entry.path} · ${entry.count} 段`)
 }
 
 /** 注册全部 shell 命令（核心命令 + 文档代理）。 */
@@ -104,6 +170,16 @@ export function registerCoreCommands(ctx: PluginContext): void {
     enabled: (commandCtx) => documentsOf(commandCtx).summary().docId !== null,
     run: async (commandCtx) => {
       const documents = documentsOf(commandCtx)
+      const pending = collectPendingSegments({
+        clips: documents.clips(),
+        clipAuthoringOf: (clipKey) => commandCtx.services.require(DOCUMENT_COMMANDS).clipAuthoringOf(clipKey),
+      })
+      if (pending.length > 0) {
+        const allowed = await resolvePendingBake(commandCtx, pending)
+        if (!allowed) {
+          return
+        }
+      }
       const result = await documents.save()
       if (!result.ok) {
         requireDeps().notify(result.message ?? `保存失败（${result.reason ?? 'unknown'}）`, 'error')

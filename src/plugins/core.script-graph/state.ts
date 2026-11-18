@@ -56,6 +56,9 @@ import {
   type ViewportSize,
 } from './geometry.ts'
 import { mutationErrorText } from './labels.ts'
+import { HoverIntent } from '../../workbench/shared/hoverIntent.ts'
+import { LayoutScheduler } from './layoutScheduler.ts'
+import { LayoutPersist } from './layoutPersist.ts'
 
 /** 插件 / 面板 ID（05-13 固定）。 */
 export const GRAPH_PLUGIN_ID = 'core.script-graph'
@@ -136,18 +139,6 @@ export interface PartitionView {
 
 /** 空集合（避免每次分配）。 */
 const EMPTY_PATHS: ReadonlySet<string> = new Set<string>()
-
-/**
- * 首批布局的节点数上限：这批必须先出图（用户口径：核心展示部分控制在时间内）。
- *
- * 10 万节点的图先排前 1500 个节点，坐标立刻可见；其余节点按 {@link LAYOUT_BATCH_GROWTH}
- * 逐批补入，每批之间让出事件循环，不阻塞交互。
- */
-const LAYOUT_FIRST_BATCH = 1500
-/** 每批相对上一批的放大倍数。 */
-const LAYOUT_BATCH_GROWTH = 3
-/** 批次之间的间隔（毫秒）：留出绘制与输入处理时间。 */
-const LAYOUT_BATCH_DELAY = 16
 
 type LoadKind = 'mount' | 'manual' | 'auto'
 
@@ -275,25 +266,43 @@ export class GraphController {
   private bootstrapping = false
   /** 首次把视图居中到力导向锚点（之后不再自动移动，尊重用户平移/持久化视图）。 */
   private viewCentered = false
-  /** 布局收敛动画帧句柄。 */
-  private layoutAnimationTimer: number | null = null
-  /** 视口变化后重启动画的防抖句柄（拖动时不每帧重启）。 */
-  private viewportAnimationTimer: ReturnType<typeof setTimeout> | undefined
-  /** 分批布局的下一批句柄（大图逐批补入节点）。 */
-  private layoutBatchTimer: ReturnType<typeof setTimeout> | undefined
-  /** 分批顺序缓存（按 graph 引用失效）。 */
-  private layoutOrderCache: { graph: GraphData; order: string[] } | null = null
+  /**
+   * 布局调度（06-12 拆分）：分批出图、分批顺序、视口内力导向动画。
+   *
+   * 控制器只判断"什么时候要重算"，具体调度交给它；本类不再持有布局计时器。
+   */
+  private readonly layoutScheduler = new LayoutScheduler({
+    graph: () => this.graph.value,
+    layout: () => this.layout.value,
+    mounted: () => this.mountedFlag,
+    animate: () => this.state.animate,
+    overrides: () => this.manualPositions,
+    worldBox: () => this.worldBoxOfViewport(),
+    publish: (next) => {
+      this.layout.value = next
+      this.layoutRevision.value += 1
+    },
+    onFirstBatch: () => {
+      this.centerOnAnchorIfNeeded()
+    },
+  })
   private loading: Promise<void> | null = null
   private queuedRefresh = false
   private autoPending = false
   private manualPositions: Record<string, GraphNodePosition> = {}
   private autoTimer: ReturnType<typeof setTimeout> | undefined
-  private viewTimer: ReturnType<typeof setTimeout> | undefined
-  private positionsTimer: ReturnType<typeof setTimeout> | undefined
-  private collapsedTimer: ReturnType<typeof setTimeout> | undefined
-  private hoverShowTimer: ReturnType<typeof setTimeout> | undefined
-  private hoverHideTimer: ReturnType<typeof setTimeout> | undefined
-  private hoverCandidate: string | null = null
+  /**
+   * 布局持久化（06-12 拆分）：视图 / 节点位置 / 折叠状态三条防抖写入。
+   *
+   * 控制器只决定"什么时候写"，写盘时机与错误上报交给它；本类不再持有写盘计时器。
+   */
+  private readonly layoutPersist = new LayoutPersist({
+    service: () => this.layoutService,
+    view: () => this.state.view,
+    positions: () => this.manualPositions,
+    collapsed: () => this.state.collapsed,
+    onError: (message) => this.reportLayoutError(message),
+  })
 
   // ---------- 派生数据 ----------
 
@@ -490,14 +499,9 @@ export class GraphController {
     this.mountedFlag = false
     this.unsubscribe?.()
     this.unsubscribe = null
-    this.clearHoverTimers()
+    this.hover.dispose()
     this.clearAutoTimer()
-    if (this.viewportAnimationTimer !== undefined) {
-      clearTimeout(this.viewportAnimationTimer)
-      this.viewportAnimationTimer = undefined
-    }
-    this.stopLayoutBatch()
-    this.stopLayoutAnimation()
+    this.layoutScheduler.dispose()
     this.flushLayoutWrites()
     this.state.gestureActive = false
     this.state.editor = null
@@ -829,136 +833,19 @@ export class GraphController {
     if (graph === null) {
       this.layout.value = null
       this.layoutRevision.value += 1
+      this.layoutScheduler.stopBatch()
+      this.layoutScheduler.stopAnimation()
       return
     }
-    this.stopLayoutAnimation()
-    this.stopLayoutBatch()
-    const overrides = this.manualPositions
-    const total = graph.nodes.length
-    // 阶段 1：首批节点（锚点及其直接关联）O(n) 快速摆放后立即出图。
-    const order = this.layoutOrder(graph)
-    const firstLimit = Math.min(total, LAYOUT_FIRST_BATCH)
-    const base = computeGraphLayout(graph, { overrides, steps: 0, limit: firstLimit, order })
-    this.layout.value = base
-    this.layoutRevision.value += 1
-    this.centerOnAnchorIfNeeded()
-    // 阶段 2：视口内的首批节点跑力导向动画（视口外坐标固定）。
-    if (this.state.animate) {
-      this.startLayoutAnimation(graph, overrides, base, this.worldBoxOfViewport())
-    }
-    // 阶段 3：其余节点逐批补入，直到全量。
-    if (firstLimit < total) {
-      this.scheduleLayoutBatch(graph, overrides, firstLimit)
-    }
-  }
-
-  /** 逐批放大布局范围：每批之间让出事件循环，不阻塞交互。 */
-  private scheduleLayoutBatch(
-    graph: GraphData,
-    overrides: Record<string, GraphNodePosition>,
-    done: number,
-  ): void {
-    const total = graph.nodes.length
-    const next = Math.min(total, Math.max(done + 1, Math.ceil(done * LAYOUT_BATCH_GROWTH)))
-    this.layoutBatchTimer = setTimeout(() => {
-      this.layoutBatchTimer = undefined
-      if (!this.mountedFlag || this.graph.value !== graph) {
-        return
-      }
-      const batch = computeGraphLayout(graph, {
-        overrides,
-        steps: 0,
-        limit: next,
-        order: this.layoutOrder(graph),
-      })
-      this.layout.value = batch
-      this.layoutRevision.value += 1
-      if (next < total) {
-        this.scheduleLayoutBatch(graph, overrides, next)
-      } else if (this.state.animate) {
-        // 全量到齐后，按最终坐标重新起一轮视口内力导向。
-        this.startLayoutAnimation(graph, overrides, batch, this.worldBoxOfViewport())
-      }
-    }, LAYOUT_BATCH_DELAY)
-  }
-
-  /**
-   * 分批顺序：从锚点出发按关系距离（无向 BFS）展开，剩余节点按 path 补齐。
-   *
-   * 这样首批就是锚点及其直接上下游——用户真正要看的核心；字典序前缀做不到这一点。
-   * 每张图只算一次（按 graph 引用缓存），后续批次复用。
-   */
-  private layoutOrder(graph: GraphData): string[] {
-    const cached = this.layoutOrderCache
-    if (cached !== null && cached.graph === graph) {
-      return cached.order
-    }
-    const adjacency = new Map<string, string[]>()
-    const link = (from: string, to: string): void => {
-      const list = adjacency.get(from)
-      if (list === undefined) {
-        adjacency.set(from, [to])
-      } else {
-        list.push(to)
-      }
-    }
-    for (const edge of graph.edges) {
-      link(edge.from, edge.to)
-      link(edge.to, edge.from)
-    }
-    const layout = this.layout.value
-    // 锚点：已有布局且属于同一张图时复用其 centerPath；否则取「无出边」的首个节点
-    // （等价于自动锚点的“最终脚本”语义），避免首批从字典序首节点这种任意起点展开。
-    let anchor: string | null = layout?.centerPath ?? null
-    if (anchor === null || !graph.nodes.some((node) => node.path === anchor)) {
-      const hasOut = new Set<string>()
-      for (const edge of graph.edges) {
-        hasOut.add(edge.from)
-      }
-      const finals = [...graph.nodes]
-        .filter((node) => !hasOut.has(node.path))
-        .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
-      anchor = finals[0]?.path ?? graph.nodes[0]?.path ?? null
-    }
-    const order: string[] = []
-    const seen = new Set<string>()
-    if (anchor !== null) {
-      const queue = [anchor]
-      seen.add(anchor)
-      for (let head = 0; head < queue.length; head += 1) {
-        const current = queue[head]
-        order.push(current)
-        for (const next of adjacency.get(current) ?? []) {
-          if (seen.has(next)) {
-            continue
-          }
-          seen.add(next)
-          queue.push(next)
-        }
-      }
-    }
-    const rest = [...graph.nodes].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
-    for (const node of rest) {
-      if (!seen.has(node.path)) {
-        seen.add(node.path)
-        order.push(node.path)
-      }
-    }
-    this.layoutOrderCache = { graph, order }
-    return order
+    this.layoutScheduler.recompute()
   }
 
   private stopLayoutBatch(): void {
-    if (this.layoutBatchTimer !== undefined) {
-      clearTimeout(this.layoutBatchTimer)
-      this.layoutBatchTimer = undefined
-    }
+    this.layoutScheduler.stopBatch()
   }
 
-  /** 该图的收敛步数（与 layout.ts 的默认值保持一致）。 */
-  private forceStepsFor(graph: GraphData): number {
-    const count = graph.nodes.length
-    return count > 20000 ? 90 : count > 5000 ? 150 : count > 800 ? 240 : 420
+  private stopLayoutAnimation(): void {
+    this.layoutScheduler.stopAnimation()
   }
 
   /** 视口对应的世界包围盒（四角经 `screenToWorld` 转换）。 */
@@ -976,72 +863,6 @@ export class GraphController {
     }
   }
 
-  /** 落在世界包围盒外扩 `margin` 内的节点（力导向只动这些）。 */
-  private focusPathsIn(
-    layout: GraphLayout,
-    worldBox: { minX: number; minY: number; maxX: number; maxY: number },
-    margin = 600,
-  ): Set<string> {
-    const focus = new Set<string>()
-    const minX = worldBox.minX - margin
-    const minY = worldBox.minY - margin
-    const maxX = worldBox.maxX + margin
-    const maxY = worldBox.maxY + margin
-    for (const node of layout.nodes) {
-      if (node.x >= minX && node.x <= maxX && node.y >= minY && node.y <= maxY) {
-        focus.add(node.path)
-      }
-    }
-    return focus
-  }
-
-  /**
-   * 分帧推进力导向：每帧只对 `focusPaths`（视口内节点）做物理，视口外坐标固定不动。
-   *
-   * 单帧成本由视口内节点数决定，与总节点数无关——10 万节点的图同样能“动起来”。
-   */
-  private startLayoutAnimation(
-    graph: GraphData,
-    overrides: Record<string, GraphNodePosition>,
-    base: GraphLayout,
-    worldBox: { minX: number; minY: number; maxX: number; maxY: number },
-  ): void {
-    this.stopLayoutAnimation()
-    const total = this.forceStepsFor(graph)
-    if (total <= 0 || base.nodes.length === 0) {
-      return
-    }
-    const focusPaths = this.focusPathsIn(base, worldBox)
-    if (focusPaths.size === 0) {
-      return
-    }
-    // 视口内节点过多时单帧只推 1 步，并在 120 帧后停，避免单帧超时。
-    const dense = focusPaths.size > 3000
-    const perFrame = dense ? 1 : Math.max(1, Math.ceil(total / 60))
-    const maxFrames = dense ? 120 : Number.POSITIVE_INFINITY
-    let step = 0
-    let frames = 0
-    const tick = (): void => {
-      frames += 1
-      step = Math.min(total, step + perFrame)
-      this.layout.value = computeGraphLayout(graph, { overrides, steps: step, focusPaths })
-      this.layoutRevision.value += 1
-      if (step < total && frames < maxFrames && this.mountedFlag) {
-        this.layoutAnimationTimer = requestAnimationFrame(tick)
-      } else {
-        this.layoutAnimationTimer = null
-      }
-    }
-    this.layoutAnimationTimer = requestAnimationFrame(tick)
-  }
-
-  private stopLayoutAnimation(): void {
-    if (this.layoutAnimationTimer !== null) {
-      cancelAnimationFrame(this.layoutAnimationTimer)
-      this.layoutAnimationTimer = null
-    }
-  }
-
   /** 视口变了：等 300ms 稳定后，对新区间重新起一轮力导向（拖动时不每帧重启）。 */
   private scheduleViewportAnimation(): void {
     if (!this.state.animate || this.graph.value === null) {
@@ -1050,23 +871,7 @@ export class GraphController {
     if (this.viewport.width <= 0 || this.viewport.height <= 0) {
       return
     }
-    if (this.viewportAnimationTimer !== undefined) {
-      clearTimeout(this.viewportAnimationTimer)
-    }
-    this.viewportAnimationTimer = setTimeout(() => {
-      this.viewportAnimationTimer = undefined
-      this.restartAnimationForViewport()
-    }, 300)
-  }
-
-  /** 用当前布局当新基准，重新计算视口内焦点集并继续迭代。 */
-  private restartAnimationForViewport(): void {
-    const graph = this.graph.value
-    const base = this.layout.value
-    if (graph === null || base === null || !this.mountedFlag || !this.state.animate) {
-      return
-    }
-    this.startLayoutAnimation(graph, this.manualPositions, base, this.worldBoxOfViewport())
+    this.layoutScheduler.scheduleViewportAnimation()
   }
 
   setView(next: GraphViewState): void {
@@ -1192,90 +997,19 @@ export class GraphController {
   }
 
   private scheduleViewSave(): void {
-    clearTimeout(this.viewTimer)
-    this.viewTimer = setTimeout(() => {
-      this.viewTimer = undefined
-      void this.persistView()
-    }, 500)
-  }
-
-  private async persistView(): Promise<void> {
-    const service = this.layoutService
-    if (service === null) {
-      return
-    }
-    try {
-      const result = await service.saveView(this.state.view)
-      if (!result.ok) {
-        this.reportLayoutError(result.message ?? '图视图未保存')
-      }
-    } catch (error) {
-      this.reportLayoutError(messageOf(error))
-    }
+    this.layoutPersist.scheduleView()
   }
 
   private schedulePositionsSave(): void {
-    clearTimeout(this.positionsTimer)
-    this.positionsTimer = setTimeout(() => {
-      this.positionsTimer = undefined
-      void this.persistPositions()
-    }, 500)
-  }
-
-  private async persistPositions(): Promise<void> {
-    const service = this.layoutService
-    if (service === null) {
-      return
-    }
-    try {
-      const result = await service.saveNodePositions({ ...this.manualPositions })
-      if (!result.ok) {
-        this.reportLayoutError(result.message ?? '节点位置未保存')
-      }
-    } catch (error) {
-      this.reportLayoutError(messageOf(error))
-    }
+    this.layoutPersist.schedulePositions()
   }
 
   private scheduleCollapsedSave(): void {
-    clearTimeout(this.collapsedTimer)
-    this.collapsedTimer = setTimeout(() => {
-      this.collapsedTimer = undefined
-      void this.persistCollapsed()
-    }, 500)
-  }
-
-  private async persistCollapsed(): Promise<void> {
-    const service = this.layoutService
-    if (service === null) {
-      return
-    }
-    try {
-      const result = await service.setCollapsed([...this.state.collapsed])
-      if (!result.ok) {
-        this.reportLayoutError(result.message ?? '折叠状态未保存')
-      }
-    } catch (error) {
-      this.reportLayoutError(messageOf(error))
-    }
+    this.layoutPersist.scheduleCollapsed()
   }
 
   private flushLayoutWrites(): void {
-    if (this.viewTimer !== undefined) {
-      clearTimeout(this.viewTimer)
-      this.viewTimer = undefined
-      void this.persistView()
-    }
-    if (this.positionsTimer !== undefined) {
-      clearTimeout(this.positionsTimer)
-      this.positionsTimer = undefined
-      void this.persistPositions()
-    }
-    if (this.collapsedTimer !== undefined) {
-      clearTimeout(this.collapsedTimer)
-      this.collapsedTimer = undefined
-      void this.persistCollapsed()
-    }
+    this.layoutPersist.flush()
   }
 
   private reportLayoutError(message: string): void {
@@ -1392,78 +1126,48 @@ export class GraphController {
     this.state.highlight = 'down'
   }
 
+  /**
+   * 悬停意图（06-12：改用工作台共享机制，行为等价）。
+   *
+   * 进入延迟 250ms（避免扫过时闪烁）、离开延迟 420ms（允许指针移到悬浮卡片上）；
+   * 进入计时开始时冻结布局动画——节点在指针下移动会让 pointerleave 抖动、卡片闪烁。
+   */
+  private readonly hover = new HoverIntent({
+    showDelayMs: 250,
+    hideDelayMs: 420,
+    onIntent: () => this.stopLayoutAnimation(),
+    onShow: (path) => {
+      this.state.hoverPath = path
+    },
+    onHide: () => {
+      this.state.hoverPath = null
+    },
+  })
+
   hoverIntent(path: string): void {
-    if (this.hoverHideTimer !== undefined) {
-      clearTimeout(this.hoverHideTimer)
-      this.hoverHideTimer = undefined
-    }
     if (this.state.hoverPath === path) {
       return
     }
-    if (this.hoverCandidate === path && this.hoverShowTimer !== undefined) {
-      return
-    }
-    // 悬停期间冻结布局：节点在指针下移动会让 pointerleave 抖动、卡片闪烁。
-    this.stopLayoutAnimation()
-    clearTimeout(this.hoverShowTimer)
-    this.hoverCandidate = path
-    this.hoverShowTimer = setTimeout(() => {
-      this.hoverShowTimer = undefined
-      this.hoverCandidate = null
-      this.state.hoverPath = path
-    }, 250)
+    this.hover.intent(path)
   }
 
   /** 键盘聚焦节点时立即显示（不依赖 hover 计时）。 */
   hoverNow(path: string): void {
     this.stopLayoutAnimation()
-    this.clearHoverTimers()
-    this.state.hoverPath = path
+    this.hover.now(path)
   }
 
   hoverKeep(): void {
-    if (this.hoverHideTimer !== undefined) {
-      clearTimeout(this.hoverHideTimer)
-      this.hoverHideTimer = undefined
-    }
-    if (this.hoverShowTimer !== undefined) {
-      clearTimeout(this.hoverShowTimer)
-      this.hoverShowTimer = undefined
-      this.hoverCandidate = null
-    }
+    this.hover.keep()
   }
 
   hoverLeave(): void {
-    if (this.hoverShowTimer !== undefined) {
-      clearTimeout(this.hoverShowTimer)
-      this.hoverShowTimer = undefined
-    }
-    this.hoverCandidate = null
-    if (this.state.hoverPath === null) {
-      return
-    }
-    clearTimeout(this.hoverHideTimer)
-    this.hoverHideTimer = setTimeout(() => {
-      this.hoverHideTimer = undefined
-      this.state.hoverPath = null
-    }, 420)
+    this.hover.leave()
   }
 
   clearHover(): void {
-    this.clearHoverTimers()
+    this.hover.clear()
     this.state.hoverPath = null
-  }
-
-  private clearHoverTimers(): void {
-    if (this.hoverShowTimer !== undefined) {
-      clearTimeout(this.hoverShowTimer)
-      this.hoverShowTimer = undefined
-    }
-    if (this.hoverHideTimer !== undefined) {
-      clearTimeout(this.hoverHideTimer)
-      this.hoverHideTimer = undefined
-    }
-    this.hoverCandidate = null
   }
 
   // ---------- 诊断 / 详情 ----------

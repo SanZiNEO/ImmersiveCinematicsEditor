@@ -13,9 +13,11 @@ import type { HostPort } from '../api/host.ts'
 import type { ServiceRegistry } from '../api/services.ts'
 import {
   COMMAND_SERVICE,
+  FILE_DIALOG_PORT,
   HOST_SERVICE,
   KEYBINDING_SERVICE,
   FOCUS_SERVICE,
+  I18N_SERVICE,
 } from '../api/tokens.ts'
 import { WORKBENCH_SERVICES_KEY } from '../host/panelContext.ts'
 import AppStatusBar from './AppStatusBar.vue'
@@ -123,6 +125,22 @@ onMounted(() => {
     },
     openShortcutsHelp: () => actions().openSettings('shortcuts'),
     openAbout: () => actions().openSettings('about'),
+    confirmPendingBake: async (lines) => {
+      const files = props.services.get(FILE_DIALOG_PORT)
+      if (files === undefined) {
+        // 没有对话框端口时不做选择：返回"取消"，绝不静默丢弃会话缓动。
+        return 2
+      }
+      const i18n = props.services.get(I18N_SERVICE)
+      const title = i18n?.t('doc.pendingBakeTitle') ?? '有未烘焙的段缓动'
+      const detail = i18n?.t('doc.pendingBakeDetail') ?? '会话缓动不会写进文档。选择如何处理：'
+      const buttons = [
+        i18n?.t('doc.pendingBakeBake') ?? '烘焙后保存',
+        i18n?.t('doc.pendingBakeDiscard') ?? '仅保存节点',
+        i18n?.t('common.cancel') ?? '取消',
+      ]
+      return files.confirm(title, `${detail}\n\n${lines.join('\n')}`, buttons)
+    },
   })
 
   const host: HostPort = props.services.require(HOST_SERVICE)

@@ -63,20 +63,14 @@ import {
   visibleClipKeys,
   type TrackTypeOption,
 } from './model.ts'
+import { TimelineViewState } from './viewState.ts'
+import { TimelineInteractionState } from './interactionState.ts'
+import type { TimelineClipboardEntry, TimelineTool } from './interactionState.ts'
 
-/** 工具：选择 / 刀片（05-10 工具栏）。 */
-export type TimelineTool = 'select' | 'blade'
-
-/** 会话剪贴板条目（含轨道类型；不含 clipKey，粘贴时重新生成）。 */
-export interface TimelineClipboardEntry {
-  trackType: string
-  start: number
-  duration: number
-  loop: boolean
-  loopCount?: number
-  label: string
-  objects: JsonObject
-}
+// 06-12 拆分后，这两类状态的唯一定义在各自模块；这里 re-export 保持调用点不变。
+export type { TimelineClipboardEntry, TimelineTool } from './interactionState.ts'
+export { TimelineViewState } from './viewState.ts'
+export { TimelineInteractionState } from './interactionState.ts'
 
 /** 新建片段能力检查结果。 */
 export interface AddClipCheck {
@@ -137,20 +131,25 @@ export class TimelineController {
   readonly selection: ShallowRef<SelectionSnapshot>
 
   /** 选择工具 / 刀片工具。 */
-  readonly tool: Ref<TimelineTool> = ref('select')
+  readonly tool: Ref<TimelineTool>
   /** 吸附开关（会话级）。 */
-  readonly snapEnabled: Ref<boolean> = ref(true)
+  readonly snapEnabled: Ref<boolean>
   /** 会话剪贴板（不写系统剪贴板、不写文件）。 */
-  readonly clipboard: ShallowRef<readonly TimelineClipboardEntry[]> = shallowRef([])
+  readonly clipboard: ShallowRef<readonly TimelineClipboardEntry[]>
 
   /** 轨道区横向滚动（像素）；只属于主轴视图。 */
-  readonly scrollLeft: Ref<number> = ref(0)
+  readonly scrollLeft: Ref<number>
   /** 轨道区可视宽度（像素）。 */
-  readonly viewportWidth: Ref<number> = ref(800)
+  readonly viewportWidth: Ref<number>
   /** 面板高度（像素；<240 切紧凑档）。 */
-  readonly panelHeight: Ref<number> = ref(260)
+  readonly panelHeight: Ref<number>
   /** 当前活动轨道（工具栏「新建片段」的目标）。 */
-  readonly activeTrackId: Ref<string | null> = ref(null)
+  readonly activeTrackId: Ref<string | null>
+
+  /** 视图状态（06-12 拆分：滚动 / 尺寸 / 紧凑档）。 */
+  private readonly viewState = new TimelineViewState()
+  /** 交互状态（06-12 拆分：工具 / 吸附 / 活动轨 / 剪贴板）。 */
+  private readonly interaction = new TimelineInteractionState()
 
   /** 预览播放状态（只读；时间仍以服务端 playback 为准）。 */
   readonly playing: Ref<boolean> = ref(false)
@@ -176,6 +175,13 @@ export class TimelineController {
     this.selection = shallowRef<SelectionSnapshot>(
       this.selectionService?.snapshot() ?? NO_SELECTION,
     )
+    this.tool = this.interaction.tool
+    this.snapEnabled = this.interaction.snapEnabled
+    this.clipboard = this.interaction.clipboard
+    this.activeTrackId = this.interaction.activeTrackId
+    this.scrollLeft = this.viewState.scrollLeft
+    this.viewportWidth = this.viewState.viewportWidth
+    this.panelHeight = this.viewState.panelHeight
 
     this.unsubscribers.push(documents.subscribe((summary) => this.applySummary(summary)))
     if (this.selectionService !== undefined) {
@@ -254,7 +260,7 @@ export class TimelineController {
     Math.max(this.displayRange.value.end * this.pxPerSecond.value, this.viewportWidth.value),
   )
 
-  readonly compact: ComputedRef<boolean> = computed(() => this.panelHeight.value < 240)
+  readonly compact: ComputedRef<boolean> = computed(() => this.viewState.compact.value)
 
   readonly visibleTracks: ComputedRef<readonly TrackViewEntry[]> = computed(() =>
     this.tracks.value.filter((track) => this.trackState(track.trackId).visible),
@@ -389,31 +395,31 @@ export class TimelineController {
   // ── 会话写入 ─────────────────────────────────────────────────
 
   setScrollLeft(value: number): void {
-    this.scrollLeft.value = Number.isFinite(value) ? Math.max(0, value) : 0
+    this.viewState.setScrollLeft(value)
   }
 
   setViewportWidth(value: number): void {
-    this.viewportWidth.value = Number.isFinite(value) ? Math.max(1, value) : 1
+    this.viewState.setViewportWidth(value)
   }
 
   setPanelHeight(value: number): void {
-    this.panelHeight.value = Number.isFinite(value) ? Math.max(0, value) : 0
+    this.viewState.setPanelHeight(value)
   }
 
   setActiveTrack(trackId: string): void {
-    this.activeTrackId.value = trackId
+    this.interaction.setActiveTrack(trackId)
   }
 
   setTool(tool: TimelineTool): void {
-    this.tool.value = tool
+    this.interaction.setTool(tool)
   }
 
   toggleBlade(): void {
-    this.tool.value = this.tool.value === 'blade' ? 'select' : 'blade'
+    this.interaction.toggleBlade()
   }
 
   toggleSnap(): void {
-    this.snapEnabled.value = !this.snapEnabled.value
+    this.interaction.toggleSnap()
   }
 
   seek(time: number): void {
