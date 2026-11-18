@@ -1,6 +1,6 @@
 # 09 验收
 
-> 状态：未实现
+> 状态：已实现（自动化自检 400 ok / 0 fail；构建通过；真游戏冒烟待人工）
 > 范围：字段面、五种层的编辑面、层级与多轨、便利组件、数据 round-trip、消息面、模组零改动、真游戏冒烟
 > 关联：09-01 至 09-08 全部任务文档
 
@@ -83,13 +83,41 @@
 
 ## 六、实现结果
 
-状态：未实现
-
-验收口径已定，实现尚未开始。
+状态：已实现。自动化自检 `400 ok / 0 fail`（`src/workbench/verify-09.ts`），生产构建 `npm run build` 通过；09 目录与源码没有 `vue-tsc` 报错。全仓 `npx tsc --noEmit` 已为 0；`npx vue-tsc --noEmit` 仍有 1 条 07 文件里的 SFC 类型错误（`core.selection-properties/panels/PositionGroupEditor.vue` 的 `TS2589`），09 路径零错误。真游戏冒烟未执行：本环境没有游戏实例，按 09-09 §4.4 留给人工按固定脚本确认。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 09-01 §4.2 步骤 3：目标层类型适用但源层没有的字段，按缺省初始化 | 切换只写 `layer_type`、删除目标层不适用的字段，不补任何缺省值 | 与 §4.3「只删不加」冲突；用户裁决按 §4.3 执行 |
+| 09-03：素材列表只列图片格式；09-04：全类型列表再按视频扩展名过滤 | 一个素材控件分「图片（png/gif）」「视频（mp4/webm/mkv）」两组，共用同一个 `path` | 两份文档冲突；用户裁决两分组 |
+| 09-01 §4.1 / 09-09:110：未知键不进 UI | 属性面板保留 06-09 的「未知 / 扩展」只读组；效果面板不显示未知行 | 与 06-09 的只读诊断归属冲突；用户裁决 06 代码优先，09 不改归属 |
+| 09-02 验收：色标 offset 超出 0~1 时保持端点 | `validateGradientValue` 拒绝越界 offset（`0~1`、严格递增） | 模组 `ColorMaskSpec` 对越界直接抛错；以代码事实为准，不做端点钳制 |
+| 09-09:109：动画叶子打帧后从属性面板迁到效果面板 | OVERLAY / LETTERBOX 有帧行仍留在属性面板，只把值控件换成「有 N 帧 · 在效果面板编辑」指路；效果面板另有完整控件 | 与用户裁决「属性面板仍列全部行（含已有关键帧）」冲突；按用户裁决执行 |
+| 09-04 §3：选择器走全类型资源列表再过滤视频 | 图片组走 `resource.list('image')`，视频组走 `resource.list('video')`，各自只列自己的扩展名 | 用户裁决两分组；仍复用同一 `resource.list` 消息与同一个 `path` |
+| README 组件表写作 `OverlayOrderPopover` | 实际为层级行内展开的 `OverlayOrderList`，没有独立弹出面板 | 09-07 要求「从层级行打开、不新建独立面板」；组件名不是行为契约，功能一致 |
+
+### 6.1 已落盘实现
+
+- 纯逻辑：`src/features/overlay/layers.ts`、`colorMask.ts`、`media.ts`、`subtitle.ts`、`geometry.ts`、`letterbox.ts`、`zorder.ts`、`presets.ts`、`validation.ts`、`index.ts`。
+- 插件：`src/plugins/core.overlay/{manifest.ts,index.ts,commit.ts}`，9 个字段控件、`OverlayGateBanner`、`OverlayGeometrySketch`、`OverlayPresetPanel`、`OverlayOrderList`。
+- 共享面最小扩展：`src/features/effects/customFields.ts`（字段控件注册 + 提交前缀）、`rowFilters.ts`（面板行过滤）、`clipContext.ts`（`propertyRowsFor` 的 `panel`）、`PropertyValueForm.vue`（`objects` / 提交前缀）、`ClipPropertyRow.vue` / `ClipPropertyGroup.vue` / `ClipPropertiesPanel.vue` / `ClipEffectsPanel.vue`（面板归属与有帧指路）、`TrackRow.vue`（同轨重叠可见提示）、`src/workbench/api/resources.ts` + `tokens.ts`（`RESOURCE_SERVICE`）。
+- `src/workbench/verify-09.ts`：400 条断言，覆盖字段面矩阵、层切换、颜色 / 渐变 / 遮罩、图片 / 视频、字幕 `@lang`、画幅、层级 / 同轨重叠、预设、插件注册 / 行过滤、round-trip、文档结构、协议与模组零改动。
+- 模组仓库 `E:\Documents\GitHub\ImmersiveCinematics` 保持 `main` 且 `git status --porcelain` 为空；09 未改任何 Java。
+
+### 6.2 自动化证据
+
+| 命令 | 结果 |
+|---|---|
+| `node --experimental-strip-types src/workbench/verify-09.ts` | `400 ok, 0 fail`（末尾明确列出需人进游戏确认的五项） |
+| `npm run build` | `vite v6.4.3 ... ✓ built`，`Overlay*` 组件均生成懒加载分包 |
+| `npx tsc --noEmit` | 退出码 0 |
+| `npx vue-tsc --noEmit` | 09 相关路径零错误；全仓退出码 2 仅因 07 的 `PositionGroupEditor.vue`（`TS2589`） |
+| `git -C E:\Documents\GitHub\ImmersiveCinematics status --porcelain` | 空 |
+
+### 6.3 已知边界与未自动验收
+
+- 真游戏冒烟的五层固定时序、黑边 / 渐变观感、拖动 / 缩放手感、编辑器像素预览：按 09-09 §4.4 不做自动验收，需人工进游戏确认。
+- 未知键：真实 `parseDoc` → `serializeDoc` 的 round-trip 已验证保留；但带未知对象路径的文档在 `commitBatch` 时会被既有结构校验 `L34 未登记的对象路径` 整篇拒绝。这是既有核心校验行为，09 未改结构校验；因此「带未知键在编辑器里继续编辑再保存」仍不可用。09 只验证了规则层面的不删除、不写默认值与只读展示。
+- 09-06 的「多画幅轨后加入者后绘制」在编辑器只给出警告与层级预览，不构造第二套合成器；实际观感由游戏决定。
 
 ### 验收要点
 
@@ -106,8 +134,8 @@
 - 层类型缺失时显示有效类型为 fade、不报错，首次编辑写显式值。
 - 三个方向的切换各做一次：保留项与移除项符合预期，一次撤销完全回退。
 - 切换后对象校验器不再报"字段不适用于层类型"。
-- 动画叶子打帧后从属性面板迁到效果面板，删掉最后一帧后回流；value-only 字段在效果面板零命中。
-- 未知键保留、不进界面、推送前能被校验定位。
+- 动画叶子打帧后仍留在属性面板（值控件替换为「有 N 帧 · 在效果面板编辑」指路），效果面板提供完整控件；删掉最后一帧后回到普通值控件；value-only 字段在效果面板零命中。
+- 未知键保留；属性面板保留 06 的只读诊断组，效果面板不显示未知行；推送前能被校验定位。
 
 **各层行为**
 
