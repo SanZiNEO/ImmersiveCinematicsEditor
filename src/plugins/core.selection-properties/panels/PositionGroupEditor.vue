@@ -5,7 +5,7 @@
  * 三轴值行由组内行组件渲染，本组件不重复列值行；只渲染控制条与「不读取」标注，
  * 命令通过 `apply` 事件交父面板统一 commit。
  */
-import { computed, ref } from 'vue'
+import { computed, shallowRef } from 'vue'
 import type { CatalogIndex } from '../../../core/schema/index.ts'
 import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 import type { DocCommand } from '../../../core/doc/commands.ts'
@@ -43,7 +43,8 @@ const emit = defineEmits<{
 const bar = computed(() => projectPositionBar(props.objects))
 
 /** step 缺三轴时的两步确认：先拦住，作者选「补齐三轴并提交」再合并同一 commit。 */
-const pendingFill = ref<{ path: string; value: JsonValue; missingAxes: string[]; warning: string } | null>(null)
+// `shallowRef`：对象内含递归 `JsonValue`，`ref` 的深解包会触发 TS2589；整体替换语义不变。
+const pendingFill = shallowRef<{ path: string; value: JsonValue; missingAxes: string[]; warning: string } | null>(null)
 
 const originDraft = computed<PointSourceDraft>(() => draftPointSource(
   staticField(props.objects, 'position_origin', ''),

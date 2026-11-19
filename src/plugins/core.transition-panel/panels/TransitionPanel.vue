@@ -5,7 +5,7 @@
  * 编辑对象是「A→B 交界」：叠化、参数过渡、共存处理三件事都在这里。
  * 只做编辑器操作与本地校验；所有写入走 `DocumentCommands`，一次应用一次提交。
  */
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, shallowRef } from 'vue'
 
 import { DOCUMENT_SERVICE } from '../../../workbench/api/tokens.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
@@ -494,7 +494,8 @@ function curveLabel(value: unknown): string {
 /** 正在编辑曲线的目标：`channel === null` 表示片段级 `transition_curve`。 */
 const curveEditing = ref<{ boundaryId: string; channel: string | null } | null>(null)
 /** 编辑中的模型（受控：CurveEditor 只回传，不改父值）。 */
-const curveDraft = ref<JsonValue | undefined>(undefined)
+// `shallowRef`：`JsonValue` 是递归类型，`ref` 的深解包会触发 TS2589；本处原本就整体替换，语义不变。
+const curveDraft = shallowRef<JsonValue | undefined>(undefined)
 
 function boundaryById(id: string): TransitionBoundary | null {
   const current = model.value

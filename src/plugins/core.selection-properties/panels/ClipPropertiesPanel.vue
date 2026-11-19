@@ -10,7 +10,7 @@
  *
  * 所有写入走 `ctx.commands.commit`；行集合每次按文档修订号重算，不缓存文档对象。
  */
-import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, shallowRef, watch } from 'vue'
 import type { Component } from 'vue'
 import type { DocCommand } from '../../../core/doc/commands.ts'
 import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
@@ -311,7 +311,8 @@ const focusedPath = ref<string | null>(null)
 const focusMessage = ref('')
 const focusMessageKind = ref<'info' | 'error'>('info')
 /** 07-05 §四：位置节点编辑打断路径时的待确认计划（非空时暂停提交）。 */
-const pendingGuard = ref<{ affected: AffectedPath[]; command: DocCommand } | null>(null)
+// `shallowRef`：`command` 是深层联合类型（DocCommand），`ref` 的深解包会触发 TS2589；整体替换语义不变。
+const pendingGuard = shallowRef<{ affected: AffectedPath[]; command: DocCommand } | null>(null)
 
 /** 片段切换时恢复该片段自己的折叠 / 过滤 / 滚动。 */
 watch(

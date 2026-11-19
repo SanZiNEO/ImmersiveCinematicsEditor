@@ -39,8 +39,6 @@ const props = defineProps<{
   authoringGroupId?: string | null
   /** 07-01：组合定义显示名（组头按钮提示用）。 */
   authoringGroupName?: string | null
-  /** 事件行摘要（路径 → 摘要列表）；由外壳按事件记录读取模型计算。 */
-  eventSummaries?: ReadonlyMap<string, readonly string[]>
 }>()
 
 const emit = defineEmits<{
