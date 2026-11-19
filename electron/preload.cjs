@@ -38,6 +38,8 @@ const workbench = {
     importTheme: () => ipcRenderer.invoke('files:import-theme'),
     confirm: (message, detail, buttons) => ipcRenderer.invoke('files:confirm', message, detail, buttons),
     readText: (path) => ipcRenderer.invoke('files:read-text', path),
+    pickSubtitleFile: () => ipcRenderer.invoke('files:pick-subtitle'),
+    readSubtitleFile: (path, encoding) => ipcRenderer.invoke('files:read-subtitle', path, encoding),
   },
 
   shell: {

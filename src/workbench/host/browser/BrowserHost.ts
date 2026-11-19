@@ -95,6 +95,16 @@ class BrowserFiles implements FileDialogPort {
   async readText(): Promise<string | null> {
     return null
   }
+
+  async pickSubtitleFile(): Promise<null> {
+    // 浏览器 dev 无文件系统：不假装有对话框。
+    return null
+  }
+
+  async readSubtitleFile(): Promise<{ status: 'unavailable' }> {
+    // 浏览器 dev 无文件系统：明确不可用，不返回假文本。
+    return { status: 'unavailable' }
+  }
 }
 
 class BrowserShell implements ShellPort {

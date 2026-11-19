@@ -20,6 +20,10 @@ const DRAFT_MAX_BYTES = 5 * 1024 * 1024
 const DRAFT_MAX_COUNT = 50
 const DRAFT_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/
 
+// 字幕导入约束（12-12）：扩展名白名单 + 大小上限；解码失败给信号，不猜编码。
+const SUBTITLE_MAX_BYTES = 2 * 1024 * 1024
+const SUBTITLE_EXTENSIONS = new Set(['.srt', '.vtt'])
+
 // 启动底色兜底（preferences.json 没有 themeCache 时）。
 const DEFAULT_BACKGROUND = '#151519'
 const DEFAULT_SYMBOL_COLOR = '#e6e6e6'
@@ -353,6 +357,41 @@ function isShellPathAllowed(target) {
     }
   }
   return false
+}
+
+/**
+ * 解码字幕字节（12-12）：BOM（UTF-8 / UTF-16LE / UTF-16BE）优先；无标记先按严格
+ * UTF-8；`forcedEncoding` 为作者显式选择（utf-8 / gb18030）。解码失败返回 `null`，
+ * 由调用方给「需要选择编码 / 无法解码」信号，主进程不猜编码。
+ */
+function decodeSubtitleBytes(bytes, forcedEncoding) {
+  if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+    try {
+      return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(3)), encoding: 'utf-8' }
+    } catch {
+      return null
+    }
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+    try {
+      return { text: new TextDecoder('utf-16le', { fatal: true }).decode(bytes.subarray(2)), encoding: 'utf-16le' }
+    } catch {
+      return null
+    }
+  }
+  if (bytes.length >= 2 && bytes[1] !== undefined && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+    try {
+      return { text: new TextDecoder('utf-16be', { fatal: true }).decode(bytes.subarray(2)), encoding: 'utf-16be' }
+    } catch {
+      return null
+    }
+  }
+  const encoding = forcedEncoding === 'gb18030' ? 'gb18030' : 'utf-8'
+  try {
+    return { text: new TextDecoder(encoding, { fatal: true }).decode(bytes), encoding }
+  } catch {
+    return null
+  }
 }
 
 function approveRecentProjectPaths() {
@@ -1166,6 +1205,71 @@ function registerIpcHandlers() {
       return fs.readFileSync(targetPath, 'utf8')
     } catch {
       return null
+    }
+  })
+
+  handleMain('files:pick-subtitle', async () => {
+    const win = mainWindow
+    if (win === null || win.isDestroyed()) return null
+    const result = await dialog.showOpenDialog(win, {
+      title: '导入字幕',
+      filters: [{ name: '字幕文件', extensions: ['srt', 'vtt'] }],
+      properties: ['openFile'],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const resolved = path.resolve(result.filePaths[0])
+    approveShellPath(resolved)
+    return { path: resolved, name: path.basename(resolved) }
+  })
+
+  handleMain('files:read-subtitle', async (targetPath, encoding) => {
+    if (typeof targetPath !== 'string' || targetPath.length === 0) {
+      return { status: 'rejected', reason: 'extension' }
+    }
+    let resolved
+    try {
+      resolved = path.resolve(targetPath)
+    } catch {
+      return { status: 'rejected', reason: 'extension' }
+    }
+    if (!isShellPathAllowed(resolved)) {
+      return { status: 'rejected', reason: 'extension' }
+    }
+    const ext = path.extname(resolved).toLowerCase()
+    if (!SUBTITLE_EXTENSIONS.has(ext)) {
+      return { status: 'rejected', reason: 'extension' }
+    }
+    let stat
+    try {
+      stat = fs.statSync(resolved)
+    } catch {
+      return { status: 'rejected', reason: 'not-a-file' }
+    }
+    if (!stat.isFile()) {
+      return { status: 'rejected', reason: 'not-a-file' }
+    }
+    if (stat.size > SUBTITLE_MAX_BYTES) {
+      return { status: 'rejected', reason: 'size' }
+    }
+    let bytes
+    try {
+      bytes = fs.readFileSync(resolved)
+    } catch {
+      return { status: 'rejected', reason: 'not-a-file' }
+    }
+    const forced = encoding === 'gb18030' ? 'gb18030' : encoding === 'utf-8' ? 'utf-8' : undefined
+    const decoded = decodeSubtitleBytes(bytes, forced)
+    if (decoded === null) {
+      return forced === undefined
+        ? { status: 'needs-encoding', path: resolved, name: path.basename(resolved) }
+        : { status: 'decode-failed' }
+    }
+    return {
+      status: 'ok',
+      path: resolved,
+      name: path.basename(resolved),
+      text: decoded.text,
+      encoding: decoded.encoding,
     }
   })
 

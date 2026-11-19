@@ -25,6 +25,35 @@ export interface WindowPort {
   confirmClose(): void
 }
 
+/** 字幕文件选择结果（路径必须来自本次对话框批准；renderer 不拼路径）。 */
+export interface SubtitleFilePicked {
+  /** 绝对路径（主进程侧已批准）。 */
+  path: string
+  /** 文件名（含扩展名，对话框回传）。 */
+  name: string
+}
+
+/** 字幕文本编码（BOM 探测 / 作者显式选择的结果）。 */
+export type SubtitleFileEncoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'gb18030'
+
+/**
+ * 字幕文件读取结果。
+ *
+ * - `ok`：解码成功，`text` 已剥 BOM、保留原文换行；
+ * - `canceled`：对话框取消（本次未选文件）；
+ * - `rejected`：扩展名 / 大小 / 非文件被主进程拒绝；
+ * - `needs-encoding`：无标记严格 UTF-8 解码失败，需要作者显式选 UTF-8 / GB18030；
+ * - `decode-failed`：作者选择编码后仍无法解码；
+ * - `unavailable`：浏览器 dev 无文件系统（不假成功）。
+ */
+export type SubtitleFileReadResult =
+  | { status: 'ok'; path: string; name: string; text: string; encoding: SubtitleFileEncoding }
+  | { status: 'canceled' }
+  | { status: 'rejected'; reason: 'extension' | 'size' | 'not-a-file' }
+  | { status: 'needs-encoding'; path: string; name: string }
+  | { status: 'decode-failed' }
+  | { status: 'unavailable' }
+
 /** 文件对话框端口：全部走主进程，renderer 不读文件、不拼路径。 */
 export interface FileDialogPort {
   openScript(): Promise<string | null>
@@ -39,6 +68,21 @@ export interface FileDialogPort {
    * 不接受 renderer 随意拼的任意路径。
    */
   readText(path: string): Promise<string | null>
+  /**
+   * 选择字幕文件（`.srt` / `.vtt`）；取消返回 `null`。
+   *
+   * 主进程侧限制：扩展名白名单、大小上限、路径必须来自本次对话框；不接受 renderer
+   * 随意拼的任意路径。只回传路径 + 文件名，正文由 `readSubtitleFile` 读取。
+   */
+  pickSubtitleFile(): Promise<SubtitleFilePicked | null>
+  /**
+   * 读取一个已批准的字幕文件。
+   *
+   * `encoding` 缺省：先按 BOM（UTF-8 / UTF-16LE / UTF-16BE）探测，无标记按严格
+   * UTF-8 解码；严格解码失败不猜编码，返回 `needs-encoding`。作者显式选择
+   * `utf-8` / `gb18030` 后仍失败返回 `decode-failed`。
+   */
+  readSubtitleFile(path: string, encoding?: 'utf-8' | 'gb18030'): Promise<SubtitleFileReadResult>
 }
 
 /** shell 端口（白名单）。 */
