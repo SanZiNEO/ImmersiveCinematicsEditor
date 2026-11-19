@@ -9,6 +9,11 @@ import { shallowRef, type ShallowRef } from 'vue'
 import type { DiagnosticSink } from '../api/diagnostics.ts'
 import type { Locale } from '../api/context.ts'
 import type { I18nApi } from '../api/context.ts'
+import { FLIGHT_MESSAGES } from '../../plugins/core.flight/i18n.ts'
+import { ZH as GEOMETRY_ZH, EN as GEOMETRY_EN } from '../../plugins/core.geometry/i18n.ts'
+import { ZH as SUBTITLE_ZH, EN as SUBTITLE_EN } from '../../plugins/core.subtitles/i18n.ts'
+import { ZH as TEMPLATES_ZH, EN as TEMPLATES_EN } from '../../plugins/core.templates/i18n.ts'
+import { ZH as TEMPLATE_INFO_ZH, EN as TEMPLATE_INFO_EN } from '../../features/templates/i18n.ts'
 
 /** 04 外壳、设置页、抽屉与主题选择器需要的最小文案表。 */
 export const MESSAGES: Record<Locale, Record<string, string>> = {
@@ -387,6 +392,26 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     'status.previewOffline': 'Preview: offline',
   },
 }
+
+// 12 轮插件文案表（各插件目录自带 ZH / EN，集成方在此合并；插件不直接改本文件）。
+// 模板标题 / 参数说明由特性层 `features/templates/i18n.ts` 提供，面板壳与快捷效果由
+// `plugins/core.templates/i18n.ts` 提供，两者都必须在启动前并入 MESSAGES。
+Object.assign(
+  MESSAGES.zh_cn,
+  TEMPLATE_INFO_ZH,
+  GEOMETRY_ZH,
+  SUBTITLE_ZH,
+  TEMPLATES_ZH,
+  FLIGHT_MESSAGES.zh_cn,
+)
+Object.assign(
+  MESSAGES.en_us,
+  TEMPLATE_INFO_EN,
+  GEOMETRY_EN,
+  SUBTITLE_EN,
+  TEMPLATES_EN,
+  FLIGHT_MESSAGES.en_us,
+)
 
 /** i18n 构造参数。 */
 export interface I18nServiceOptions {
