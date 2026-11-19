@@ -1082,7 +1082,7 @@ async function main(): Promise<void> {
     check('01 内核不出现业务 switch（panelId === 常量）', !/panelId\s*===\s*'/.test(kernelJoined))
 
     const workbenchTs = (await listFiles('', (name) => name.endsWith('.ts') || name.endsWith('.vue')))
-      .filter((file) => file !== 'verify.ts' && !file.startsWith('verify-'))
+      .filter((file) => file !== 'verify.ts' && !file.startsWith('verify-') && file !== 'emit-fixtures-12.ts')
     const sources = await Promise.all(workbenchTs.map((file) => readWorkbench(file)))
     const allJoined = sources.join('\n')
     check('09 渲染层不暴露 ipcRenderer', !/ipcRenderer/.test(allJoined))

@@ -15,7 +15,9 @@
     "test:e2e": "vite build && playwright test",
     "test:e2e:ui": "vite build && playwright test --ui",
     "verify": "node --experimental-strip-types src/workbench/verify.ts",
-    "verify:08": "node --experimental-strip-types src/workbench/verify-08.ts"
+    "verify:08": "node --experimental-strip-types src/workbench/verify-08.ts",
+    "verify:12": "node --experimental-strip-types src/workbench/verify-12.ts",
+    "fixtures:12": "node --experimental-strip-types src/workbench/emit-fixtures-12.ts"
   },
   "dependencies": {
     "vue": "^3.5.0"
