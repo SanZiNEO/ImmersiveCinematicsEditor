@@ -892,6 +892,47 @@ export class LayoutService implements WorkspaceLayoutService {
     })
   }
 
+  /**
+   * 正常窗口展开抽屉：把抽屉在父 split 里的比例拉回 `lastSize` 对应像素，
+   * 其余兄弟按原比例分摊剩余空间。只改比例，不改可见性；与 `squeezeAxis` 不同，
+   * 这里不压主轴、也不记录还原快照。
+   */
+  expandDrawer(pageId: string, drawerGroupId: string): void {
+    this.mutate(pageId, 'expandDrawer', (page) => {
+      const tree = this.treeOf(page)
+      const located = findParentSplit(tree.root, drawerGroupId)
+      if (!located) {
+        this.report('warning', `无法展开抽屉：抽屉 group ${drawerGroupId} 不在 split 里`)
+        return false
+      }
+      const horizontal = located.split.orientation === 'horizontal'
+      const total = horizontal ? this.view.width : this.view.height
+      if (!(total > 0)) return false
+      const drawerGroup = located.split.children[located.index]
+      const drawerPx =
+        drawerGroup && drawerGroup.type === 'group' && drawerGroup.lastSize
+          ? drawerGroup.lastSize
+          : DEFAULT_DRAWER_HEIGHT
+      const sizes = [...located.split.sizes]
+      const drawerRatio = Math.min(0.9, Math.max(0, drawerPx / total))
+      const restIndexes = located.split.children
+        .map((_, index) => index)
+        .filter((index) => index !== located.index)
+      const restOld = restIndexes.reduce((sum, index) => sum + (sizes[index] ?? 0), 0)
+      const restNew = Math.max(0, 1 - drawerRatio)
+      sizes[located.index] = drawerRatio
+      for (const index of restIndexes) {
+        sizes[index] = restOld > 0 ? ((sizes[index] ?? 0) / restOld) * restNew : restNew / restIndexes.length
+      }
+      const nextSizes = normalizeSizes(sizes)
+      if (sameNumbers(nextSizes, located.split.sizes)) return false
+      const root = replaceNode(tree.root, located.split.id, { ...located.split, sizes: nextSizes })
+      if (!root) return false
+      tree.root = root
+      return true
+    })
+  }
+
   // ── 预设 ──────────────────────────────────────────────────────────────
 
   applyPreset(pageId: string, presetId: string): void {

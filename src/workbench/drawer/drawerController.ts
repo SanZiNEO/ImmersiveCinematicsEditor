@@ -134,7 +134,7 @@ export function refreshDrawerHeight(
   return result
 }
 
-/** 低窗压主轴；正常窗口还自主轴（幂等）。 */
+/** 低窗压主轴；正常窗口先还自主轴，再把抽屉拉回 `lastSize` 对应高度（幂等）。 */
 function applyAxis(
   layout: WorkspaceLayoutService,
   pageId: string,
@@ -145,5 +145,6 @@ function applyAxis(
     layout.squeezeAxis(pageId, groupId, result.axisHeight)
   } else {
     layout.restoreAxis(pageId)
+    layout.expandDrawer(pageId, groupId)
   }
 }

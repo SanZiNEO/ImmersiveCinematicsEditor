@@ -584,6 +584,10 @@ function safeParse(text: string): unknown {
 }
 
 function readBrowserToken(): string {
+  // Electron：preload 桥由主进程同步读 token 文件；浏览器 dev：URL 查询串携带。
+  const bridge = typeof window !== 'undefined' ? window.workbench : undefined
+  const fromBridge = bridge?.webuiToken?.()
+  if (typeof fromBridge === 'string' && fromBridge.trim().length > 0) return fromBridge.trim()
   const params = new URLSearchParams(window.location.search)
   return params.get('token') ?? ''
 }

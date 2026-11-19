@@ -130,6 +130,8 @@ export interface WorkspaceLayoutService {
   squeezeAxis(pageId: string, drawerGroupId: string, axisPx: number): void
   /** 撤掉低窗降级：按抽屉打开前的比例还自主轴。 */
   restoreAxis(pageId: string): void
+  /** 正常窗口展开抽屉：把抽屉在父 split 里的比例拉回 `lastSize` 对应像素，兄弟按原比例分摊余量。 */
+  expandDrawer(pageId: string, drawerGroupId: string): void
 
   applyPreset(pageId: string, presetId: string): void
   savePreset(pageId: string, name: string): void

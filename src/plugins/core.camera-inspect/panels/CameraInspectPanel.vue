@@ -49,7 +49,7 @@ import {
   PLAYBACK_PHASE_LABELS,
   PLAYBACK_PHASE_TONE,
 } from '../../../features/camera/playback/model.ts'
-import type { PlaybackIssue, PlaybackState } from '../../../features/camera/playback/model.ts'
+import type { PlaybackIssue, PlaybackReport, PlaybackState } from '../../../features/camera/playback/model.ts'
 
 const ctx = usePanelContext()
 const documents = ctx.services.require<DocumentService>(DOCUMENT_SERVICE)
@@ -362,6 +362,8 @@ function targetCell(target: PlayerRouteView['targets'][number]): string {
 // ── 回放 tab ───────────────────────────────────────────────
 
 const playback = ref<PlaybackState>(initialPlaybackState(previewService === null ? false : previewService.connected()))
+/** 服务端最近一次 `playback.state` 回执（time / playing）；预览服务是命令式类，计算属性直接读其字段不具响应式，须由订阅回调写入 ref。 */
+const serverState = ref<PlaybackReport | null>(previewService === null ? null : previewService.playback())
 const playbackBusy = ref(false)
 const OFF = (): void => undefined
 let stopPreviewSubscription: () => void = OFF
@@ -377,6 +379,7 @@ function subscribePreview(): void {
     if (report === null) {
       return
     }
+    serverState.value = report
     playback.value = applyReport(playback.value, report)
     playback.value = applyConnection(playback.value, previewService !== null && previewService.connected())
     if (receiptTimer !== undefined) {
@@ -424,7 +427,7 @@ const playbackSummaryCounts = computed(() => {
   })
 })
 
-const serverPlayback = computed(() => (previewService === null ? null : previewService.playback()))
+const serverPlayback = computed(() => serverState.value)
 const drift = computed(() => timeDrift(playhead.value, serverPlayback.value === null ? null : serverPlayback.value.time))
 
 /** `DocIssue` → 界面问题（保留原文，不吞错误）。 */

@@ -153,14 +153,29 @@ export function applyReport(state: PlaybackState, report: PlaybackReport): Playb
   if (!Number.isFinite(report.time)) {
     return state
   }
+  const receiptAt = Date.now()
+  // 校验门阶段（未连接 / 就绪 / 校验中 / 有效 / 无效 / 错误）由本地校验意图持有，
+  // 空闲回执（服务端未播，50ms 一次）不能把「有效」盖成「已暂停」；只刷新回执标记。
+  if (!REPORT_OWNED_PHASES.has(state.phase)) {
+    return { ...state, receiptAt, missingReceipt: false }
+  }
   const phase: PlaybackPhase = report.playing ? 'playing' : 'paused'
   return {
     ...state,
     phase,
-    receiptAt: Date.now(),
+    receiptAt,
     missingReceipt: false,
   }
 }
+
+/** 回执可以接管阶段的控制态；其余阶段归本地校验 / 连接意图持有。 */
+const REPORT_OWNED_PHASES: ReadonlySet<PlaybackPhase> = new Set([
+  'pushing',
+  'seeking',
+  'playing',
+  'paused',
+  'stopped',
+])
 
 /** 连接状态变化：断线清空推送 / 跳转中间态回到未连接，不清文档与播放头。 */
 export function applyConnection(state: PlaybackState, connected: boolean): PlaybackState {
