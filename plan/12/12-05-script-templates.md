@@ -1,6 +1,6 @@
 # 脚本级模板
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`script.blank` / `script.camera_intro` / `script.follow_black` 三个内置脚本模板
 > 关联：12-01 装配、12-02 嵌套、12-03 片段模板、12-04 轨道模板、07 位置契约、11 触发器声明
 
@@ -84,19 +84,25 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-三个脚本模板的参数口径与产物契约已定，代码尚未落地。
+三个脚本模板落地在 `src/features/templates/builtins/script.ts`；脚本层仅新建文档，非空文档整次拒绝；自检 `src/workbench/verify12/scriptTemplates.ts`（`runScriptTemplates`）44 条全过。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| `script.blank`：七类内置轨道各一条空轨；`meta` 身份字段由参数覆盖；不写触发器、规则、路径、总时长、版本 | `blank`：`TRACK_TYPE_ORDER`（CAMERA, LETTERBOX, AUDIO, EVENT, MOD_EVENT, OVERLAY, ADJUST）各一条空轨；`meta` 仅 `id` / `name` / `author`；跨参数校验：id 须 1–32 位字母 / 数字 / 下划线，name 1–50 字符，author ≤30；自检 `七类空轨齐全` / `轨道均为空轨` / `无路径` / `不写空 triggers 数组` / `不写 version / total_duration` | 按计划 |
+| `script.camera_intro`：相机片段从零开始、固定机位不呼吸；遮幅同起同长、只写比例与透明度；黑场从零开始、淡出（黑→画面）；遮幅比例 / 黑场时长为零不生成对应轨；黑场时长不得超过相机时长 | `cameraIntro`：相机 `position_mode=absolute` + 静态姿态 + `breathObjects({enabled:false,...})`；`ratio>0` 才出 LETTERBOX（`aspect_ratio` / `opacity=1`，同起同长）；`blackDuration>0` 才出 OVERLAY 黑场（`layer_type=fade`、`color=#000000`、opacity 1→0）；`crossCheck` 黑场 > 相机时长报 `T_PARAM_CROSS` | 按计划 |
+| `script.follow_black`：相机相对基准跟随同一选择器且不冻结；位置三分量按基准轴给常量（后退 / 高度 / 横向零）；朝向来源与注视目标同一选择器；注视点高度单独给；位置与朝向全常量不打关键帧；结束黑场从总时长减去黑场时长处开始、淡入（画面→黑） | `followBlack`：`position_mode=relative`、`position_space=base`、`position_origin=selector`、`position_origin_freeze=false`；`position.x=-backDistance`、`position.y=heightOffset`、`position.z=0`；`facing_source=entity`、`facing_target=selector`、`look_at=entity`、`look_at_selector=selector`、`look_at_part.y=lookHeight`；结束黑场起点 `total-blackDuration`、opacity 0→1；全部 value 单值，无关键帧 | 按计划 |
+| 触发器只写声明骨架：可选登录或生物群系；只含类型与条件，不写 target、规则、绑定 | `triggerType` 枚举 `none` / `login` / `biome`；login 条目 `{type:'login', conditions:{}}`；biome 条目 `{type:'biome', conditions:{biome}}`，群系空串报 `T_PARAM_CROSS`；条目顶层仅 `type` / `conditions`，无规则、绑定、target | 按计划 |
+| 脚本模板不塞进已有非空文档；空文档由一次事务写入 | `assembly.ts` 脚本分支：模式非 `newDocument` 报 `T_SCRIPT_TARGET`；`docIsEmpty` 为假报 `T_DOC_NON_EMPTY`；命令序列 `meta.set` → `timeline.addTrack` → `clip.add` → `path.writeBatch` → `trigger.add`，包一次事务 | 按计划 |
+| 三个脚本模板都不生成路径；不写片段级转场；规则留给 11 行为页，叠化留给 08 转场面板 | 三个模板 `paths: []`；无 `transition*` 字段；触发器不带规则与绑定 | 按计划 |
 
 ### 验收要点
 
-- 空骨架生成七类内置空轨，身份字段来自参数，产物里没有版本、总时长、空触发器数组，保存重开能过校验。
-- 开场默认生成相机与遮幅两条轨道，游戏内能看到遮幅；黑场参数大于零时多一条从黑到画面的片段。
-- 黑场时长超过相机时长时拒绝生成并给出参数错误。
-- 跟随示例默认生成相对基准的跟随相机并看向同一目标，最后一段淡入黑场，游戏内跟随与黑场时序正确。
-- 选择生物群系触发器时，触发器只带类型与条件，没有目标、规则或绑定。
-- 三个产物都不含片段级转场字段；需要叠化时到 08 面板另行建立。
+- blank 产物：七类空轨、零片段零路径零触发器；`meta` 无 `version` / `total_duration`；id / name / author 不符规则被拒。
+- camera_intro 默认：相机一片段 0~3s；遮幅同起同长仅比例与透明度；黑场 0~1s 透明度 1→0；比例或黑场时长填 0 时对应轨不生成。
+- 黑场时长 > 相机时长被拒（`T_PARAM_CROSS`）。
+- follow_black：相机相对基准、原点为选择器且不冻结，位置三轴为基准轴常量，朝向 / 注视同一选择器；结束黑场 0→1 淡入。
+- 选 biome 触发器：条目只有类型与群系条件，无 target、规则、绑定；空群系被拒。
+- 三个产物均无转场字段；过既有校验器；撤销后回到空文档。
+- 未在本轮验证项：跟随在游戏内是否贴住目标实体、黑场 / 遮幅实际时序观感；证据缺失原因：仅有字段形态与端点时间静态证据。

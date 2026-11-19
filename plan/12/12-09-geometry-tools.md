@@ -1,6 +1,6 @@
 # 几何工具
 
-> 状态：未实现
+> 状态：已实现
 > 范围：素材尺寸检查、覆盖层区域规划、相机合成矩形、基准分辨率编辑、预览几何示意、Gizmo
 > 关联：07 位置与路径、09 覆盖层字段、09-05 字幕字段面、10 LUT、08 转场
 
@@ -82,21 +82,30 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-两套公式的区分与六项工具的口径已定，代码尚未落地。
+几何工具纯函数落在 `src/features/geometry/**`（`constants / baseResolution / overlayChain / cameraRect / planner / gizmo / index`），面板插件落在 `src/plugins/core.geometry/**`（manifest / panelModel / `GeometryToolsPanel.vue` / i18n），自检为 `src/workbench/verify12/geometry.ts` 的 `runGeometryTools`（51 条断言，全量 `verify-12.ts` `summary ok=568 fail=0`）。链路从片段 `objects` 读裁切 / 位置 / 缩放与相机 dest/source，经纯函数算出链路尺寸、归一化矩形、规划提示与 Gizmo 草稿，写回走命令层；未新增几何字段，未改 09 覆盖层与 08 转场语义。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 覆盖层统一系数取宽高比较小者；裁切像素 → 基准尺寸 → 最终显示 → 占窗比例 / 超窗 / 拉伸 | `overlayChain.ts`：`overlayScaleFactor` 复用 `features/overlay/geometry.ts` 的 `resolutionEscape`；`overlayChain` 输出 `factor / sourceKnown / cropped / baseSize / finalSize / windowFraction / outOfWindow / nonUniformScale / stretched`，`space:'overlay'`；断言「系数：宽紧时取宽度比例 2/3」「系数：高紧时取高度比例 800/1080」「链路：裁切后像素 500×250」等 | 按计划 |
+| 基准分辨率为文档级 `meta.base_resolution = {w,h}`，正整数，缺省 1920×1080；只影响覆盖层，不参与相机矩形 | `baseResolution.ts`：`BASE_RESOLUTION_KEY='base_resolution'`、`resolveBaseResolution`（缺省 / 非法回退并标 `explicit=false`）、`validateBaseResolutionInput`（非有限 / 非整数 / ≤0 拒绝）、`baseResolutionCommands`（`meta.set` 一条命令）；断言「隔离：相机 dest/source 不随基准分辨率变」「撤销后声明清除」 | 按计划 |
+| 相机目标与源都是 0–1 归一化，不乘系数、不读基准分辨率、不出像素结果 | `cameraRect.ts`：`cameraRectToNormalized` 入参不含基准 / 窗口；结果 `pixelWidth/pixelHeight` 恒 `null`、无 `factor/baseSize` 字段，`space:'camera'`；字段路径 `dest.x/y/w/h`、`source.x/y/w/h`，缺省 `(0,0,1,1)`；`readCameraComposite` 从片段 `objects` 读取 | 按计划 |
+| 目标比例不一致 / 超窗只提示，不静默改源裁切、不钳制 | `planner.ts` `regionPlan` 输出 `aspectMismatch` 与 `issues/warnings`；断言「比例不一致只给提示不阻塞」「超窗允许写入（issues 为空）」「超窗值按写入落盘（不钳制到窗口内）」「超窗写入一次撤销回原值」 | 按计划 |
+| 缩放 0 / 负提示不改值；裁切宽高 0 / 负拒绝；非等比只提示拉伸 | `overlayChain`：非正缩放进 `warnings` 且纯函数不改写输入；裁切 ≤0 进 `issues` 阻塞、像素链路留空；`scaleIssues / stretchWarning` 供面板取用 | 按计划 |
+| 素材尺寸未知时如实说未知，不假设 16:9 / 1920×1080 | `sourceKnown=false` 时 `cropped/baseSize/finalSize` 全 `null`，只给比例示意提示；断言「未知素材：sourceKnown=false」「像素链路全部留空」 | 素材原始像素由作者手填：资源端口回执不含宽高字段（核对 `features/overlay/media.ts`），空串即未知，不反推默认比例 |
+| Gizmo 只对当前选中片段的一个矩形 / 位置组工作：移动、等比缩放、非等比拉伸、锚点，无旋转；拖动中只更新草稿，松手一次提交，撤销一次回退；多选只出包围盒 | `gizmo.ts`：`GIZMO_HANDLES=['move','uniformScale','stretchScale','anchor']`、`GIZMO_ROTATION_HANDLES=[]`；`planGizmoDrag` 产 `GizmoDraft`，`gizmoCommands` 只产出变化字段命令，`boundingBox` 合并多选矩形；断言「手柄清单无旋转项」「一次撤销回拖前几何」「多选包围盒合并两组矩形」 | 按计划 |
+| 面板挂文档抽屉，六件工具齐全，示意固定标注「几何示意，最终以游戏为准」；预览尺寸 / 帧率唯一 | `manifest.ts`：插件 `core.geometry`、面板 `geometry.tools`、`defaultSlot:'document.drawer'`、`order:50`、`minWidth 420 / minHeight 300`、`keepAlive / closable`、`available` 仅 `pageId==='document' && documentOpen`；`constants.ts`：`PREVIEW_VIEW_WIDTH/HEIGHT=1920/1080`、`PREVIEW_FPS=60`、`SKETCH_DISCLAIMER='几何示意，最终以游戏为准'`；示意含字幕近似文字块，不声称等于游戏字体像素 | 按计划 |
 
 ### 验收要点
 
-- 基准与播放尺寸相同且缩放在 1 时，裁切一半的素材其基准尺寸与最终显示尺寸正确。
-- 播放尺寸小于基准时缩放系数取宽高比例的较小者，不是只按宽或只按高。
-- 修改基准分辨率后覆盖层示意变化，相机目标与源矩形不变。
-- 目标矩形宽高比与素材不一致时提示裁切或拉伸，不静默改源裁切。
-- 相机矩形不显示乘系数的结果，也不与覆盖层像素尺寸混算。
-- 字幕示意只画近似文字块，不声称等于游戏字体像素。
-- Gizmo 移动或缩放一次提交、撤销一次回退，没有旋转手柄。
-- 预览始终固定一个尺寸与帧率，找不到其他尺寸或帧率切换入口。
+- 基准 = 播放、scale=1 时裁切一半的素材，基准尺寸与最终显示尺寸正确（500×250 链路断言）。
+- 播放小于基准时系数取宽高比例较小者（宽紧 2/3、高紧 800/1080 两组），不只按宽或高。
+- 改基准分辨率只变覆盖层示意，相机目标与源矩形不变。
+- 目标比例与素材不一致只提示裁切 / 拉伸，不静默改源裁切；超窗允许写入且不钳制。
+- 相机结果不含像素宽高与系数字段，坐标系标记 camera / overlay 分离，不混算。
+- 素材未知时像素链路留空，不假设 16:9 / 1920×1080。
+- Gizmo 无旋转手柄；移动 / 缩放一次提交、一次撤销回退；多选只显示包围盒。
+- 预览尺寸与帧率固定唯一；示意标注「几何示意，最终以游戏为准」，不画素材像素。
+
+未在本轮验证项：示意的人工视觉核对未做（正确性由纯函数断言覆盖）；游戏内最终像素以运行时合成与字体测量为准，编辑器不复现。

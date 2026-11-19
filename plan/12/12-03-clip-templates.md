@@ -1,6 +1,6 @@
 # 片段级模板
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`clip.fade` / `clip.static_breath` / `clip.dolly` / `clip.orbit_arc` 四个内置片段模板的能力与边界
 > 关联：12-01 模型与装配、12-07 快捷效果、12-09 几何、12-10 曲线、09 覆盖层字段、08 相机字段、07 路径
 
@@ -84,19 +84,25 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-四个片段模板的参数口径与产物契约已定，代码尚未落地。
+四个片段模板落地在 `src/features/templates/builtins/clip.ts`，共用 `builtins/common.ts`（`value` / `keyframes` / `frame` / 静态姿态 / 呼吸对象）与 `builtins/circle.ts`（水平圆点位 / 切线 / 相对控制点）；产物字段面只取 02 目录 `catalog/tracks.ts` 登记字段；自检 `src/workbench/verify12/clipTemplates.ts`（`runClipTemplates`）57 条全过。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| `clip.fade` 生成全屏覆盖层片段：透明度曲线表达画面到黑或黑到画面；颜色只写字符串；不写渐变、遮罩、混合、文本 | `fade` 展开对象为 `layer_type='fade'`、`color` 字符串、`opacity` 关键帧；`mode=in` 0→1、`out` 1→0、`roundtrip` 0→1→0；`color` 六位十六进制由参数校验 `T_PARAM_COLOR` 把关 | 按计划 |
+| `clip.static_breath`：绝对位置，位置 / 朝向 / 镜头各写单值；呼吸是 value-only 字段不打关键帧；关掉呼吸时其余呼吸字段一并省略；创伤类呼吸才写创伤与衰减 | `staticBreath`：`position_mode=absolute` + `staticPoseObjects` 单值；`breathObjects` 关闭仅写 `cam_breath_enabled=false`；`type==='trauma'` 才写 `cam_breath_trauma` / `cam_breath_decay`；其余呼吸字段均为单值 | 按计划 |
+| `clip.dolly`：位置三轴各两端节点、视场角两端节点，时间点对齐；起点与终点不能相同；注视方式二选一，坐标注视给注视点三轴且不写朝向角 | `dolly`：`position.x/y/z`、`fov`、`zoom` 两端关键帧；`lookMode=angles` 写 `yaw/pitch/roll` 两端帧；`coordinate` 写 `look_at='coordinate'` + `look_at_target_x/y/z`，不写朝向角；跨参数校验 `T_PARAM_CROSS`：起止位置相同拒绝，coordinate 缺注视点三轴拒绝 | 文档 §4.2 只写"视场角两端节点"，实际 `zoom` 同样随起止姿态写两端关键帧（姿态参数含 `zoom` 字段） |
+| `clip.orbit_arc`：一片段一条路径；位置两端节点；看向中心与沿切线两种朝向互斥；路径 `clip` 指向本片段、`from`/`to` 命中位置节点时间、`axes` 只含水平两轴、`geometry` 为 bezier 且控制点是完整相对偏移对象 | `orbitArc`：位置两端帧；`center` 模式写 `look_at='coordinate'` + 中心三轴；`tangent` 模式写 `orient='tangent'` + `yaw_offset=0` / `pitch_offset=0`；路径条目 `clip=clipId`、`from=0`、`to=duration`、`axes=['x','z']`、`geometry.type='bezier'`、`control_points` 两个 `{dx,dy,dz}` 相对对象 | 按计划 |
+| 环绕弧单段扫角有上限，超限拒绝并提示整圈用轨道模板 | `SWEEP_LIMIT_DEG = 90`、`SWEEP_EPS = 1e-9`；`crossCheck` 超限报 `T_PARAM_CROSS`，文案提示改用 `track.orbit_full` 并增大段数；半径 ≤0 同错码拒绝 | 按计划；阈值与 `core/paths/generators.ts` 既有口径一致 |
+| 产物字段严格落在目标轨道 schema 既有字段内；不写片段级 `transition*`、旧片段级 `keyframes` / `curve` 叶子、`meta.version`、`timeline.total_duration`、空 `triggers` 数组 | 对象键来自 `staticPoseObjects` / `breathObjects` / 各模板显式写入；`validateDraftStructure` 按目录 `objectDef` 校验未知字段（`T_FIELD_UNKNOWN`）；自检各模板 `无转场字段`、`无模板元信息键`、`产物过结构校验`、`撤销后零片段` | 按计划 |
+| 路径条目 `timing` 为线性 | 实际：`orbit_arc` 路径条目未显式写 `timing` 字段；`PathDraft.timing` 为可选，`pathEntryJson` 仅在存在时透传，线性取目录 / 既有路径缺省口径 | 待裁决：文档 §4.2 要求写线性 `timing`，本轮模板产物未落该字段（证据：`clip.ts` 路径对象无 `timing` 键）；未自行改写文档 |
 
 ### 验收要点
 
-- 四个模板各生成一次，保存重开后能过现有校验器，游戏内表现与参数一致。
-- 淡入淡出的透明度曲线正确，颜色是字符串，产物里没有渐变、遮罩、混合字段。
-- 呼吸字段全部是单值；关闭呼吸时其余呼吸字段确实省略。
-- 推近的位置与视场角各有两端节点，两端视场角不同时游戏内可见变焦推近。
-- 环绕弧默认生成一个片段、两个位置节点、一条路径；扫角超上限被拒绝并提示改用轨道模板。
-- 四个产物都不含片段级转场字段，也没有运行时模板字段。
+- 四个模板各计划一次：fade 落 OVERLAY 一片段；static_breath 落 CAMERA 单值；dolly 起止姿态落两端帧；orbit_arc 一片段一水平两轴 bezier 路径。
+- 关闭呼吸的 static_breath：对象里只有 `cam_breath_enabled=false`，查不到 type / intensity / seed / speed / trauma / decay。
+- dolly 坐标注视模式：有注视点三轴、无 yaw / pitch / roll；起止位置相同被拒。
+- orbit_arc 扫角填超过 90° 被拒，文案指向轨道模板；切线模式无圆心注视字段。
+- 四个产物序列化文本里没有 `transition` 前缀字段、模板 id 或参数键；过既有校验器；撤销后零片段。
+- 未在本轮验证项：游戏内实际观感（变焦推近、环绕曲线质量）；证据缺失原因：仅有静态字段与时序端点证据，未接入游戏播放。

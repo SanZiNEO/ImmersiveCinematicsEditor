@@ -1,6 +1,6 @@
 # 12 轮验收
 
-> 状态：未实现
+> 状态：已实现
 > 范围：模板、飞控九槽、几何、曲线、字幕五条链路的验收要点与合同回归边界
 > 关联：12-01～12-15 各文档的完成定义、08 转场、09-05 字幕字段面、10 LUT、11 触发器
 
@@ -78,13 +78,29 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-验收要点已按能力分组确定，实际执行与证据收集尚未开始。
+本轮验收落到一个总入口 `src/workbench/verify-12.ts`（`npm run verify:12`）：分 9 组调用 `verify12/` 下 13 个能力模块，加一组静态边界、一组回归，末行 `summary ok=568 fail=0`；`npx vue-tsc --noEmit` 全仓 0 错误、`npm run build` 通过。除自检外，另用 Playwright 驱动真实 Electron 编辑器完成 UI 级联调（`e2e/r12-live.spec.ts`，`IC_LIVE` 保护），三份夹具均由**编辑器按钮**推送并在游戏内播放、帧回传传输层。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 验收按能力分组，每组给可核对现象 | 总入口分 9 组：A 模板模型/嵌套、B 九个模板、C 生成校验、D 面板与快捷效果、E 飞控、F 几何、G 曲线、H 字幕、静态边界、回归；断言 33+15+57+25+44+23+60+36+71+51+70+67+7+9=568 | 按计划 |
+| 合同回归独立成组 | `staticBoundaryGroup()` 7 条：新增源文件 ≥40、字幕编译无颜色/字体/描边/对齐/背景字段、模板无片段级 `transition`/`crossfade` 键、能力层不直接写盘（无伴随文件）、无全局层级表、插件不 import 文档 store/宿主实现、模板不写 `total_duration`/`version`/模板身份键 | 计划未写豁免与判定口径：`workbench/host/panelContext.ts` 是 04 给面板的合法端口，需从正则里排除；扫描前剥离注释，否则"不许写 X"的注释会被当成 X |
+| 回归复用既有脚本，不复制断言 | `regressionGroup()` 跑 `core/doc/verify.ts`(198)、`verify.ts`(171)、`verify-05/06/08/09/10/11`，`verify-07` 断言 598 单列 | 05–09 末行格式是 `<轮> 自检: N ok, M fail` 与 `08 自检：ok 85 / fail 0` 两种，解析器必须兼容，否则误判为 `ok=-1` |
+| 只验"能连上、脚本能播" | 联调三次：编辑器 `documents.open` 打开夹具 → 点「校验」→「推送并跳转」→「播放」；服务端 time 从 0 推进（2.047s / 1.961s / 2.142s），预览帧计数 8→94 / 114→199 / 218→327，游戏侧日志 `pushScript len=773/4204/1451`、`editor.play` | 用户裁决：播放必须由编辑器发起，禁用 `ic play`；故补 `e2e/r12-live.spec.ts` 作为 UI 级证据 |
+| 联调打开预览屏 | 模组源码与运行构建一致：`CinematicKeyBindings.EDITOR_OPEN` 默认 **F6**（`GLFW_KEY_F6`，可在「控制 → 按键绑定」改键）；编辑器旧 README 与 legacy 文案里的 F9 是过期记录，已改为 F6 | 按模组事实统一编辑器侧记录；F6 是运行时实际响应键（`editor.open`） |
+| 编辑器"收到并显示"预览帧 | 帧确实回传并计入传输层；面板内 H.264 未解码，画面区仍显示"等待预览帧…"（RGBA 回退路径已实现） | 09 轮预览面板只解码 RGBA，H.264 明确留给后续轮次；模组 `PreviewConfig.fixed()` 固定 1080p60 H.264，仅在无 ffmpeg 时回退 RGBA |
+| 只按清单人工核对 | 联调中暴露的编辑器缺陷一并修掉（5 处）：布局 `expandDrawer`（`api/layout.ts`、`layout/LayoutService.ts`）、`drawer/drawerController.ts` 接线、`features/camera/playback/model.ts` 空闲回执不再覆盖校验阶段、`CameraInspectPanel.vue` 对比行改响应式 ref | 不修则抽屉面板被压成 48px 折叠条、校验后阶段永远显示"已暂停"、对比行永远"未播"，UI 验收无法进行 |
+
+### 联调记录（真实客户端 + 真实编辑器）
+
+| 夹具 | 结构 | 校验 | 播放（编辑器发起） | 帧回传 | 证据 |
+|---|---|---|---|---|---|
+| `r12_camera_intro.json` | 3 轨 / 3 片段 | `ok:true, issues:[]` | time 0→2.047s，13 个在播样本 | 8→94 | `e2e-artifacts\r12-live-r12-camera-intro.png` |
+| `r12_template_mix.json` | 3 轨 / 8 片段 / 4 路径 | `ok:true, issues:[]` | time 0→1.961s，13 个在播样本 | 114→199 | `e2e-artifacts\r12-live-r12-template-mix.png` |
+| `r12_subtitles.json` | 4 轨 / 4 字幕片段 | `ok:true, issues:[]` | time 0→2.142s，14 个在播样本 | 218→327 | `e2e-artifacts\r12-live-r12-subtitles.png` |
+
+夹具由 `src/workbench/emit-fixtures-12.ts`（`npm run fixtures:12`）走真实代码路径生成，写盘前经 `parseDoc` 回读 + `validateStructure` 零 issue。游戏端只负责起客户端（`ic client`）与打开预览屏让 WebSocket 就绪（127.0.0.1:8765），播放发起方是编辑器。
 
 ### 模板
 
@@ -148,3 +164,6 @@
 - 相对基准坐标的相机片段无法应用槽的位置与朝向，只能写光学参数。
 - 字幕表内不能改文本，冲突处理需要在表与字段面板间切换；字幕宽度由游戏字体测量，编辑器只给近似示意。
 - 曲线拾取基于固定平面，斜视角下需数值微调；编辑器积分与运行时求值不保证逐位一致。
+- 编辑器中栏的预览画面：模组固定输出 1080p60 H.264，09 轮预览面板只实现 RGBA 解码，故当前显示"等待预览帧…"；帧本身已到传输层（计数持续增长），H.264 解码属后续轮次。
+- 预览屏入口键按模组事实为 **F6**：`CinematicKeyBindings.EDITOR_OPEN` 默认 `GLFW_KEY_F6`（可在「控制 → 按键绑定」改），运行构建与源码一致；编辑器旧 README/legacy 文案中的 F9 已修正为 F6。
+- 本轮不判断画面质量（不看图、不评价构图与色彩），联调只判"连上、能推、能播、帧在回传"。

@@ -1,6 +1,6 @@
 # 模板嵌套与逐层传参
 
-> 状态：未实现
+> 状态：已实现
 > 范围：跨层引用声明、参数绑定、实例命名空间、深度/环/实例数上限、展开顺序与失败回滚
 > 关联：12-01 三层模型与装配、12-03 片段模板、12-04 轨道模板、12-05 脚本模板、12-11 生成校验
 
@@ -88,20 +88,27 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-引用声明、逐层传参、深度与环检测、失败回滚已定，代码尚未落地。
+嵌套引擎落地在 `src/features/templates/engine.ts`、`model.ts`（引用声明 / 绑定形态 / 命名空间）、`derivations.ts`（封闭派生表）；静态引用校验与递归展开双处守卫；自检 `src/workbench/verify12/nesting.ts`（`runNesting`）15 条全过。九个内置模板 `refs: []`，跨模板声明式嵌套由自检合成模板覆盖。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 三层只向下引用：脚本 → 轨道 → 片段；同层与向上直接拒绝 | `engine.ts` `LAYER_ORDER`：`clip=0` / `track=1` / `script=2`；`validateReferences` 对 `target.layer >= internal.layer` 报 `T_NEST_DIRECTION` | 按计划 |
+| 栈中重复 id 即环，与深度上限无关；报环并给出闭环路径 | `walk` 以 `chainSoFar` 判重，命中即报 `T_NEST_CYCLE`，`refChain` 为闭环数组；自检 N2 闭环链 `nest.cycleA>nest.cycleB>nest.cycleA` | 按计划 |
+| 深度固定三层，超过三层不成立；环在展开前就能识别 | `MAX_DEPTH = 3`；`validateReferences.checkDepth` 静态 DFS 先拦，`walk` 栈内再次兜底，两处均报 `T_NEST_DEPTH` | 双处守卫为本轮实现决定（文档只要求深度上限）：静态校验在展开前识别超三层链，展开栈内再兜底一次 |
+| 重复次数必须是整数并限制上限；单次展开总实例数有上限 | `MAX_REPEAT = 32`、`MAX_INSTANCES = 64`；非整数 `T_NEST_REPEAT_TYPE`，越界 `T_NEST_REPEAT_RANGE`，超限 `T_NEST_INSTANCE_LIMIT` | 按计划 |
+| 参数绑定三形态互斥：常量、上层同名参数、引擎内置封闭派生；下层未声明同名参数时报错，不静默透传 | `model.ts` `RefBinding.form = 'constant' \| 'inherit' \| 'derive'`；`inherit` 校验 `fromParam` 已声明，否则 `T_NEST_INHERIT_UNDECLARED`；`derive` 查 `derivationByName`，未登记 `T_NEST_DERIVE_UNKNOWN`，缺派生参数 `T_NEST_DERIVE_ARG_MISSING` | 按计划 |
+| 派生是登记在册的固定算法；本轮只登记实际模板需要的那几个 | `derivations.ts` 登记 `angleSplit`（`startAngle` / `sweep` / `segments`）、`durationSplit`（`totalDuration` / `segments`）、`poseAt`（`list`），另附 `pickPoseAt` 辅助函数 | 按计划 |
+| 实例命名空间只服务展开期；片段 / 轨道 / 路径 id 按现有规则分配并去重；命名空间字符串不出现在保存后的 JSON 任何字段里 | 子实例命名空间 `${namespace}_r${refIndex}_i${i}`；id 分配器产出 `${namespace}c{n}` / `${namespace}p{n}`；自检 N7 扫描产物无模板 / 参数 / 槽位 / 命名空间键，片段 id 符合白名单 | 按计划 |
+| 内部轨道组合器调用片段模板展开函数，只负责轨道 id、片段起点、顺序与轨道类型，不复制片段数学；不注册成用户可见模板 | `builtins/track.ts` `clipTemplate(id)` 取 `CLIP_TEMPLATES` 条目后直接调 `expand`；两个轨道模板 `refs: []`，段 / 机位循环在本层展开 | 实现决定：引擎 `refs` 声明嵌套机制保留给跨模板声明式嵌套；组合器不经引用声明表，与 12-02 §4.4 的组合器职责定义一致 |
+| 任一引用失败整链失败；已生成的内存对象尚未写入文档，不需要回滚；装配阶段失败文档不变，展开草稿丢弃 | `walk` 任一子实例返回 false 即整链中止，`expandTemplate` 返回空草稿 + 诊断；`planAssembly` 失败时 `commands` 为空；第四层校验拼装全程克隆，不改请求文档（`validate.ts` `assembleDraftDoc`） | 片段层草稿在待校验脚本内按 `clip.trackType` 归并到对应轨道（`validate.ts` 归并段），属校验链内部归并，不改变 §三的展开顺序约定 |
 
 ### 验收要点
 
-- 脚本模板引用轨道模板、轨道模板引用片段模板，逐层传参后产物正确，且产物里没有任何中间命名。
-- 引用目标层高于或等于当前层时拒绝展开。
-- 展开栈出现重复模板 id 时报环并给出闭环路径，即使层数未超。
-- 重复次数非整数或越界、总实例数超限时拒绝展开。
-- `from` 引用未声明参数时拒绝展开，不静默透传。
-- 任一引用失败时整次展开失败，文档不变、无半份内容。
-- 成功展开后命名空间与实例序号不出现在保存后的脚本里。
+- 合成向上 / 同层引用的模板：静态校验即报 `T_NEST_DIRECTION`，不进入展开。
+- 构造两模板互引：诊断带 `T_NEST_CYCLE` 与完整闭环链。
+- 四层引用链被拦（`T_NEST_DEPTH`）；重复次数填小数、0、33，或总实例数 65，分别被对应错误码拒绝。
+- 绑定继承未声明参数、引用未登记派生均报错，下层不收到静默透传值。
+- 正向两实例展开：各产一片段，实例 id 互不相同；产物对象检索不到模板 id、参数键、槽位、命名空间字符串。
+- 任一引用失败后文档无残留片段；成功产物再过既有结构校验器。

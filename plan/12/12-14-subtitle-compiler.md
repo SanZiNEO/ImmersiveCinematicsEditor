@@ -1,6 +1,6 @@
 # 字幕编译
 
-> 状态：未实现
+> 状态：已实现
 > 范围：一 cue 一片段的映射、字段写法、轨道分配、三种编译模式、文本与时间与布局规则
 > 关联：12-12 导入、12-13 批次、12-15 面板、09-05 字幕字段面、09-08 覆盖层预设
 
@@ -90,23 +90,28 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-一 cue 一片段的映射与字段面已定，代码尚未落地。
+编译计划落在 `src/features/subtitles/compile.ts`，一 cue 一片段，三模式，固定 09-05 字段面；自检字幕 E 组 14 条。命令由调用方一次 `commitBatch` 提交，失败零残留。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 一 cue 一片段：cue 区间 → 片段 `start_time` + `duration`；不拆多片段、不塞多 cue；草稿 cue 经打包分配轨道 | `planCompile` draft 分支：`timeline.addTrack`（需要时）+ `clip.add`；断言「E1 cue 3.0–5.2 → start 3 / duration 2.2」 | 按计划 |
+| 固定字段面：`layer_type / text / x / y / anchor_x / anchor_y / scale_x / scale_y / font_scale / opacity / z_index`；不写颜色 / 字体族 / 描边 / 背景 / 对齐 / 素材 / 路径 / 遮罩 / 渐变 / 混合 / 转场 / 总时长；文本单值不打帧 | `SUBTITLE_COMPILE_PATHS` 11 路径；断言「E1 产物字段面 = 固定字幕字段集合」「不含颜色 / 素材 / 路径 / 遮罩 / 渐变 / 混合模式键」；verify-12 静态边界组另扫 `font_family/font_size/color/stroke/outline/shadow/background/align` 等样式类字段 | 按计划 |
+| 三种模式：`draft` 草稿编译新建；`changed` 按片段 id 更新文本 / 时间 / 布局；`validate` 只校验不写 | `CompileMode='draft' | 'changed' | 'validate'`；`validate` 分支检查完即 `continue`，不产命令 | 按计划 |
+| 变更编译不重建：按 id 更新，不重置出口字段与既有关键帧；关键帧超出新时长给警告，不自动裁剪 | changed 分支 `object.setValue`（text / 布局 / z_index）+ `clip.setStart` + `clip.setDuration`；`existingFrames` 逐路径查溢出；断言「E3 透明度关键帧保留（不重置）」「关键帧超出新时长给警告」 | 按计划 |
+| 布局优先序：已有片段值 > 批次 / 草稿值 > 09-08 预设 `subtitle.bottom` > 缺省；`presetId` 可选；已有值优先不强制覆盖 | `resolvePreset` / `presetDefaults`，`DEFAULT_SUBTITLE_PRESET_ID='subtitle.bottom'`，复用 `features/overlay/presets.ts` 的 `OVERLAY_PRESETS`；`z_index` 缺省 10 | 按计划 |
+| 语言前缀：`source: 'import'` 且文本以单 `@lang:` 开头 → blocker 报错并提示回向导；`source: 'hand'` 允许单前缀；双 `@` 原样保留 | `CompileInput.source: 'import' | 'hand'`；断言「E7 外部导入未转义单前缀报错并提示回向导」「手写单前缀允许」 | 按计划 |
+| 编译前检查：空 / 纯空白文本跳过并警告不产片段；同轨重叠 blocker 零命令；布局非有限 blocker；缩放 / 字号非正警告；低透明度警告；目标轨非覆盖层 blocker；混合轨只更新字幕片段并警告、不删非字幕片段 | compile.ts 各分支；断言「E2 同轨重叠编译被拒绝（blocker）」「E4 空文本跳过且不产命令」「E5 非正缩放 / 字号给警告」「低透明度给警告」 | 按计划 |
+| 产物过既有结构校验；编译后选中第一条新片段；失败零残留 | 断言「E6 草稿编译产物过 validateStructure」（`{catalog, metaKeys, registry}`）；`selectedClipKeys` 第一条新片段优先 | 按计划 |
 
 ### 验收要点
 
-- 一条起止为 3.0–5.2 秒的 cue 生成开始时间 3、时长 2.2 的片段，游戏内按时出现与消失。
-- 同轨两条重叠 cue 编译被拒绝并提示移到新轨，不生成重叠片段。
-- 两行文本的 cue 其文本保留换行，游戏内显示两行，末尾换行多一个空行。
-- 外部字幕未转义的语言前缀编译报错，转义后写双 `@` 形式，游戏内字面显示。
-- 手写字幕主动写单前缀时允许，游戏内查语言表。
-- 缩放倍数为零时给"运行时不绘制"警告，不自动改值。
-- 透明度低于可见阈值时给"实际不可见"警告，不自动抬高。
-- 变更编译只更新文本、时间与布局，保留出口与透明度关键帧；未变不写；撤销可恢复。
-- 产物只含已定义字幕字段，没有颜色、字体、描边、路径或转场。
-- 最终校验通过；失败时零残留。
+- 3.0–5.2 秒的 cue 生成开始时间 3、时长 2.2 的片段。
+- 同轨两条重叠 cue 编译被拒绝（blocker 零命令），提示移到新轨，不生成重叠片段。
+- 两行文本保留换行；空 / 纯空白文本跳过，不产空片段。
+- 外部导入未转义单前缀报错；手写单前缀允许，游戏内查语言表。
+- 缩放 / 字号非正、透明度低于可见阈值只警告，不自动抬高。
+- 变更编译只更新文本 / 时间 / 布局，保留出口与透明度关键帧；未变不写；超时长帧给警告。
+- 产物只含固定字幕字段，无颜色 / 字体 / 描边 / 路径 / 转场键。
+- 产物过既有结构校验；最终校验失败时整次回滚、零残留。

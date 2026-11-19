@@ -1,6 +1,6 @@
 # 飞控九槽输入源
 
-> 状态：未实现
+> 状态：已实现
 > 范围：编辑器侧九槽姿态面板的槽内容、存槽/取槽/手动编辑/应用四类操作、坐标解释规则
 > 关联：12-06 模板参数、12-10 曲线控制点、07 位置与路径契约、09 覆盖层字段
 
@@ -93,23 +93,29 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-九槽面板的槽内容、操作与坐标解释规则已定，代码尚未落地。
+九槽特性层落地在 `src/features/flight/**`（`types.ts` / `bank.ts` / `resolve.ts` / `apply.ts` / `extract.ts` / `public.ts` / `service.ts`），面板与共享选择器在 `src/plugins/core.flight/**`；槽库按 `DocStore` 身份存于 WeakMap，经 `POSE_BANK_SERVICE` 注册进 ServiceRegistry；自检 `src/workbench/verify12/flight.ts`（`runFlightPoseBank`）71 条全过。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 九槽固定不可增删；槽内容只有姿态数值，不存绝对 / 相对标记、基准坐标、片段 / 轨道身份、来源历史或时间戳 | `types.ts` `POSE_SLOT_COUNT = 9`；`bank.ts` 初始化九空槽 `{index, pose:null, source:null}`；`set` / `clear` / `copy` 不改变槽位数；`PoseValue` 仅 `position{x,y,z}` + `yaw` / `pitch` / `roll` / `fov` / `zoom` | 按计划 |
+| 槽库按 DocStore 身份取同一实例；文档打开事件清槽、清最近姿态；面板关闭重开不丢 | `bank.ts` `WeakMap<DocStore, PoseBank>` + `poseBankFor(store)`；订阅 store `open` 事件清空九槽与 `latest`；同会话同 store 取到同一实例；自检 G1 / G7 | 按计划 |
+| 存槽 / 清槽 / 槽间复制是纯会话内存操作：不置脏、不产生 commit / external 事件、不改 transport / session 选择 / 播放头 / 文档根；槽值不落盘 | `set` 经 `validatePoseValue`（三轴齐全 + 全有限）后克隆写入；自检 G2 / G6：序列化文本不含槽内姿态数值，文档根无槽库身份字段 | 按计划 |
+| 手动编辑不进事务；应用是显式事务：先出 diff（字段 / 旧值 / 新值），确认后一次提交，一次撤销全回退；不改其他关键帧、时长、路径形状 | `apply.ts` `planApply` 纯函数产出 `ApplyPlan { writes, diagnostics, command }`，不碰 store / 播放头 / 选择；`FlightInputsPanel.vue` diff 对话框列 `fieldPath` / 旧值 / 新值，确认 `ctx.commands.commit(command, 'flight.pose-apply')`；自检 G4：一次应用一个撤销项，撤销后位置 / 朝向 / 光学回到原值 | 按计划 |
+| 可写性解析：绝对位置直写；相对世界 + 固定数值原点写世界点减原点；相对基准禁位置与朝向、只写 fov / zoom；注视目标 / 切线朝向不写朝向角；光学任何参考系可写 | `resolve.ts` `inspectPosition` / `inspectOrientation`；原因码 `flight.position.base`、`flight.position.originUnreliable`、`flight.position.originCoords`、`flight.orientation.base`、`flight.orientation.lookAt`、`flight.orientation.tangent`；`apply.ts` 光学轴 `fov` / `zoom` 恒写；自检 G5a–G5e | 按计划 |
+| 路径端点：端点时间须已有位置节点，否则拒绝并提示先走 07 端点编辑；控制点：绝对形态写完整 `{x,y,z}` 对象，相对形态拒绝自动换算 | `planEndpoint`：节点时间未命中报 `flight.path.endpointNoNode`；`planControl`：相对 `{dx,dy,dz}` 报 `flight.path.controlRelative`，绝对形态写完整对象，命令 `path.writeBatch`；自检 G5f / G5g | 按计划 |
+| 从片段求值姿态：可忠实求值返回世界姿态；不可忠实逐条给原因（基准参考系 / 注视目标 / 切线 / 呼吸 / 运动模型通道 / 非有限） | `extract.ts` `poseFromClip(doc, clipKey, time, catalog)`；原因码 `flight.position.base`、`flight.orientation.lookAt`、`flight.orientation.tangent`、`flight.breath`、`flight.motion.position/orientation/optical`、`flight.position.nonFinite` 等；自检 G8 | 按计划 |
+| 共享选择器：模板面板 / 曲线工具 / 属性面板打开同一个；只读，不改文档、播放头、选择 | `PoseSlotPicker.vue` props `open` / `slots` / `onPick` / `onClose`，空槽禁用，点槽只回调 `onPick(index)`；模板面板经 `POSE_BANK_SERVICE` 取同一槽库 | 按计划 |
+| 面板清单：`flight.inputs`，文档抽屉，order 40，保活可关闭，仅文档打开可用；一个面板 id 只注册一处；槽库同一实例进 ServiceRegistry，消费方不 new 新库 | `manifest.ts`：插件 `core.flight`，`panelId='flight.inputs'`，`order:40`，`defaultSlot='document.drawer'`，`keepAlive` / `closable`，`available` 同文档判定；`contributes.panels` 仅一条；面板 3×3 网格（`repeat(3, 1fr)`）。`index.ts` `activate`：`ctx.services.provide(POSE_BANK_SERVICE, createFlightService(docs, catalog))`；token `'flight.poseBank'`（`public.ts`）；`PoseBankService { bank(), extract(), planApply() }` | 面板尺寸实际 `minWidth:360` / `minHeight:280`；冻结规格表记 420 / 320，差异列入交付报告冲突清单，未自行改清单；服务注册按计划 |
 
 ### 验收要点
 
-- 飞行中存槽后槽内有完整姿态，且没有发出新消息、飞行状态不变。
-- 退出后存槽使用退出姿态，现有退出写回仍写选中关键帧，槽不自动覆盖。
-- 手动编辑槽不触发文档事务，应用时才提交，一次撤销全部回退。
-- 应用到绝对相机关键帧时位置、朝向、光学正确写入。
-- 相对世界坐标且原点固定时位置减去原点后写入；原点为空或动态时位置禁用，不写假相对坐标。
-- 相对基准坐标时位置与朝向禁用，视场角与缩放可写。
-- 应用到模板参数后生成标准脚本，脚本里没有槽位 id。
-- 路径端点已有位置节点时可写；没有节点时提示先走端点编辑；控制点写对象形态。
-- 关闭重开文档后槽值不保留，脚本与片段不受影响。
-- 九个槽固定存在，不能增删；绝对标记与玩家基准坐标不出现在槽字段里。
+- 九槽固定 0–8；存槽 / 清槽后槽位数仍为 9；同会话再次取库槽保留，`open` 新文档后九槽全空、最近姿态清空。
+- 存槽后文档不置脏、无 commit / external 事件，序列化文本检索不到槽内姿态数值。
+- 手动改槽不进撤销栈；应用绝对相机片段：位置三轴、朝向三轴、fov / zoom 按 diff 写入，撤销一次全回退。
+- 相对基准片段：位置与朝向禁用，仅 fov / zoom 可写；注视目标 / 切线朝向片段：朝向角禁用。
+- 端点时间无节点、相对形态控制点分别被对应原因码拒绝；绝对控制点写入完整 `{x,y,z}`。
+- 选中基准 / 注视 / 切线 / 呼吸 / 运动模型片段求值：返回不可忠实原因，不出世界姿态。
+- 选择器只读：选槽不改文档、播放头与选择。
+- 未在本轮验证项：飞控运行时回推 / 退出姿态写回 `latest()` 的接线、模组侧消息链路；证据缺失原因：本轮未改模组与宿主飞控通道，`setLatest` 仅暴露会话内入口。面板当前仅接 `clipField` 入口，`templateParam` / `pathPoint` 计划能力已在 `apply.ts` 实现并被自检覆盖，面板入口由对应切片接入。

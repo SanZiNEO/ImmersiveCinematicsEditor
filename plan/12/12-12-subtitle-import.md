@@ -1,6 +1,6 @@
 # 字幕导入
 
-> 状态：未实现
+> 状态：已实现
 > 范围：SRT/VTT 解析、时间与文本处理、`@lang:` 转义、导入向导、编码判定、目标轨道选择
 > 关联：12-13 批次表、12-14 编译、12-15 面板、09-05 字幕字段面、04 文件端口
 
@@ -91,23 +91,29 @@ cue 的模型只有四样东西：开始时间、结束时间、文本、目标�
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-解析规则、转义策略与向导流程已定，代码尚未落地。
+解析与解码落在 `src/features/subtitles/{parse,decode}.ts`，文件端口扩在 `src/workbench/api/host.ts`、`electron/main.cjs`、`electron/preload.cjs`、`src/workbench/host/browser/BrowserHost.ts`，导入向导宿主在 `core.subtitles` 面板；自检字幕 A 组 24 条。导入只产内存草稿，确认前不写文档。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| SRT：空行分块、逗号毫秒、小时可超两位、毫秒不足三位补齐、序号行可有可无、多行文本保留 | `parse.ts` `parseSrt` / `parseSubtitleText`；正则 `SRT_TIME_LINE`；断言「A1 SRT 解析出两条 cue」「首条时间 1.000–3.500」「多行文本保留换行」「序号行可无」 | 按计划 |
+| 坏条目可见不静默丢弃：空文本 / 结束≤开始 / 时间行缺失标 error 进 `errors`；样式标签去标记并提示 | `makeCue` / `stripMarkup`；断言「A2 空文本标 error」「结束≤开始标 error」「时间行缺失标 error」「三条错误都进 errors」 | 按计划 |
+| VTT：标识行、前导空行 / BOM、NOTE/STYLE/REGION 跳过、cue 可选标识、带 / 不带小时两种时间写法、设置项整段忽略并计数、标记去除、常见实体只解码一次、无 cue 视为错误不生成空批次 | `parseVtt`；`VTT_TIME_LINE` 双写法；`ignoredSettings` 计数；`ENTITY_DECODE` 六类实体单次替换；断言「A3 标记去除只留可读文本」「实体解码一次（`&amp;amp;` 不二次解码）」「设置项整段忽略并计数」「不带小时时间写法可用」「A6 无 cue 视为错误且不生成空批次」 | 按计划 |
+| `@lang:` 前缀：单前缀转义双 `@`；本身双 `@` 保留并给警告；只处理开头，正文中间不动 | `normalizeLangPrefix`，复用 `features/overlay/subtitle.ts` 的 `LANG_PREFIX / LANG_ESCAPED_PREFIX`；断言「A4 单 @lang: 转义成 @@lang:」「双 @@lang: 保留不改写」「双 @ 给警告」「正文中间前缀不动」 | 按计划 |
+| 编码：BOM 优先（UTF-8 / UTF-16LE / UTF-16BE）；无标记先严格 UTF-8（fatal），失败不猜编码，回 `needs-encoding`；显式选 utf-8 / gb18030 后仍失败回 `decode-failed` | `decode.ts` `decodeSubtitleBytes`（纯函数，浏览器 / 自检共用）；主进程 `main.cjs` 内联同名同规则副本（CJS 不能 import TS）；断言「A5 UTF-8 BOM / UTF-16LE BOM 解码成功」「严格 UTF-8 失败给 needs-encoding」「显式 GB18030 成功」「显式 UTF-8 仍失败给 decode-failed」 | 按计划 |
+| 文件端口：只选 `.srt` / `.vtt`；2MB 上限；路径须本次对话框批准；非文件 / 未批准 / 扩展名不符 / 超大小分别拒绝；BrowserHost 明确不可用不假成功 | `host.ts` `FileDialogPort` 新增 `pickSubtitleFile()` / `readSubtitleFile(path, encoding?)` 与 `SubtitleFilePicked / SubtitleFileEncoding / SubtitleFileReadResult` 类型；`main.cjs` IPC `files:pick-subtitle` / `files:read-subtitle`，`SUBTITLE_EXTENSIONS={.srt,.vtt}`、`SUBTITLE_MAX_BYTES=2×1024×1024`、`approveShellPath` / `isShellPathAllowed`；`preload.cjs` 桥暴露两方法；`BrowserHost.ts` `pickSubtitleFile()→null`、`readSubtitleFile()→{status:'unavailable'}` | 按计划 |
+| 导入只产草稿：确认前文档片段数为 0；草稿进面板会话态；取消不写文档 / 轨道 / 临时文件；不建工程内伴随文件 | 面板 `confirmDraft` 只追加 `draftCues`；断言「B1 导入只产草稿计划，确认前文档片段数为 0」「草稿计划命令在确认后才提交」；verify-12 静态边界扫描确认 12 轮新增能力不直接写盘 | 按计划 |
+| 向导选项：文档 §三 列时间偏移、转义、去标记、实体解码、编码可选开关 | 本轮未实现导入时间偏移参数（`parseSubtitleText` 无 offset 入参）；转义 / 去标记 / 实体解码为固定流水线，向导内无开关；时间平移由批次批量移动承担 | 与文档 §三 选项清单不一致；是否补偏移与开关待用户裁决 |
 
 ### 验收要点
 
-- 导入三条 SRT 时预览显示三条，确认后生成三个字幕片段，文本换行保留，文本是单值字段。
-- 导入 VTT 时注释块与样式块被跳过，设置项被忽略并提示，cue 文本正确。
-- 文本含标记时去标记后只剩可读文字，预览显示警告计数。
-- 以单个 `@lang:` 开头的文本被写成双 `@` 形式，游戏内显示字面 `@lang:` 而不查语言表。
-- 文本本身以双 `@` 开头时预览给警告，不静默改写。
-- 负偏移导致开始时间小于零时该条目标记错误、默认不勾选，不生成负时间片段。
-- 结束时间不大于开始时间时标记错误，不生成零时长或倒置片段。
-- 无字节序标记且非 UTF-8 时出现编码选择，选择后文本正确，取消不写文档。
-- 导入只产草稿，确认前文档不变，取消无残留，工程目录没有伴随文件。
-- 产物只出现已定义的字幕字段，没有颜色、字体、描边、对齐字段。
+- 三条 SRT 解析预览三条，确认后编译三个字幕片段，文本换行保留，文本是单值字段。
+- VTT 注释 / 样式 / 区域块跳过，设置项忽略并计数，cue 文本正确。
+- 去标记后只剩可读文字，预览显示警告计数。
+- 单 `@lang:` 写成双 `@` 形式；双 `@` 开头保留并给警告，不静默改写；正文中间前缀不动。
+- 严格 UTF-8 失败出现编码选择（UTF-8 / GB18030）；取消不写文档；仍失败报「无法解码」。
+- 确认前文档不变，取消零残留，工程目录无伴随文件。
+- 产物只出现已定义字幕字段（字段面由 12-14 编译侧断言），无颜色 / 字体 / 描边 / 对齐字段。
+
+未在本轮验证项：大文件解析进度与中途取消按钮本轮未做；文件拖放入口本轮未接同一端口（文档标注「拖放如果做」）。

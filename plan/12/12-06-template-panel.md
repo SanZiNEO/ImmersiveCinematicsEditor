@@ -1,6 +1,6 @@
 # 模板面板
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`templates` 抽屉面板的层选择、模板列表、参数表单、结构摘要、插入目标、生成前 diff 与错误呈现
 > 关联：12-01 装配与事务、12-02 嵌套错误、12-07 快捷效果、12-08 九槽选择器、12-11 诊断、04 抽屉、06 控件
 
@@ -86,20 +86,29 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-面板的层/列表/参数/摘要/diff/插入目标口径已定，代码尚未落地。
+模板面板落地在 `src/plugins/core.templates/**`：`manifest.ts` 清单、`panelModel.ts` 纯视图模型、`panels/TemplatesPanel.vue` 接线；参数、计划与摘要复用模板内核门面；自检 `src/workbench/verify12/panel.ts`（`runTemplatePanel`）60 条全过。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 面板挂文档抽屉模板页签，单例、切页保活、可关闭；只在有文档的文档页可用 | `manifest.ts`：插件 `core.templates`，`panelId='templates'`，`order:30`，`defaultSlot='document.drawer'`，`keepAlive:true`，`closable:true`，`minWidth:460` / `minHeight:260`，`available: ctx.pageId==='document' && ctx.documentOpen`；面板组件懒加载 | 按计划 |
+| 上层层切换（片段 / 轨道 / 脚本），左侧模板列表，右侧参数表单与摘要；列表项标题、一句话说明、目标轨型；不显示缩略图 | `panelModel.ts` `LAYERS` / `templatesForLayer(layer, query)` / `matchesQuery`（id / 标题键 / 说明键）；`TemplatesPanel.vue` 按 `ParamDecl.kind` 分支渲染 number / integer / boolean / enum / text / color / selector / pose / poseList；列表项仅 `titleKey` / `descriptionKey` / 轨型，无图片字段 | 按计划 |
+| 默认值只来自声明；参数错误在字段旁直接说清，不自写规则；有 error 时禁用生成 | `initialParams` 直调门面 `defaultParams`；`issuesByParam` / `issueMessage` / `hasError` 映射 `TemplateParamIssue`；`readiness` 有 error 或目标禁用即不可生成；自检 P2 / P3 / P8 | 按计划 |
+| 插入目标按层给可选项与禁用原因：片段层播放头 / 选中之后 / 指定轨道；轨道层新建 / 追加同类型；脚本层新建文档 / 替换空文档 | `targetOptions`：片段层 `atPlayhead` / `afterSelection` / `atTime`（同类型既有轨）/ `newTrack`；轨道层 `newTrack` / `appendTrack`；脚本层 `newDocument` / `replaceEmpty`；原因码 `noSelection` / `selectionTypeMismatch` / `noMatchingTrack` / `docNonEmpty`；自检 P4 / P5 / P6 共 14 条 | 按计划 |
+| 结构摘要只写事实：片段 / 轨道 / 路径 / 触发器数、总时长与每段时长、目标轨型、是否新建轨道、冲突；随参数实时更新，不承诺最终画面 | `summaryView` 一一透传 `StructureSummary` 的 `clipCount` / `trackCount` / `pathCount` / `triggerCount` / `totalDuration` / `segments` / `targetTrackTypes` / `createsTrack` / `createsDocument` / `conflicts` / `notes`；`summarize` 直调门面 `summarizeGeneration`；自检 P7 | 按计划 |
+| 确认后一次提交，取消不改文档 / 选择 / 草稿；计划成功才提交，失败零残留并带回定位；成功一次独立事务，选中计划给出的片段键 | `runApply(deps, plan, freshDocumentOpened)`：`ok=false` 不提交，失败映射 `paramKey` / `clipKey` / `trackId`；成功 `commit` 一次、`select` 计划回传键；注入计数器自检 P10（plan=1 / commit=1），快捷效果 Q5 同口径 | 按计划 |
+| 脚本层新建文档：先开空文档再提交写入命令 | `TemplatesPanel.vue` `confirmApply`：`newDocument` 且选项为 `newDocument` 时先 `await documents.newDoc()`，成功后以 `freshOpened=true` 调 `runApply`；开文档失败中止、不留草稿；自检 P12 | 按计划 |
+| 位置 / 姿态 / 姿态列表旁"从槽位取"打开九槽选择器；槽位 id、序号、来源不进产物 | 面板 `ctx.services.get(POSE_BANK_SERVICE)`；引用 `../../core.flight/panels/PoseSlotPicker.vue`；`pickerAvailability` 三态原因 `serviceMissing` / `noDoc` / `slotsEmpty`；自检 P9 | 按计划 |
+| 不评分、不排序、不推荐、不收集使用统计；不提供"再生成 / 同步 / 更新模板产物"入口 | 模型内无统计 / 打分 / 排序字段；条目顺序即注册表顺序；面板不写产物来源关系 | 按计划 |
 
 ### 验收要点
 
-- 打开模板页签能看到层切换、模板列表、参数表单、摘要、插入目标与生成按钮，且找不到任何预览图或添加属性入口。
-- 参数越界或缺失必填时字段旁给出红字，生成按钮禁用，不弹浮层。
-- 修改参数后摘要实时更新片段数、路径数、时长与冲突信息。
-- 插入"选中片段之后"时起点等于选中片段末端；与后续片段冲突时禁止生成且不覆盖。
-- 从九槽取姿态后生成，脚本里没有槽位 id 或模板 id。
-- 生成后不显示来源与再生成入口；取消 diff 时文档、选择、草稿都不变。
-- 关闭再打开页签时参数草稿与滚动位置保留；重开文档时重置。
+- 打开模板页签：三层页签、列表、参数表单、摘要、目标选项与生成按钮齐全；找不到预览图、缩略图或"再生成"按钮。
+- 填越界时长或缺必填姿态：对应字段出红字，生成按钮禁用，不弹浮层。
+- 改参数后摘要的片段数 / 路径数 / 时长 / 冲突随之更新。
+- "选中之后"目标起点等于选中片段末端；类型不符或无选区时目标禁用并带原因码。
+- 从槽位取姿态后生成：脚本里检索不到槽位 id 或模板 id。
+- 取消 diff：文档、选择、参数草稿均不变；成功生成一次对应一次提交，撤销整体回退。
+- 关闭再打开页签：层 / 模板 / 草稿保留；文档身份变化后面板按新文档重取轨道与冲突。
+- 未在本轮验证项：Electron / 浏览器外壳内面板挂接冒烟；证据缺失原因：本轮可加载性以纯模型 + 真实 store 断言覆盖，未在宿主外壳点开面板。

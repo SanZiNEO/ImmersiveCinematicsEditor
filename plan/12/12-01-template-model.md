@@ -1,6 +1,6 @@
 # 三层模板与装配
 
-> 状态：未实现
+> 状态：已实现
 > 范围：片段/轨道/脚本三层模板的定义口径、参数规则、展开产物、装配与事务边界、注册表
 > 关联：12-02 嵌套传参、12-03 片段模板、12-04 轨道模板、12-05 脚本模板、12-11 生成校验
 
@@ -88,19 +88,27 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-三层模型、参数口径、装配与事务边界已定，代码尚未落地。
+三层模板模型、参数口径、装配与事务边界落地在 `src/features/templates/**`（`types.ts` / `params.ts` / `model.ts` / `derivations.ts` / `engine.ts` / `registry.ts` / `assembly.ts` / `public.ts`）与 `src/features/generation/**`（`diagnostics.ts` / `validate.ts`），九个内置模板登记于 `builtins/`；门面 `planGeneration` 只产出计划与命令、不提交，提交由面板命令层完成。自检 `src/workbench/verify12/templates.ts`（`runTemplateModel`）33 条全过。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 片段/轨道/脚本三层模板；层内 id 唯一；注册顺序即面板展示顺序；三层共用查找入口 | `registry.ts` 登记 `CLIP_TEMPLATES` / `TRACK_TEMPLATES` / `SCRIPT_TEMPLATES` 共 9 个：`clip.fade`、`clip.static_breath`、`clip.dolly`、`clip.orbit_arc`、`track.orbit_full`、`track.multi_cam`、`script.blank`、`script.camera_intro`、`script.follow_black`；`listTemplates(layer?)` / `templateById(id)`，id 正则 `^[a-z][a-z0-9_.]*$`；登记问题只让该模板不可用（`registryIssues()`），不阻止编辑器启动 | 按计划 |
+| 参数声明复用字段元数据形状：类型、默认值、必填、枚举候选、单位、范围；另有单姿态与姿态列表两类编辑器侧参数 | `types.ts` `ParamDecl` + `ParamKind`（`number` / `integer` / `boolean` / `enum` / `text` / `color` / `selector` / `pose` / `poseList`）；`params.ts` 提供 `defaultParams` / `resolveParams` / `validateTemplateParams` / `isValidPose`；问题码 `T_PARAM_UNKNOWN` / `T_PARAM_REQUIRED` / `T_PARAM_TYPE` / `T_PARAM_RANGE` / `T_PARAM_ENUM` / `T_PARAM_COLOR` / `T_PARAM_POSE` / `T_PARAM_COUNT` | 按计划 |
+| 展开函数是纯函数：参数进、本层 JSON 片段出，不读文档、不读全局状态、不写文件、不缓存上次结果；模板定义无状态，每次展开新建对象 | `model.ts` `InternalTemplate.expand(params, ctx)` 只产出 `LayerDraft`（`clips` / `tracks` / `paths` / `triggers` / `meta`）；`createIdAllocator` 每次新建分配器；参数经 `resolveParams` 克隆补齐，展开期不改入参 | 按计划 |
+| 生成结果是普通片段；面板不留来源标记，也没有"重新生成覆盖"入口；`planGeneration` 只计划不提交 | `public.ts` `planGeneration(request)` 返回 `GenerationPlan { ok, command: DocCommand \| null, diagnostics, selectedClipKeys }`，不触达 store；命令由面板 `runApply` 经 `ctx.commands.commit` 提交；多条命令包成 `compound`（`assembly.ts`）。`summarizeGeneration` 只做参数校验与装配摘要，不进第四层脚本校验、不提交 | 按计划 |
+| 模板不写 `meta.version`、`timeline.total_duration` 或废弃字段；产物不含模板 id、参数值、槽位 id、命名空间、生成时间 | `builtins/script.ts` 的 `meta` 只写 `id` / `name` / `author`；草稿模型 `LayerDraft` 不携带模板元信息；自检 `N7 产物对象不带模板 / 参数 / 槽位 / 命名空间键`、`G8 产物不含模板 id / 参数键 / 命名空间 / 来源 / 时间戳` 序列化扫描通过 | 按计划 |
+| 装配器选目标轨道（类型一致）、定插入点、算起点、检查区间重叠、分配片段 id 与路径 id；重叠拒绝并提示，绝不静默挪动已有片段 | `assembly.ts` `planAssembly`；目标模式 `atPlayhead` / `afterSelection` / `atTime` / `newTrack` / `appendTrack` / `newDocument`；重叠报 `T_OVERLAP`（带 `clipKey` / `trackId`）；类型不符报 `T_TARGET_LAYER_MISMATCH`；未选片段 `T_TARGET_SELECTION_MISSING`；轨道缺失 `T_TARGET_TRACK_MISSING` | 按计划 |
+| 脚本级装配只用于新建文档或"从模板新建脚本"；当前文档有脏改动时先走未保存守卫 | 脚本层目标模式必须为 `newDocument`（否则 `T_SCRIPT_TARGET`）；`docIsEmpty` 判定有片段 / 根路径 / 触发器即非空，报 `T_DOC_NON_EMPTY`；空文档由一次事务写入 `meta.set` / `timeline.addTrack` / `clip.add` / `path.writeBatch` / `trigger.add` | 模板内核只判文档是否为空；未保存守卫由既有宿主守卫链路与面板新建文档流程处理，不在模板内核内重复实现 |
+| 成功后选择第一个生成的片段，选择用片段键而不是数组下标 | `assembly.ts` `selectedClipKeys` 收集生成片段键；面板经 `ctx.commands.selectMany(keys)` 选择；计划失败时返回空数组、不选中 | 按计划 |
 
 ### 验收要点
 
-- 四个片段模板、两个轨道模板、三个脚本模板各生成一次，保存重开能过现有校验器。
-- 产物与手写脚本同构：没有模板 id、参数、槽位 id、来源或生成时间。
-- 目标区间重叠时拒绝装配，已有片段一动不动。
-- 轨道类型不匹配时装配前拒绝，不产生跨类型字段。
-- 一次生成一次撤销；失败后文档、选择、路径均无残留。
-- 生成后作者能继续逐字段编辑，面板不提供"再生成"入口。
+- 打开模板面板三层列表：片段 4、轨道 2、脚本 3，顺序与注册表一致；未知 id 经 `templateById` 查不到，返回 `null`。
+- 越界、缺必填、枚举越界、颜色非六位十六进制、姿态三轴不齐的参数在字段级报错；`planGeneration` 返回 `ok=false`、`command=null`。
+- 目标区间重叠或轨道类型不匹配时计划被拒，已有片段、选择与路径集合不变。
+- 脚本模板应用到非空文档被拒（`T_DOC_NON_EMPTY`）；空文档新建后产物含七类空轨、零片段。
+- 产物序列化文本中检索不到模板 id、参数键、槽位 id、命名空间、来源或生成时间。
+- 一次生成对应一次提交；撤销后片段与路径回到应用前状态。
+- 未在本轮验证项：游戏内播放时序与观感；证据缺失原因：本轮仅覆盖脚本字段、时序端点与既有校验器三层静态证据，未接入游戏运行时。

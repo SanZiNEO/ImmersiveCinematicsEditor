@@ -1,6 +1,6 @@
 # 生成物校验与诊断
 
-> 状态：未实现
+> 状态：已实现
 > 范围：模板/几何/曲线三类生成物的四层校验链、专项检查、诊断结构与回滚语义
 > 关联：12-01 装配、12-02 嵌套、12-09 几何、12-10 曲线、03 文档事务、11-15 诊断口径
 
@@ -82,22 +82,29 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-四层校验链、专项检查与诊断结构已定，代码尚未落地。
+生成校验链路落在 `src/features/generation/{diagnostics,validate}.ts`，参数 / 装配 / 计划入口在模板内核 `src/features/templates/**`（`params / engine / assembly / public.ts`），自检为 `verify12/generation.ts` 的 `runGenerationValidation`（23 条断言）。四层：参数校验 → 展开结构校验 → 装配校验 → 最终脚本校验；第四层复用既有 `validateStructure`，不造第二套语义校验器。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 第一层参数校验：键在册、必填存在、缺省取声明默认、有限性 → 范围 / 单位、枚举候选、颜色六位十六进制、位置三轴、姿态齐全、姿态列表数量；错误定位模板 id 与参数键 | `params.ts` `validateTemplateParams`；码 `T_PARAM_UNKNOWN / REQUIRED / TYPE / RANGE / ENUM / COLOR / POSE / COUNT`；`planGeneration` 失败时 `command=null`；断言「G1 参数 error 阻止生成」「诊断带 T_ 前缀与定位（paramKey=duration, templateId=clip.fade）」「失败计划不产生命令（零残留）」 | 按计划 |
+| 第二层展开结构：字段在册、value-only 拒帧、帧时间有限非负严格递增、路径 clip 指向本次产物、轴合法、几何类型注册、控制点完整对象、触发器只写声明键；禁转场与模板元信息键 | `validate.ts` `validateDraftStructure`；码 `T_FORBIDDEN_TRANSITION / T_LEAK / T_FIELD_UNKNOWN / T_OBJECT_SHAPE / T_VALUE_ONLY_ANIMATED / T_KEYFRAME_* / T_PATH_* / T_TRIGGER_*`；`LEAK_KEY_PATTERN` 扫 template/param/slot/namespace/source/generatedAt 等键 | 按计划 |
+| 第三层装配：目标轨道存在且类型匹配、区间不重叠；轨道模板顺序 / 起点 / 时长一致；脚本模板不覆盖非空文档；一次装配一个事务，任一失败整次回滚 | `assembly.ts`：`T_OVERLAP`、`T_TARGET_LAYER_MISMATCH`、`T_DOC_NON_EMPTY`；断言「G3 重叠拒绝」「重叠拒绝后已有片段不动」「G3 类型不匹配拒绝」 | 按计划 |
+| 第四层最终脚本校验复用既有校验器：DocIssue 映射诊断，保留原路径与原消息；warning 允许保存，error 阻止且零残留 | `validate.ts` `assembleDraftDoc`（克隆请求文档，不改原件）+ `validateAssembledDoc`（`validateStructure` + 目录 + `ClipRegistry`）；`source='document'`，定位带 `clipKey / fieldPath / detail`；断言「G4 最终脚本校验无 error」「真实提交成功」「撤销后零片段」「G4 warning 不阻止保存」 | 按计划 |
+| 超规即拒绝，不自动修参数、不裁剪区间、不补端点来让校验通过 | 各层 blocker 直接进诊断且命令为空；无自动钳制范围 / 自动补端点入口；自检 G1/G3 失败计划 `commands` 为空 | 按计划 |
+| 诊断结构：级别 error/warning/info，来源 template/geometry/curve/subtitle/document，稳定错误码前缀 T_/G_/C_/S_，定位字段 templateId/refChain/paramKey/trackId/clipKey/pathId/fieldPath/detail；同码同消息同定位去重 | `diagnostics.ts`：`Diagnostic` / `diagnosticOf` / `dedupeDiagnostics`；断言「G5 诊断去重」「级别合法」 | 按计划 |
+| 同一模板连续两次生成是两个独立事务；第二次失败不影响第一次产物；撤销各自独立 | 断言「G6 两次计划均成功」「两次提交后两片段」「一次撤销回退最近一次」「再次撤销回退第一次」（2 → 1 → 0） | 按计划 |
+| 产物不带模板身份与生成元信息：不含模板 id、参数键、槽位、命名空间、来源、生成时间；不写版本 / 总时长 / 空触发器数组 | 断言「G8 产物不含模板 id」「产物不含参数键 / 命名空间 / 来源 / 时间戳」（序列化正则扫描）；verify-12 静态边界组另扫 `transition/crossfade`、`total_duration/version` 键 | 按计划 |
 
 ### 验收要点
 
-- 参数越界时字段旁红字、生成按钮禁用、文档不变。
-- 嵌套出现环时显示闭环引用链，不生成半份内容。
-- 目标区间重叠时拒绝装配，已有片段一动不动。
-- 产物含片段级转场字段时生成失败，诊断指向该字段。
-- 路径端点不匹配位置节点时拒绝，并提示先走端点编辑。
-- 最终校验返回错误时整次回滚，诊断定位到字段或片段。
-- 最终校验只有警告时允许保存，警告在面板与诊断里可见且不自动改值。
-- 几何与曲线的警告不阻止保存，错误阻止保存。
-- 连续生成两次，第二次失败不影响第一次产物，撤销各自独立。
+- 参数越界时 error 阻止生成、命令为 null、文档不变；诊断带 T_ 前缀并定位到 templateId 与 paramKey。
+- 未知模板报 `T_UNKNOWN_TEMPLATE`。
+- 目标区间重叠 `T_OVERLAP` 拒绝，已有片段一动不动；轨道类型不匹配 `T_TARGET_LAYER_MISMATCH` 拒绝。
+- 合法产物过既有结构校验；仅 warning（如相邻姿态相同）时允许保存，不自动改值。
+- 诊断按稳定键去重；级别只取 error/warning/info。
+- 连续两次生成各自独立事务，两次撤销分别回退。
+- 产物序列化不含模板身份 / 参数 / 槽位 / 命名空间 / 来源 / 时间戳键。
+
+未在本轮验证项：字段行内红字、生成按钮禁用态与诊断可点击跳转属模板面板（12-06）层；本轮证据为纯计划层诊断与命令计划。

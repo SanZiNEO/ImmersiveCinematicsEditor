@@ -1,6 +1,6 @@
 # 字幕面板
 
-> 状态：未实现
+> 状态：已实现
 > 范围：`subtitles` 抽屉面板的工具栏、cue 表、轨道选择、导入向导宿主、重导入冲突、诊断与状态恢复
 > 关联：12-12 导入、12-13 批次、12-14 编译、04 面板容器、05 插件接入、09-05 字幕字段面
 
@@ -96,23 +96,30 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：已实现
 
-面板的工具栏、表格、轨道选择与冲突处理口径已定，代码尚未落地。
+面板落在 `src/plugins/core.subtitles/**`（manifest / i18n / panelModel / `SubtitlesPanel.vue`），纯视图模型在 `src/features/subtitles/viewmodel.ts`；自检字幕 F 组 5 条。面板只做批次级查看、时间编辑、导入与编译，单条文本 / 布局仍走既有字幕字段面板。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 面板标识与槽位：`subtitles` 页签挂文档抽屉，切页保活，与单片段字段编辑并存 | `manifest.ts`：插件 `core.subtitles`、`panelId='subtitles'`、`defaultSlot:'document.drawer'`、`order:60`、`keepAlive / closable`、`available` 仅 `pageId==='document' && documentOpen` | 契约 §5 尺寸表写 560×300；实现为 `minWidth 480 / minHeight 280`，以代码为准 |
+| 工具栏：导入 / 重导入 / 编译三主按钮 + 筛选；编译模式下拉 draft / changed / validate；禁用态由纯视图模型计算 | `viewmodel.ts` `panelDisabledState`（`import / reimport / compile / move / delete / editTime` 六档，依 docOpen / 已编译行 / 选中数 / 草稿数）；断言「F1 文档未打开时全部禁用」「有文档有选中时移动启用 / 重导入启用」 | 按计划 |
+| 底部摘要随筛选与选择更新：总数 / 已选 / 草稿 / 错误 / 重叠 / 冲突 / 空文本 / 低可见度；不显示像素宽度 | `summarizeRows`；断言「F2 摘要数字：总数 / 已选 / 草稿 / 错误 / 重叠 / 冲突 / 空文本」 | 按计划 |
+| 筛选与轨道勾选：文本查询 + 轨道勾选；筛选只影响显示；勾选条默认全选，带 cue 数与时间范围；混合轨标警告、只读字幕片段 | `filterCueRows` / `trackCheckViews`；断言「F3 文本筛选命中一条」「轨道勾选条默认全选且带 cue 数 / 时间范围」 | 按计划 |
+| 导入向导宿主：七步 file → decode → parse → prefix → pack → confirm → done；`needs-encoding` 步内给 UTF-8 / GB18030 选项；解码失败 / 宿主不可用 / 拒绝各有消息；取消不写文档；草稿会话态不落盘 | `SubtitlesPanel.vue` `WIZARD_STEPS` 七步；`pickEncoding` 显式选编码重读；消息键 `subtitle.wizard.needsEncoding / decodeFailed / unavailable / rejected`；关闭向导不丢已解析草稿，取消清空 | 按计划 |
+| 重导入冲突面板：四类标记，默认保留现有；变更不自动改、缺失不删、新增进草稿；作者应用后一次事务；关闭不应用 | `startReimport` → `planReimportDiff` 出 `reimportEntries`；`applyReimport` 一次事务；`reimportMissingDelete` 勾选后才删缺失 | 按计划 |
+| 文案国际化：面板文案走 `t('subtitle.*')`，ZH / EN 表在插件目录 `i18n.ts`，由 `workbench/i18n/index.ts` 并入 `MESSAGES` | `core.subtitles/i18n.ts` 导出 `ZH / EN`；`index.ts` `Object.assign(MESSAGES.zh_cn/en_us, ...SUBTITLE_ZH/EN, ...)`；面板多处 `t('subtitle.*')` 调用 | 按计划（对比：曲线 `curve.*` 文案未入表，见 12-10） |
+| 边界：表内不做富文本 / 颜色 / 字体 / 描边 / 对齐控件；双击跳既有字幕字段面板；无第二套文本编辑器；不建伴随文件；面板状态会话态，重开重置 | 表格只读两行截断，`lineBreakSymbol` 把换行显示为 ` ↵ `；双击发 `subtitle.row.doubleClick` 通知跳字段面板；无写盘调用（静态边界扫描通过） | 按计划 |
 
 ### 验收要点
 
-- 打开字幕页签时默认全选字幕轨，表按时间与轨道排序，空态文案正确。
-- 导入若干条 SRT 时向导显示预览，取消不写文档，确认后表出现对应行数。
-- 选中两行批量移动后时间更新；出现同轨重叠时拒绝并提示；撤销一次回退。
+- 打开字幕页签默认全选字幕轨，表按时间与轨道排序，空态文案正确。
+- 导入 SRT 向导显示预览；取消不写文档；确认后表出现对应行数。
+- 选中两行批量移动后时间更新；同轨重叠时拒绝并提示；撤销一次回退。
 - 双击文本跳到字幕字段面板，表内没有第二套文本框。
-- 重导入时变更项默认保留旧文本，作者应用后才更新；缺失项不自动删除。
-- 同轨重叠两行都标记，编译按钮禁用，错误可点击定位。
-- 编译成功后选中第一条新片段，表刷新，撤销可用，没有伴随文件。
-- 关闭再打开页签时滚动、筛选与选择保留；重开文档后重置并全选。
-- 混合轨只读其中的字幕片段并给警告，不把图片或淡入淡出片段转成字幕。
-- 面板没有颜色、字体、描边、对齐控件，字幕字段仍在既有面板。
+- 重导入变更项默认保留旧文本，作者应用后才更新；缺失项不自动删除。
+- 同轨重叠两行都标记，编译按钮禁用，错误可定位到行。
+- 编译成功后选中第一条新片段，表刷新，撤销可用，无伴随文件。
+- 混合轨只读字幕片段并给警告；面板无颜色 / 字体 / 描边 / 对齐控件。
+
+未在本轮验证项：面板在真实 Electron 窗口的视觉布局与虚拟滚动渲染量未做看图验收；正确性由纯视图模型断言覆盖。
