@@ -1,0 +1,9 @@
+/**
+ * `core.geometry` 激活入口（12-09）。
+ *
+ * 面板贡献由 manifest 声明；写操作只走 `PanelContext.commands` 的文档命令。
+ * 激活阶段不做文档或网络工作，也不注册额外命令 / 状态项。
+ */
+export default function activate(): void {
+  // 没有需要注册的命令或状态项；保留显式空实现，避免内核误以为缺少 activate。
+}
