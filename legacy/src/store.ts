@@ -190,8 +190,8 @@ export function connect(): void {
   }
   const token = authToken()
   if (!token) {
-    // 服务端（游戏内按 F9 才启动）没写 token 文件时连不上；1.5s 后重连会自动重试。
-    log('WS token not found — start the WebUI server in game (F9) first')
+    // 服务端（游戏内按 F6 才启动）没写 token 文件时连不上；1.5s 后重连会自动重试。
+    log('WS token not found — start the WebUI server in game (F6) first')
     state.error = 'webui token not found'
   }
   ws = new WebSocket(token ? `${SERVER_URL}?token=${encodeURIComponent(token)}` : SERVER_URL)
