@@ -117,13 +117,56 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：**本轮范围内自动化验收通过；人工/看图项与用户豁免项单列；Forge 回放、字幕全流程、14 交接不在本轮范围。**
 
-总账结构与证据规则已定，账内条目尚未执行。
+本轮通过条件按用户划定的三道门：接通游戏 + 脚本能正常播放（Fabric min-tracks 一份）+ 预览非空，加门禁绿。**111 条覆盖账逐条落点不在本轮自动化范围**（用户豁免）；本节只列本轮真实跑过并出结论的项，未执行项归 §6.3 豁免清单，不再写成待下一轮缺口。
+
+### 6.1 本轮真实执行过的自动化项（均可指向证据）
+
+| 执行段 | 入口 / 产物 | 结果 | 退出码 | 证据 |
+|---|---|---|---|---|
+| offline 套件（假 WebUI + 真编辑器） | `npm run e2e:system:run -- --suite offline` | 7/7 PASS | 0 | `e2e-system\artifacts\2026-11-19T15-13-08-568Z\{run.json,report.md,coverage.md}` |
+| corpus 套件（黄金语料 parseDoc / validateStructure 对照） | `npm run e2e:system:run -- --suite corpus` | PASS（corpus-all，35.9s） | 0 | `e2e-system\artifacts\2026-11-19T10-25-31-157Z\{run.json,report.md,coverage.md}` |
+| live 套件（真 Fabric 客户端 + F6 + 真实 8765） | `npm run e2e:system:run -- --suite live` | 7/7 PASS；本轮必过口径仅 min-tracks 一份，其余三份 + 重连为既有实测证据 | 0 | `e2e-system\artifacts\2026-11-19T11-48-46-189Z\{run.json,report.md,coverage.md}` |
+| Forge 探针套件（能接通定性） | `npm run e2e:system:run -- --suite live-forge-probe` | PASS：`probe-forge-min-tracks`，接通 + 打开/校验/推送/播放/出帧/停止 | 0 | `e2e-system\artifacts\2026-11-19T14-41-12-674Z\{run.json,report.md,coverage.md}` |
+| 纯 node 合同校验（N1/N3/N6，43 条） | `npm run verify:13-contracts` | PASS 41 / FAIL 0 / DOWNGRADED 2 | 0 | `build-evidence\13-contracts\{results.json,report.md}` |
+| 纯 node 字幕校验（16 条） | `npm run verify:13-subtitles` | PASS 14 / FAIL 0 / DOWNGRADED 2（已执行证据；字幕全流程不在本轮必过范围） | 0 | `build-evidence\13-subtitles\{results.json,report.md}` |
+| 门禁 | `build` / `typecheck` / `verify` / `verify:08` / `verify:12` / `verify:13` | build exit 0（12.16s）；typecheck 0 error；171/0；85/0；568/0；正例 12/12（15 文件）、负例 10/10、uncovered 0 | 0 | `build-evidence\final-gates-scope\`、`build-evidence\final-gates\` |
+
+Fabric min-tracks 必过断言链（收敛后单场景复跑 `2026-11-19T15-19-19-037Z\run.json`，status PASS）：connected=true → open ok（blocking=0、issueCount=0，244ms）→ waitPreviewPanel mounted（1064ms）→ validate `issues=[]`（64ms）→ push ok（17ms）→ play playing=true（223ms）→ playbackAdvance delta=2.083s（>0，2016ms 窗口）→ framesGrew +96（2031ms）→ canvasInk ink=true（inkRatio 79.61%，1920×1080，499ms）→ stop playing=false。
+
+两条 DOWNGRADED（合同校验）：`11-01`（行为抽屉根脚本只读钩子缺，factIndex/summary 只给条目事实，不暴露抽屉根作用域）、`01-07`（Java 共享服务静态方法在 node 进程内不可执行，重名/截断/scriptRoot 只做源码对账，未做 JVM 文件系统往返）。
+两条 DOWNGRADED（字幕校验）：`SUB-02C`（缺 key 只有预览分类 `kind=missing`，parse/compile 链路无指向 cueOrdinal 的 issue，语言资源 IPC 未接）、`SUB-10`（cue↔clip 纯数据映射已证，选中高亮 IPC 留第二阶段）。
+
+### 6.2 覆盖账口径说明（不作通过条件）
+
+账源：`e2e-system/config/coverage.json`（111 条，轮次分布 7/5/8/11/14/10/10/8/8/7/11/12）。**全量级别分布：P0=70 / P1=39 / P2=2**（`level` 字段分组，与 §4.3 原文逐条一致）。
+
+本轮不以逐条覆盖落点作为通过条件；已执行项见 §6.1 证据表，未执行条目按 §6.3 用户豁免 / 不在本轮范围单列。纯 node 字幕段 16 条（14 PASS / 2 DOWNGRADED）是纯函数层已执行证据，其 UI 抽屉、IPC 编组与真机播放不在本轮范围。
+
+> 证据产物级别列偏差（待对方修，本轮不改证据）：`build-evidence\13-contracts\results.json` / `report.md` 的级别列与 `coverage.json` 不一致，共 29 条——28 条报告标 P1、账为 P0，1 条（`01-03`）报告标 P0、账为 P1。分级一律以 `coverage.json`（即 §4.3 账）为准。
+
+### 6.3 用户豁免 / 不在本轮范围（不记 PASS，也不记 FAIL）
+
+| 豁免项 | 涉及条目/范围 | 理由 |
+|---|---|---|
+| 14 轮交接 | 13-08 只冻结清单，不启动 14 | 用户明确豁免；13 内未提前实现 AUI |
+| 画面质量判断 | 叠化/morph/字幕/覆盖层/调色/音频观感 | 只做"画面非空"功能断言，观感不判 |
+| 看图/人工操作 | 13-03-A 六类界面、13-03-B 跨重启恢复、13-06-A 双窗口、13-06-B 世界退出/总开关残留、13-06-C 资源抽屉列举、13-06-D 档位目视、13-05 字幕抽屉交互 | 自动化不可信，单列 HUMAN |
+| 111 条覆盖账逐条落点 | 未在本轮执行的账目条目 | 用户原话：不要求 111 条覆盖账 |
+| 字幕导入全流程 + 真机播放 | SRT/VTT 导入、UTF-8 与 cue 模型、批次拆轨、cue↔clip 定位高亮、删源文件后播放、z_index/alpha | 不在本轮范围；纯 node 段已执行证据保留 |
+| 双加载器全量四脚本 | Fabric 四份既有记录保留为证据；Forge 回放 | 必过仅 min-tracks；Forge 只要求能接通 |
+
+### 6.4 与原设计的对照
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 覆盖账 01～12 每轮都有落点，没有"合同写了没人验"的空档 | 账本身完整落地：111 条（与 §4.3 逐条对齐），`coverage.json` 带轮次、等级、映射场景；每个套件的 `report.md`/`coverage.md` 都按条目给 PASS/BLOCKED/NOT COVERED | 账完整 ≠ 已验完；逐条覆盖不在本轮范围 |
+| 所有 P0 项 `PASS` | 本轮不以全量 P0 逐条 PASS 为通过条件；本轮必过门为门禁绿、接通游戏、min-tracks 播放、预览非空，均已满足 | 用户划定本轮范围；未覆盖条目按 §6.3 豁免单列 |
+| 执行记录中不存在 `BLOCKED`/`NOT RUN` 被当作通过的行 | 报告里未执行项单列人工核验表；退出码区分 0/1/2，无 SKIP/WARN 洗白；DOWNGRADED 单独标注降级理由与待补钩子 | — |
+| 随机抽查三条记录，能按路径打开证据并复现结论 | 报告固定给出 `run.json`/`report.md`/`coverage.md` 与证据文件（截图、日志）绝对路径；每条失败都写期望与实际值 | — |
+| 环境矩阵中 Forge 与 Fabric 两条都执行过 | Fabric min-tracks 已跑通；Forge 探针接通 PASS，回放未验证（用户豁免）。正式 `live-forge` 套件 FAIL 已记录、按豁免不纳入本轮判定，详见 13-04 §六 | 未伪造通过 |
+| 总账不通过时，13-07 未产出发布包，13-08 未向 14 交付 | 13-07 打包配置验证 exit 0，未产出发布包；13-08 未交付，14 未启动（用户豁免本轮不向 14 交接）。打包验证生成的 NSIS 产物只是配置改动验证副产物，不作为发布包交付 | 打包验证需要产出文件才能证明配置改动可用；它与"发布"是两件事，已在 13-07 写明 |
 
 ### 验收要点
 

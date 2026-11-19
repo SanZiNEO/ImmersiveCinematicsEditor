@@ -100,13 +100,61 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：**本轮范围内 PASS。** 预览黑屏根因已定位并修复，离线与 Fabric 真机两套 E2E 跑在修复后的代码上并有 canvasInk 实测数值；主进程热路径异步化、token 异步取值、重连退避硬化有基准数据。双窗口隔离、世界退出残留、资源抽屉列举、档位目视四项为 HUMAN 豁免项，不在本轮范围。
 
-三项硬化的范围已定，传输与帧消费合同尚未复验。
+### 6.1 预览黑屏根因与修复（本轮最重要的正面结果）
+
+**根因**（旧 `src/workbench/shell/PreviewPanel.vue`）：
+
+- 旧 L70 对非 RGBA 帧直接 `return`，H.264 帧进不来；
+- 旧 L115 对所有帧写 `lastFrameInfo`，但没有对应绘制路径；H.264 到达后占位提示消失、画布上却一帧都没画，表现为黑 canvas。
+
+**修复**（现 `PreviewPanel.vue`）：
+
+- H.264 Annex B access unit 经 WebCodecs `VideoDecoder` 解码：等首个关键帧再解码，输出 `VideoFrame` 入显示队列，`drawImage` 上屏后立即 `close()`；队列上限 `MAX_QUEUE=90`，超限时最旧帧连同其 `VideoFrame` 一起释放；PTS 带时钟偏移重整，回退/断流触发重同步。
+- RGBA 走 `ImageData` 直写；两条路径共用同一画布与同一 `requestAnimationFrame` 循环。
+- 状态语义改为：`presented` 只记录**真正解码并呈现过**的帧；H.264 到达但首帧未解出不计 presented。新增中英各 7 条 `preview.*` 文案：`decoding` / `awaitingKeyframe` / `firstFrameTimeout` / `decoderUnsupported` / `decoderError` / `presented` / `dropped`。
+- `src/workbench/api/preview.ts` 补 `connection?()` / `retry?()` 可选端口（可选方法，缺失时回落既有路径），既有五条方法签名与语义未变。
+
+**测试侧新增 op**：`editor.canvasInk`（`getImageData` 降采样瓦片，算 nonBlack ratio、nonUniform ratio、两帧 changed ratio，有界轮询）、`editor.waitPreviewPanel`（有界等待 `.preview-panel` 挂载，解决冷启动异步 chunk 抢跑；本轮 min-tracks 首次等待 4648ms / 23 次尝试）；`editor.play` 改为轮询 `playing` 回执。
+
+### 6.2 真机实测数值（live 套件 runId `2026-11-19T11-48-46-189Z`，7/7 PASS，exit 0）
+
+证据：`e2e-system\artifacts\2026-11-19T11-48-46-189Z\run.json`（四份脚本）。分辨率均为 1920×1080；stop 回执均为 `playing=false`。
+
+收敛后单场景复跑（当前工作区代码）：runId `2026-11-19T15-19-19-037Z`，live-play-min-tracks **PASS**，inkRatio 79.61% / nonUniform 43.48% / 帧增量 96 / advance 2.083s / 1920×1080 / stop `playing=false`，证据同目录 `run.json` 与 `min-tracks-play.png`。
+
+| 场景 | 帧数 | playback 推进(s) | inkRatio | nonUniform | 两帧变化 | stop 等待(ms) |
+|---|---|---|---|---|---|---|
+| min-tracks | 85 | 2.057 | 80.59% | 100% | 8.24% | 200 |
+| camera-lane-transition | 158 | 2.027 | 71.03% | 100% | 9.66% | 200 |
+| overlay-subtitle-letterbox | 297 | 2.002 | 79.75% | 90.69% | 0% | 0 |
+| full-showcase | 328 | 2.012 | 91.32% | 67.99% | 0.49% | 0 |
+| reconnect（重连后） | 200 | — | 56.32% | 99.90% | 0% | 200 |
+
+离线侧 `offline-preview-frame` PASS（2713ms）：onFrame 帧数增长、`lastFrameAt` 变化（runId `2026-11-19T15-13-08-568Z`）。
+
+### 6.3 其余硬化事实与基准
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 主进程热路径不再被同步 IO 堵住 | `electron/main.cjs` 引 `node:fs/promises`，脚本遍历改异步递归 + 有界并发（`mapBounded`，16 路），每 64 条让出一次事件循环；`workspace:*`、`storage:*`、`drafts:*`、`files:read-text/read-subtitle`、`shell:show-item-in-folder` 全部改 `await`；`workspace:write-script` 用 `fsp.writeFile` + `fsp.rename` 原子写 | 唯一保留的同步 IPC 是 `theme:initial`（`on`+`returnValue`）：首屏防白闪必须同步取主题，代码内写明理由；保留的同步 fs 仅启动一次性读、窗口状态防抖 flush、损坏转储 |
+| token 每次连接/重连重新取，取不到不伪造连接 | `webui:token` 由 `ipcMain.on`+`returnValue` 改 `ipcMain.handle` 异步读；`preload.cjs` 改 `invoke`；`WebUiClient` 的 `token` 允许 `string \| Promise<string>`，每次连接/重连前重新 `await`；空 token → 状态 `no-token`，不建 WebSocket、不排重连 | 通道名保留，仅把取值方式由同步改异步 |
+| 重连退避有上限、可显式重试 | `protocol.ts` 新增 base 1500ms、×2 退避、封顶 15000ms、连续 8 次失败转 `stopped`；`WebUiClient` 新增只读 `connection()` 与显式 `retry()`；`close()`/卸载清定时器并 reject pending | 13-06 原文未规定重连计划，属本轮新增行为；`WebUiTransport` 五条既有方法签名与语义未变 |
+| 状态区给出可读原因 | 修复 `WebUiClient.setStatus()` 只改字段不通知订阅者的缺口：状态码变化时通知订阅者；`PreviewPanel` 状态订阅同时比较连接态与状态码；面板无归类状态但服务端有 `reason` 时直接展示 reason。未连上时可读原因（如「缺少 WebUI token：…」）能推到 `.preview-panel` | 断言一字未改，产品侧补通知与展示；offline 首跑 3 条 FAIL 修复后 7/7 全绿，见验收记录 §八.6 |
+| 2000 文件扫描不阻塞事件循环 | `node electron/bench-workspace.cjs 2000` 实测（`build-evidence\bench-workspace-2000.log`）：旧同步版总耗时 343.89ms、最长事件循环停顿 344.30ms、10ms 探针 **0** 样本（整段堵死）；新异步版 458.03ms、最长停顿 11.31ms、探针 45 样本 | 异步版总耗时略高属调度开销，换的是主进程不被长扫描阻塞 |
+| 未新增协议/消息名/帧头/第二套预览管线 | 本轮改动只在编辑器侧预览消费与主进程 IPC 异步化；帧头、帧类型、握手/token/Origin 语义未改 | — |
+
+### 6.4 人工项与豁免项（HUMAN / 不在本轮范围，不记 PASS 也不记 FAIL）
+
+| 编号 | 项 | 状态 | 原因 |
+|---|---|---|---|
+| 13-06-A | 双窗口：关 A 后 B 继续出帧；捕获中心未被关闭；他人飞控未被取消 | HUMAN | 需两个 Electron 窗口同挂播飞控；现有 e2e 为单窗口，只验了重复关闭幂等 |
+| 13-06-B | 世界退出与总开关关闭后端口、捕获消费者、按键冷却、token 残留 | HUMAN | 需真实世界退出/总开关操作并逐项核对；live 只覆盖 rig-down 杀进程后的离线与重连 |
+| 13-06-C | 资源抽屉按图片/视频/音频/全部类型列举扩展名、越界拒绝、超限截断、无 ffmpeg 音频状态 | HUMAN | 缺图片/视频/音频/LUT 样例资源夹具；抽屉交互与截断目视归人工 |
+| 13-06-D | 档位选择器已移除、状态栏只读固定规格、回执尺寸异常可见不静默换档 | HUMAN | 界面目视项，需连接前后与重连后核对状态栏/设置页文案；本轮离线未注入固定规格回执 |
+| — | 无 ffmpeg 环境下外部音频"可列举不可播放" | 豁免 / 不在本轮范围 | 缺无 ffmpeg 环境与音频夹具 |
+| — | 握手/消息/帧线格式/帧消费的消息级断言（信封定向、Ack 成败、hello_ack 载荷） | 豁免 / 不在本轮范围 | 缺消息级观测钩子；契约禁止自建独立 WS 探针 |
 
 ### 验收要点
 

@@ -98,13 +98,27 @@ AUI 的一切实现不在本份范围内，包括它的版本号取值、加载�
 
 ## 六、实现结果
 
-状态：未实现
+状态：打包配置与前端构建已验证 exit 0；安全边界复核到进程级；安装/卸载/首启与包内清单核验不在本轮范围（用户豁免）。本轮未产出发布包。
 
-发布基线与安全边界已定，构建、打包、安装、首启、连接均未执行。
+### 6.1 已实测通过的部分
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 打包配置中不存在构建机绝对路径，打包日志不出现本机私有目录 | `electron-builder.yml` 删除写死的 `electronDist: E:\Documents\GitHub\liveget\...`，改本地依赖解析（可用命令行 `--config.electronDist=` 覆盖）；基线（原配置）与改后各真跑一次 `npm run electron:build`，均 exit 0；改后日志无 `liveget` / `custom unpacked`。证据 `build-evidence\electron-build-baseline.log`、`electron-build-after.log` | 原配置写死的是构建机路径，别人机器上必挂；删除后仍要在本机验证能打出包，否则等于没验证 |
+| 前端构建可产物化 | `npm run build` exit 0，`✓ built in 12.16s`（`build-evidence\final-gates-scope\build-fix2-231228.log`）。构建通过不等于发布通过，也不等于游戏通过 | — |
+| 渲染进程无 Node 集成、preload 只暴露白名单 | 复核通过：`electron/main.cjs` webPreferences `nodeIntegration:false` / `contextIsolation:true` / `sandbox:true`；`preload.cjs` 只剩 `theme:initial` 一处 `sendSync`（首屏防白闪，必须同步，代码内写明理由），其余全部 `invoke`；渲染层无 Node 直连 | 本轮改动加了 `webuiToken` 的 `invoke`，顺手复核了整份白名单 |
+| token 不入日志、不入包、不进入口；轮换后能重连读取 | 实测：`live.connected` 只回显 token 存在性与长度，不打印内容；两次真实会话 token 文件 mtime 不同后 `editor.retry` 仍连上（重连记录见 live 套件 `live-reconnect`） | — |
+| 脚本保存要求 `.json`；资源路径拒绝绝对路径、盘符、共享、向上逃逸 | 结构未改（`normalizeScriptRelative` / `scriptAbsolutePath` 原样保留），L92 资源检查同样按 `resource/` 根做相对解析，无资源根时 `checked=false` 并给跳过原因 | — |
+
+### 6.2 豁免 / 不在本轮范围（不记 PASS 也不记 FAIL）
+
+| 原设计 | 状态 | 原因 |
+|---|---|---|
+| 状态栏/关于页/发布说明/产物文件名同一个显示名；npm 版本独立 | 豁免 / 不在本轮范围 | 需逐处比对界面文案与产物名，本轮未做 |
+| 包内不含计划/设计文档、测试夹具、版本库目录、token、日志、截图、旧产物 | 豁免 / 不在本轮范围 | 需解包做产物清单核验；本轮只确认打包成功，未核对包内容 |
+| 安装、卸载、首启、连接四项留证 | 豁免 / 不在本轮范围（环境限制） | 本机没有无副作用的干净安装环境；本轮只在开发机验证打包产物能生成，未安装/卸载/首启。不伪造通过证据 |
+| 发布说明如实列全部已知限制，未把 AUI/未实现能力写成已支持 | 豁免 / 不在本轮范围 | 本轮未产出发布说明，不进入发布物 |
+| 任一发布阻断条件成立时未产出发布包 | **成立** | 本轮不发布；打包过程生成的 NSIS 产物只是配置改动验证副产物，不作为发布包交付 |
 
 ### 验收要点
 

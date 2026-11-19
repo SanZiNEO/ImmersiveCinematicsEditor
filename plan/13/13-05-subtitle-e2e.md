@@ -94,13 +94,49 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：纯 node 段已执行（16 条：PASS 14 / FAIL 0 / DOWNGRADED 2，作为已执行证据保留）；**SRT/VTT 导入全流程与字幕真机播放不在本轮范围（用户豁免）**，不记 PASS，也不记 FAIL。
 
-字幕工作流合同已定，导入、批次、编译、游戏播放均未执行。
+### 6.1 纯 node 段实测（入口 `npm run verify:13-subtitles`，exit 0）
 
-| 原设计 | 实际实现 | 偏离原因 |
+证据：`build-evidence\13-subtitles\{results.json,report.md}`；夹具 `corpus/13/subtitles/`（17 个字节夹具 + 生成器 + README）。
+
+| 验收面 | 条目 | 实测结论 |
 |---|---|---|
-| — | — | — |
+| SRT/VTT 识别与 BOM | SUB-01 PASS | SRT 3 条 cue，首条 1.000→3.500（逗号毫秒形态），第三条 7.250→9.000，文本逐字保留；VTT `00:04.000→00:06.000` 解析为 4.0→6.0；真实 BOM 字节 `ef bb bf` 在入口剥除，首行不乱码 |
+| 多行 / 超长 / 混排 / 实体 | SUB-02A PASS | 三行 cue 保留 2 个 `\n`、分行数 3、不自动折行；352 字超长 cue 不截断；中英日 + 数字混排逐字符保留；`&amp;` 单次解码不二次转义，`&quot;` 解码为 `"` |
+| `@lang:` 查表 / `@@lang:` 字面 | SUB-02B PASS | `@lang:menu.open` →「打开菜单」；`@lang:fallback.key` 走 en_us 回退 →「Fallback」；`@@lang:menu.open` 空字典下仍输出字面、不查表；导入解析把开头单 `@lang:` 转义为 `@@lang:`，双 `@@` 保留并给 1 条警告 |
+| 编码 | SUB-04 PASS | GB18030 字节严格 UTF-8 解码失败 → `needs-encoding`（不猜编码、不吐乱码），显式 gb18030 往返一致；UTF-16LE BOM（`FF FE`）识别不乱码；非法 UTF-8 字节显式 utf-8 仍 `decode-failed`，失败分支不返回文本、不调解析 |
+| 空 cue | SUB-03 PASS | 空文本 cue 进 errors（cueOrdinal=1，原因「文本为空」）；编译 `skippedCues=1`，只产出 1 条片段，无空文本片段 |
+| 同轨重叠拆轨 | SUB-05A PASS | 重叠 `[1.0,3.0)` 与 `[2.0,4.0)` 贪心打包到轨 0 / 1，同轨区间互不相交；结构检查 L91 block 指向 `clips[1].start_time` |
+| 端点相接 / 跨轨 | SUB-05B PASS | `[1,2)` 与 `[2,3)` 半开区间不重叠、同轨打包；两条 OVERLAY 轨各自重叠时段跨轨不报 L91 |
+| 一 cue 一片段与字段面 | SUB-06 PASS | 3 条 cue 编译落库 3 条 OVERLAY 片段；对象键面与 `SUBTITLE_COMPILE_PATHS` 11 条逐一相等（`layer_type` + 09-05 十字段）；无颜色/字体族/描边/背景/对齐键；`text` 为 value-only |
+| exit/opacity 保留 | SUB-07 PASS | 变更编译只更新文本/时间/布局；exit 策略逐字段保留，opacity 关键帧 `[0→1, 1.5→0.8]` 逐帧保留，同轨 fade 片段 B 对象原样未动，x 静态值保留 |
+| 失败无半成品 | SUB-08 PASS | A 改到 `[1,5)` 与同轨 B `[4,6)` 重叠：计划层汇总 blocker，`commands` 为空；cue 指向 CAMERA 轨同样阻塞；validate 模式只校验不写；空命令提交后 store 片段数 2→2，无残留 |
+| 重导入 diff 四类 | SUB-09 PASS | unchanged / changed / added / missing 各 1 条；替换命令只指向 changed 片段；unchanged 文本原样保留，missing 未勾选删除不产生 `clip.remove`，added 不产生文档命令；无文件写回命令类型 |
+| cue↔clip 定位 | SUB-10 **DOWNGRADED** | 纯数据层已证：正向 cue#1→c4@轨0、cue#2→c5@轨0、cue#3→c6@轨0；反向 c4→cue#1 等。降级理由：面板 `requestSelect` / `revealInEffectControls` 属 PanelContext IPC / UI 交互，留第二阶段 |
+| 无 sidecar | SUB-11 PASS | 导入/编译/diff 全链路前后工程目录枚举一致：1 个文件，大小与 SHA-256 不变；无 `.srt.json` / `.subtitle.json` / `subtitles/` 副本；静态扫描 6 个字幕纯函数模块不 `import node:fs`、不调文件写 API |
+| 未登记路径拒绝 | SUB-12A PASS | `font_family` / `stroke` / `background` / `align` 经真实 parseDoc + validateStructure 落 L34 block，定位 `objects.<字段>` |
+| 错层字段拒绝（L93） | SUB-12B PASS | subtitle 片段写 `color` / `color.r`（已登记但仅 fade 适用）落 L93 block，定位 `objects.color` / `objects.color.r`；合法 fade 层写 `color` / `color.r` 不报适用性 issue，不误伤 |
+
+### 6.2 本轮新增检查 L93（错层适用性）
+
+- 位置：`src/core/doc/structural.ts` 新增 `checkOverlayFieldApplicable`，复用 `features/overlay/layers.ts` 的 `isOverlayFieldApplicable` 字段面矩阵；已登记但不适用于当前 `layer_type` 的对象路径落 block L93，issue 带字段级 `objects.<字段>` jsonPath。
+- 对应合同原句：09-05 §2.1「字幕固定白色，无颜色 / 字体族 / 描边 / 背景 / 对齐（这些在脚本里一个都没有）」；09-01 §4.4「存在带 appliesTo 的字段，但当前层类型不在其适用范围：拦截，提示哪个字段不适用于哪种层类型」。
+- 边界：未登记路径仍由 L34 拦截，两条检查不重复报；重叠判定（L91）不受影响；未新增字段、未改字段合同。
+
+### 6.3 两条 DOWNGRADED
+
+- **SUB-02C（P1）**：缺 key 预览分类 `kind=missing`、引用串原样保留、不空显译文；但 parse/compile 链路不接语言表，没有产生指向 cueOrdinal 的 issue；语言资源 IPC（`resources.list("lang")`）本阶段未接。
+- **SUB-10（P1）**：见 6.1 表；选中/高亮 IPC 留第二阶段。
+
+### 6.4 用户豁免 / 不在本轮范围
+
+以下各项按用户豁免不在本轮自动化范围，不记为本轮缺口；纯函数层已由 §6.1 纯 node 段覆盖。
+
+- **真机播放**：Fabric `live-play-subtitles`（297 帧，推进 2.002s，截图 `subtitles-play.png`）为既有实测证据；字幕正确时间出现消失、多行换行、固定白色、`@lang:` 运行时显示、alpha<4 不绘制、多轨 `z_index` 排序、暂停/seek 跟随、保存重开重推不丢，均不在本轮范围。
+- **UI 抽屉与 IPC**：文件选择（`files:pick-subtitle` 原生对话框）、向导七步、cue 表多选/行内编辑/改轨/定位高亮、导入前 diff 预览与撤销栈交互，不在本轮范围。
+- **删除源 SRT/VTT 后已编译脚本仍能播放**：不在本轮范围；本阶段只证明脚本内无 sidecar 依赖（SUB-11）。
+- 字幕脚本 `--install` 已装 `scripts/13/`（含字幕脚本），既有用户脚本未动。
 
 ### 验收要点
 

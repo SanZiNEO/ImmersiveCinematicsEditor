@@ -90,13 +90,58 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：**Fabric min-tracks 范围内 PASS；Forge 能接通 PASS（探针）／回放未验证（用户豁免）。** 本轮必过口径只是 Fabric min-tracks 一份；Forge 只保留"能接通"记录，不再跑播放。
 
-六个阶段与双加载器判定已定，尚未在任何真实客户端执行。
+### 6.1 Fabric（min-tracks 必过；其余三份 + 重连为既有实测证据）
+
+`live` 套件 runId `2026-11-19T11-48-46-189Z`，7/7 PASS，退出码 0；证据 `e2e-system\artifacts\2026-11-19T11-48-46-189Z\` 下 `run.json`/`report.md`/`coverage.md` 与 5 张编辑器窗口截图。
+
+**本轮必过口径的复跑证据**：收敛后按当前工作区代码单跑 `--suite live --scenario live-play-min-tracks`，runId `2026-11-19T15-19-19-037Z`，status **PASS**（11.7s，CLI exit 0）：advance delta **2.083s**、帧增量 **96**、inkRatio **79.61%**、nonUniform **43.48%**、两采样变化 **98.58%**、1920×1080、stop `playing=false`；截图 `min-tracks-play.png` 同目录。
+
+| 场景 | 帧数（framesGrew） | playback 推进(s) | canvasInk inkRatio | nonUniform | 分辨率 | stop 回执 | 口径 |
+|---|---|---|---|---|---|---|---|
+| live-play-min-tracks | 85 | 2.057 | 80.59% | 100% | 1920×1080 | `playing=false`（200ms） | **本轮必过**：connected=true → open/validate/push 成功 → play → advance>0 → canvasInk=true → stop playing=false |
+| live-play-camera-lane | 158 | 2.027 | 71.03% | 100% | 1920×1080 | `playing=false`（200ms） | 既有实测证据 |
+| live-play-subtitles | 297 | 2.002 | 79.75% | 90.69% | 1920×1080 | `playing=false`（0ms） | 既有实测证据 |
+| live-play-full-showcase | 328 | 2.012 | 91.32% | 67.99% | 1920×1080 | `playing=false`（0ms） | 既有实测证据 |
+| live-reconnect | 200 | — | 56.32% | 99.90% | 1920×1080 | `playing=false`（200ms） | 既有实测证据 |
+
+- `live-connect` PASS（8261ms）：`transport.connected()=true`，连真实 8765。
+- `live-close-idempotent` PASS（1302ms）：连关两次，第二次 `secondError=null`。
+- `live-reconnect` PASS（87.78s）：`game.down` 杀客户端 → 检出离线 → `game.up` 重启 → `game.waitWorld` 35.0s 等到窗口+世界 → `game.ensureWebUi` 按真实 8765 监听判定（首按 3118ms 后端口就绪）→ `editor.retry` 重取 token 连回并继续出帧 200 帧；截图 `reconnect-after.png`。
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 用模组自带 `tools/devtools` 起 Fabric 客户端、F6 开预览屏 | `e2e-system` 的 `icdev-driver` 插件只调 `devtools.py`（`client`/`rig-status`/`rig-down`/`where`/`list`/`key`/`tail`/`trace`/`cmd`），无自造驱动；F6 改为"按键后观测真实 8765 端口，未起来再按"的 `game.ensureWebUi` | F6 在客户端刚进世界的瞬间常被加载界面吃掉，单次盲按会假失败；重试仍以真实端口为准，不是放宽断言 |
+| 编辑器连上后对脚本做全链路回放 | 本轮必过仅 min-tracks；其余三份全 PASS，帧数/推进/回执见上表；每场落一张编辑器窗口截图（viewport 截图，不截桌面） | 双加载器全量四脚本不在本轮范围 |
+| 观察服务端时间推进与预览帧回传 | 断言只读编辑器对外语义：`transport.connected()/playback()/stats()/lastFrameAt()/onFrame()` 与 `connection()`；未自建 WS 探针、未读服务端内部字段 | — |
+| 关闭幂等、断连/重连 | 见上表 reconnect 与 close-idempotent；token 在会话间轮换（两次会话 token 文件 mtime 不同）后重连成功，验证重取链路 | 原文把重连列为"可执行部分"，本轮按真实链路执行 |
+| 不验画面质量 | 只断言"帧在增长、时间在推进、画面非空、状态正确"，不做画面判断；证据截图仅作为过程留痕 | 用户明确不要画面质量结论 |
+
+### 6.2 Forge（能接通 PASS 探针；回放未验证，用户豁免）
+
+**服务侧 PASS（有日志/文件证据）**：
+
+- 客户端可启动并进世界：`latest.log` 有 `Preparing start region`；窗口标题 `Minecraft* Forge 1.20.1 - 单人游戏`；`where` 读到世界与坐标。
+- F6 后 `[IC-WebUI] server started at 127.0.0.1:8765`；netstat 8765 归属 Forge pid。
+- token 文件 mtime 刷新；模组 WebEditorServer 与编辑器 `main.cjs` 都按 `IC_WEBUI_TOKEN_FILE` 优先、否则 `user.home/.immersivecinematics/webui-token`，Fabric/Forge 共用同一文件；每次 `start()` 重生成覆盖，`stop()` 删除。
+- 语料安装：15 份正例按 `corpus/13` manifest 字节原样装到 `forge/run/immersive_cinematics/scripts/13/`；manifest/corpus/fabric/forge 四方 SHA-256 一致。
+- 资源补齐：`1_reverb_part1.ogg`（30195B）、`AZUL.cube`（116240B）复制到 Forge 资源根，资源根 5→7 文件；复校验 min-tracks 与 full-showcase 的 L92 归零。
+- 模组侧零改动检查（verify-09）已加固为三桶判定并通过反证，见 13-01 与验收记录；Fabric 回归：`icdev selftest` pass=9 / fail=0，where 读 `fabric/run` 正常，classpath 139 条一致。
+
+**编辑器侧"能接通"PASS**：轻量探针套件 `live-forge-probe` runId `2026-11-19T14-41-12-674Z`，status PASS（`probe-forge-min-tracks`：waitConnected connected=true；open ok、blocking=0、issueCount=0；validate issues=[]；push ok；play playing=true；framesGrew delta=23；stop playing=false）。
+
+**正式 `live-forge` 套件 FAIL，已记录、按豁免不纳入本轮判定**：runId `2026-11-19T14-45-22-280Z`。`live-forge-connect` PASS（7705ms）；`live-forge-min-tracks` 在 `playbackAdvance` delta=0 失败；`live-forge-full-showcase` 在 `framesGrew` 阶段失败（`page.evaluate: Target page, context or browser has been closed`，轮询 791028ms）。定性：Forge 帧流下 Playwright 的 CDP 通道积压到 270MB（超 256MB 上限）导致 `page.evaluate` 饿死，回放断言无法采集。该项**按用户裁量不再追因、不作为本轮阻塞项**；记录在案，不写成"环境不具备"。
+
+**结论口径：Forge 路径本轮记为「能接通 PASS（探针）／回放未验证（用户豁免）」。**
+
+### 6.3 其余不在本轮范围的验收要点
+
+- 完整展示脚本连续播放 ≥60s（或全长取短）：本轮每份只推进约 2s；长播放与画面表现不在本轮范围（画面质量豁免）。
+- 无 ffmpeg 回退 RGBA 路径：本机 ffmpeg 8.1.1 可用，缺无 ffmpeg 环境；不在本轮范围。
+- 世界退出/总开关关闭后的端口、消费者、按键、token 残留：只覆盖了 rig-down 杀进程后的离线与重连；两条退出路径归 HUMAN（见 13-06-B）。
+- 九类错误路径：非法脚本、无 token 已有覆盖；其余缺夹具与环境，不在本轮范围。
+- 安装/卸载/首启：未执行，见 13-07。
 
 ### 验收要点
 

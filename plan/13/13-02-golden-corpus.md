@@ -118,13 +118,28 @@
 
 ## 六、实现结果
 
-状态：未实现
+状态：**范围内通过（语料纯解析/结构校验段）。** 语料本体（正例/负例/期望文件/清单哈希/生成器）已落地并通过纯解析与结构校验；"正例进入游戏加载"一条：Fabric 四份为既有实测证据，Forge 回放与 async-objects 真机不在本轮范围（用户豁免）。
 
-正例十二份、负例十份的清单已冻结，实际文件与期望文件尚未补齐。
+### 6.1 已实现并实测通过的语料事实
 
 | 原设计 | 实际实现 | 偏离原因 |
 |---|---|---|
-| — | — | — |
+| 12 正例 + 10 负例 + 每份期望文件 + 清单 SHA-256 | `corpus/13/`：正例 12 组（15 份文件，`graph-refs/` 4 份折 1 组）、负例 10 份、期望 25 份；`npm run verify:13` 实测正例 12/12、负例 10/10、`uncovered=0`，`manifestHash=d4c19c77bed62ced…`（两次重生成一致）；门禁日志 `build-evidence\final-gates-scope\verify13-230840.log` | — |
+| 正例必须真实过 `parseDoc` + `validateStructure` | 由 `corpus/13/verify.ts` 直接调用真实解析与结构校验入口，不是另写一套宽松判定；15 份正例全部 0 个未放行 block/error | — |
+| 负例必须落"解析器 / 校验器 / 编辑器本地结构检查"三层之一 | 实测落层：`parse` 1 份（`neg-legacy-keys` L02/L05）、`structural` 7 份（L04/L10/L23/L25/L26/L33/L56）、`local` 2 份（`neg-overlapping-subtitles` L91、`neg-missing-resource` L92） | — |
+| 负例要覆盖同轨字幕重叠、资源文件缺失两类 | 原方案无对应检查实现，负例只能记 uncovered；本轮补两条真实本地检查：`src/core/doc/structural.ts` 的 L91（同轨字幕半开区间重叠，跨轨不报）、新模块 `src/core/doc/resources.ts` 的 L92（`path`/`sound`/`lut` 相对 `resource/` 根的存在性检查，无资源根时 `checked=false` 且给出跳过原因） | 属超出 13-02 原文的代码改动，是为了让两负例真的落到某一层，而不是把 uncovered 当成通过 |
+| `paths-curves` 要含抛物与 S 形，`templates-flight-subtitle-workflow` 要含弧线与多机位 | `corpus/13/fixtures.ts` 经真实 `planShapeEntry` / `planGeneration` 生成：新增 `p_parabola`（含弧长重采样 `timing.keyframes`）、`p_s`（三轴反向偏侧）、`clip.orbit_arc`（`sweep=90`，内置上限）、`track.multi_cam`（2 机位硬切，实测 13 个片段均无片段级 `transition*` 键） | 弧线 sweep 上限与多机位硬切按代码实测取值，未按文档猜测 |
+| 语料安装到工作区 `scripts/13/`，不动用户已有脚本 | `verify.ts --install` 只写 `scripts/13/` 前缀（11 顶层 + `graph-refs/` 4 份），既有 18 个顶层脚本与 `camera/gtest/i3/j1/release/verify` 子目录未删未改 | — |
+
+### 6.2 本轮新增：字幕字节夹具与校验入口
+
+- 新增 `corpus/13/subtitles/`：`generate.ts`（夹具生成器）+ `README.md`（夹具用途说明）+ 17 个落盘字节夹具——`standard.srt` / `standard.vtt`、`bom-utf8`、`multiline`、`lang-hit`、`lang-missing`、`lang-escaped`、`empty-cue`、`overlap`、`edge-touch`、`long-text`（352 字）、`mixed-zh-en-ja`、`gb18030`、`utf16le`、`invalid-bytes`、`reimport-existing`、`reimport-incoming`。
+- 新增纯 node 校验入口 `npm run verify:13-subtitles`（`src/workbench/verify-13-subtitles.ts`），16 条：PASS 14 / FAIL 0 / DOWNGRADED 2，exit 0；证据 `build-evidence\13-subtitles\{results.json,report.md}`。该段只验导入解析/编码/cue 模型/拆轨/编译字段面/重导入 diff/cue↔clip 纯数据映射/无 sidecar；抽屉交互、IPC 与真机播放不在本段，见 13-05。
+
+### 6.3 不在本轮范围的原设计要点（用户豁免）
+
+- **五份脚本在 Forge 与 Fabric 各跑一次**：Fabric 已真机回放四份——`min-tracks`、`camera-lane-transition`、`overlay-subtitle-letterbox`、`full-showcase`（live 套件 7/7，runId `2026-11-19T11-48-46-189Z`），作为既有实测证据；本轮必过口径仅 min-tracks 一份。`async-objects-keyframes` 未进真机套件。Forge 服务侧已起客户端并进世界，15 份正例按 manifest 字节原样装入 `forge/run/immersive_cinematics/scripts/13/`，四方 SHA-256 一致；Forge 探针接通 PASS，回放未验证（用户豁免，见 13-04 §六）。双加载器全量四脚本不在本轮范围。
+- 夹具内不出现绝对路径、机器名、token 或用户目录：本轮未逐条静态复核（文档未规定扫描脚本），不在本轮范围。
 
 ### 验收要点
 
