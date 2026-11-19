@@ -1,0 +1,7 @@
+{
+  "id": "live-forge-connect",
+  "title": "真 Forge 游戏：编辑器传输层连上真实 8765",
+  "template": "live-connect",
+  "params": { "slug": "forge-connect", "loader": "forge" },
+  "covers": []
+}

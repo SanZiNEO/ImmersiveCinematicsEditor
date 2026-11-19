@@ -1,0 +1,8 @@
+{
+  "id": "editor-close-idempotent",
+  "description": "关闭幂等：同一窗口连关两次，第二次不报错",
+  "requires": ["host.electron"],
+  "steps": [
+    { "op": "editor.closeWindow", "with": { "repeat": 2 }, "expect": { "truthy": "result.ok" } }
+  ]
+}

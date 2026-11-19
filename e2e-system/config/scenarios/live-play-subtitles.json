@@ -1,0 +1,7 @@
+{
+  "id": "live-play-subtitles",
+  "title": "真游戏：overlay-subtitle-letterbox（字幕）打开→校验→推送→播放→时间推进→帧回传→停止",
+  "template": "editor-script-play",
+  "params": { "fixture": "13/overlay-subtitle-letterbox.json", "slug": "subtitles" },
+  "covers": ["08-08"]
+}

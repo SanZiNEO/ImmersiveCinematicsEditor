@@ -1,0 +1,10 @@
+{
+  "id": "live-forge",
+  "title": "真 Forge 客户端 + F6 + 真实 8765 全链路（独立一份记录，不混入 Fabric 结果）",
+  "plugins": ["electron-host", "live-webui", "icdev-driver", "evidence"],
+  "scenarios": [
+    "live-forge-connect",
+    "live-forge-min-tracks",
+    "live-forge-full-showcase"
+  ]
+}

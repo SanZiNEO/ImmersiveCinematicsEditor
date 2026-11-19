@@ -1,0 +1,10 @@
+{
+  "id": "editor-timeline-no-objects",
+  "description": "13-03 自动化子集：主时间轴只编排片段，不出现对象行/关键帧菱形",
+  "requires": ["host.electron", "editor.doc", "editor.ui"],
+  "steps": [
+    { "op": "editor.open", "with": { "path": "${fixture}" }, "expect": { "truthy": "result.ok" } },
+    { "op": "ui.count", "with": { "selector": ".timeline-panel [class*='keyframe'], .timeline-panel [class*='object-row'], .timeline-panel .kf-diamond" }, "expect": { "eq": ["result.count", 0] } },
+    { "op": "ui.count", "with": { "selector": ".timeline-panel .clip-block" }, "expect": { "gte": ["result.count", 0] } }
+  ]
+}

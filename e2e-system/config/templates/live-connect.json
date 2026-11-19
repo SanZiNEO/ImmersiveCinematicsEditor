@@ -1,0 +1,9 @@
+{
+  "id": "live-connect",
+  "description": "真实 8765：编辑器传输层已连接",
+  "requires": ["host.electron", "webui.live", "game.icdev"],
+  "steps": [
+    { "op": "game.status", "expect": { "truthy": "result.ok" } },
+    { "op": "live.connected", "with": { "timeoutMs": 20000 }, "expect": { "truthy": "result.connected" } }
+  ]
+}

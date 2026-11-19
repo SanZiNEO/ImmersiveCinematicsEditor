@@ -1,0 +1,12 @@
+{
+  "artifactsDir": "e2e-system/artifacts",
+  "defaultTimeoutMs": 20000,
+  "launchTimeoutMs": 90000,
+  "ports": { "vite": 5173, "webui": 8765 },
+  "paths": {
+    "editorRepo": ".",
+    "workspace": "../ImmersiveCinematics/fabric/run/immersive_cinematics",
+    "icdev": "../ImmersiveCinematics/tools/devtools"
+  },
+  "env": { "webuiTokenFile": "%USERPROFILE%/.immersivecinematics/webui-token" }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "editor-script-play",
+  "description": "打开脚本 → 校验 → 推送 → 播放 → 观察服务端时间与帧 → 停止",
+  "requires": ["host.electron", "editor.doc", "editor.preview", "evidence"],
+  "steps": [
+    { "op": "editor.open", "with": { "path": "${fixture}" }, "expect": { "truthy": "result.ok" } },
+    { "op": "editor.waitPreviewPanel", "expect": { "truthy": "result.mounted" } },
+    { "op": "editor.validate", "expect": { "truthy": "result.ok" } },
+    { "op": "editor.push", "expect": { "truthy": "result.ok" } },
+    { "op": "editor.play", "expect": { "truthy": "result.playing" } },
+    { "op": "editor.playbackAdvance", "with": { "windowMs": 2000 }, "expect": { "gte": ["result.delta", 1] } },
+    { "op": "editor.framesGrew", "with": { "windowMs": 2000, "push": false }, "expect": { "gte": ["result.delta", 1] } },
+    { "op": "editor.canvasInk", "with": { "windowMs": 300, "timeoutMs": 15000 }, "expect": { "truthy": "result.ink" } },
+    { "op": "editor.screenshot", "with": { "name": "${slug}-play" } },
+    { "op": "editor.stop", "expect": { "eq": ["result.playing", false] } }
+  ]
+}

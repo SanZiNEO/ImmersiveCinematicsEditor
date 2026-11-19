@@ -1,0 +1,16 @@
+{
+  "id": "offline-disconnect-status",
+  "title": "断开连接后状态为离线且不崩",
+  "template": "editor-disconnect",
+  "params": {
+    "fixture": "13/offline-valid.json",
+    "slug": "offline-disconnect",
+    "files": {
+      "13/offline-valid.json": {
+        "meta": { "id": "offline_valid", "name": "离线有效脚本", "author": "e2e" },
+        "timeline": { "tracks": [] }
+      }
+    }
+  },
+  "covers": ["01-05"]
+}

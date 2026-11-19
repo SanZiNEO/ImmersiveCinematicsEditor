@@ -12,11 +12,14 @@
     "preview": "vite preview",
     "electron:dev": "electron .",
     "electron:build": "electron-builder --win",
-    "test:e2e": "vite build && playwright test",
-    "test:e2e:ui": "vite build && playwright test --ui",
+    "e2e:system": "node --experimental-strip-types e2e-system/src/cli.ts",
+    "e2e:system:list": "node --experimental-strip-types e2e-system/src/cli.ts list",
+    "e2e:system:dry": "node --experimental-strip-types e2e-system/src/cli.ts dry-run",
+    "e2e:system:run": "node --experimental-strip-types e2e-system/src/cli.ts run",
     "verify": "node --experimental-strip-types src/workbench/verify.ts",
     "verify:08": "node --experimental-strip-types src/workbench/verify-08.ts",
     "verify:12": "node --experimental-strip-types src/workbench/verify-12.ts",
+    "typecheck": "vue-tsc --noEmit",
     "fixtures:12": "node --experimental-strip-types src/workbench/emit-fixtures-12.ts"
   },
   "dependencies": {

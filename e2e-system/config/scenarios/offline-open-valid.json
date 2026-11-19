@@ -1,0 +1,18 @@
+{
+  "id": "offline-open-valid",
+  "title": "普通打开 → 校验通过",
+  "template": "editor-open-validate",
+  "params": {
+    "fixture": "13/offline-valid.json",
+    "slug": "offline-valid",
+    "width": 2,
+    "height": 2,
+    "files": {
+      "13/offline-valid.json": {
+        "meta": { "id": "offline_valid", "name": "离线有效脚本", "author": "e2e" },
+        "timeline": { "tracks": [] }
+      }
+    }
+  },
+  "covers": []
+}

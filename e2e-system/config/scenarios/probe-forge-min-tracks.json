@@ -1,0 +1,7 @@
+{
+  "id": "probe-forge-min-tracks",
+  "title": "【探针 PROBE】真 Forge：min-tracks 轻量链路（去 canvasInk 轮询，定性真饱和 vs CDP 背压假失败）",
+  "template": "editor-script-play-probe",
+  "params": { "fixture": "13/min-tracks.json", "slug": "probe-forge-min-tracks", "loader": "forge" },
+  "covers": []
+}

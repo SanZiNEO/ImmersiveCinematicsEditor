@@ -1,0 +1,7 @@
+{
+  "id": "live-forge-min-tracks",
+  "title": "真 Forge：min-tracks 连接→打开→校验→推送→播放→时间推进→帧回传→画面非空→停止",
+  "template": "editor-script-play-forge",
+  "params": { "fixture": "13/min-tracks.json", "slug": "forge-min-tracks", "loader": "forge" },
+  "covers": ["08-08"]
+}

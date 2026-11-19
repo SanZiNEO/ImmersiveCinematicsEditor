@@ -1,0 +1,14 @@
+{
+  "id": "editor-no-token",
+  "description": "无 token：不建立连接，状态区给出可读原因（文案含 token 字样）；复验后恢复占位 token",
+  "requires": ["host.electron", "editor.preview"],
+  "steps": [
+    { "op": "editor.writeToken", "with": { "content": "" } },
+    { "op": "editor.retry" },
+    { "op": "editor.state", "expect": { "eq": ["result.connected", false] } },
+    { "op": "editor.state", "expect": { "truthy": "result.connection.reason" } },
+    { "op": "ui.expectText", "with": { "selector": ".preview-panel", "text": "token" }, "expect": { "truthy": "result.matches" } },
+    { "op": "editor.writeToken", "with": { "content": "e2e-dummy-token" } },
+    { "op": "editor.retry" }
+  ]
+}

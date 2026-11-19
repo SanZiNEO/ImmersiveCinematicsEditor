@@ -1,0 +1,16 @@
+{
+  "id": "offline-timeline-no-objects",
+  "title": "主时间轴只编排片段：无对象行/关键帧菱形（13-03 自动化子集）",
+  "template": "editor-timeline-no-objects",
+  "params": {
+    "fixture": "13/offline-valid.json",
+    "slug": "offline-timeline",
+    "files": {
+      "13/offline-valid.json": {
+        "meta": { "id": "offline_valid", "name": "离线有效脚本", "author": "e2e" },
+        "timeline": { "tracks": [] }
+      }
+    }
+  },
+  "covers": []
+}

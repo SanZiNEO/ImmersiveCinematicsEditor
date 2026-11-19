@@ -187,6 +187,15 @@ export function installFakeWebUi(initial: Record<string, unknown>): void {
         }
       }
     },
+    /** 投递二进制帧（18 字节帧头 + RGBA 载荷），形状与真实 WebSocket 二进制消息一致。 */
+    pushBinary(bytes: number[]): void {
+      const buffer = new Uint8Array(bytes).buffer
+      for (const socket of sockets) {
+        if (socket.readyState === 1) {
+          socket.onmessage?.(new MessageEvent('message', { data: buffer }))
+        }
+      }
+    },
     requestCount(type?: string): number {
       return type === undefined ? requests.length : requests.filter((entry) => entry === type).length
     },

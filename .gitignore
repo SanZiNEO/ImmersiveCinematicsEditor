@@ -10,5 +10,8 @@ release/
 /forge
 /build
 
-# --- E2E 产物（Playwright） ---
-e2e-artifacts/
+# --- 自动化测试产物（统一落 e2e-system/artifacts） ---
+e2e-system/artifacts/
+
+# --- 根目录临时日志（不得入库） ---
+/*.log

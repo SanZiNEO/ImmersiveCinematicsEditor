@@ -1,0 +1,26 @@
+{
+  "id": "live-reconnect",
+  "description": "真实 8765：断开游戏 → 编辑器进入离线态 → 重启客户端并 F6 → 显式重试 → 重新连上并继续出帧",
+  "requires": ["host.electron", "webui.live", "game.icdev", "editor.doc", "editor.preview", "evidence"],
+  "steps": [
+    { "op": "game.status", "expect": { "truthy": "result.ok" } },
+    { "op": "live.connected", "with": { "timeoutMs": 20000 }, "expect": { "truthy": "result.connected" } },
+    { "op": "editor.open", "with": { "path": "13/min-tracks.json" }, "expect": { "truthy": "result.ok" } },
+    { "op": "editor.waitPreviewPanel", "expect": { "truthy": "result.mounted" } },
+    { "op": "editor.state", "expect": { "truthy": "result.connected" } },
+    { "op": "game.down" },
+    { "op": "editor.waitDisconnected", "with": { "timeoutMs": 30000 }, "expect": { "falsy": "result.connected" } },
+    { "op": "editor.state", "expect": { "falsy": "result.connected" } },
+    { "op": "game.up", "with": { "world": "新的世界" }, "expect": { "truthy": "result.ok" } },
+    { "op": "game.waitWorld", "with": { "world": "新的世界", "timeoutMs": 180000 }, "expect": { "truthy": "result.ready" } },
+    { "op": "game.ensureWebUi", "with": { "name": "f6", "attempts": 3, "perAttemptMs": 15000 }, "expect": { "truthy": "result.listening" } },
+    { "op": "editor.retry" },
+    { "op": "live.connected", "with": { "timeoutMs": 60000 }, "expect": { "truthy": "result.connected" } },
+    { "op": "editor.push", "expect": { "truthy": "result.ok" } },
+    { "op": "editor.play", "expect": { "truthy": "result.playing" } },
+    { "op": "editor.framesGrew", "with": { "windowMs": 2000, "push": false }, "expect": { "gte": ["result.delta", 1] } },
+    { "op": "editor.canvasInk", "with": { "windowMs": 300, "timeoutMs": 15000 }, "expect": { "truthy": "result.ink" } },
+    { "op": "editor.screenshot", "with": { "name": "reconnect-after" } },
+    { "op": "editor.stop", "expect": { "eq": ["result.playing", false] } }
+  ]
+}

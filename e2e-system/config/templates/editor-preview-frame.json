@@ -1,0 +1,11 @@
+{
+  "id": "editor-preview-frame",
+  "description": "假 WebSocket 推送 18 字节帧头 + RGBA 载荷：onFrame 帧数增长、lastFrameAt 变化",
+  "requires": ["host.electron", "webui.fake", "editor.preview"],
+  "steps": [
+    { "op": "fake.install", "with": { "files": "${files}" } },
+    { "op": "editor.waitConnected", "with": { "timeoutMs": 5000 }, "expect": { "truthy": "result.connected" } },
+    { "op": "editor.framesGrew", "with": { "windowMs": 1500, "width": "${width}", "height": "${height}", "push": true }, "expect": { "gte": ["result.delta", 1] } },
+    { "op": "editor.state", "expect": { "truthy": "result.lastFrameAt" } }
+  ]
+}

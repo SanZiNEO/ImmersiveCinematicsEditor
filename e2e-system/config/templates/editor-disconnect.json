@@ -1,0 +1,12 @@
+{
+  "id": "editor-disconnect",
+  "description": "假 WebUI 断开后：传输层离线、状态区显示离线、窗口不崩",
+  "requires": ["host.electron", "webui.fake", "editor.preview"],
+  "steps": [
+    { "op": "fake.install", "with": { "files": "${files}" } },
+    { "op": "editor.waitConnected", "with": { "timeoutMs": 5000 }, "expect": { "truthy": "result.connected" } },
+    { "op": "fake.offline" },
+    { "op": "editor.waitDisconnected", "with": { "timeoutMs": 5000 }, "expect": { "eq": ["result.connected", false] } },
+    { "op": "ui.expectText", "with": { "selector": ".statusbar", "text": "离线" }, "expect": { "truthy": "result.matches" } }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "offline",
+  "title": "离线回归（假 WebUI + 真编辑器）",
+  "plugins": ["electron-host", "fake-webui", "evidence"],
+  "scenarios": [
+    "offline-open-valid",
+    "offline-invalid-rejected",
+    "offline-no-token",
+    "offline-disconnect-status",
+    "offline-preview-frame",
+    "offline-timeline-no-objects",
+    "offline-close-idempotent"
+  ]
+}

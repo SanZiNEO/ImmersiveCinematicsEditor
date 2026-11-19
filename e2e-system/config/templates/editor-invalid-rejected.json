@@ -1,0 +1,11 @@
+{
+  "id": "editor-invalid-rejected",
+  "description": "非法脚本被拒：本地 issue / 校验失败在界面可见（状态区问题计数 + 本地 issue 列表）",
+  "requires": ["host.electron", "editor.doc", "editor.ui"],
+  "steps": [
+    { "op": "editor.open", "with": { "path": "${fixture}" }, "expect": { "truthy": "result.opened" } },
+    { "op": "editor.validate", "expect": { "truthy": "result.rejected" } },
+    { "op": "editor.localIssues", "expect": { "gt": ["result.count", 0] } },
+    { "op": "ui.expectText", "with": { "selector": ".statusbar", "text": "问题" }, "expect": { "truthy": "result.matches" } }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "editor-script-play-probe",
+  "description": "【探针 PROBE】轻量回放链路定性：等待连接 → 打开 → 预览面板挂载 → 校验 → 推送 → 播放 → 一次推进(记录) → 一次帧增长(记录) → 诊断(记录) → 停止。刻意去掉 canvasInk 的 10–15s×500ms 轮询与 CDP 截图；推进/帧增长两条只记录数值、不做阈值断言（探针用来测量真实速率，正式阈值在 live-forge 模板）。画面非空证据走套件外的非 CDP 窗口截图 + 离线像素统计。此模板只用于区分「真饱和」与「CDP 背压下 evaluate 饿死」，不替代正式 live-forge 场景。",
+  "requires": ["host.electron", "editor.doc", "editor.preview", "evidence"],
+  "steps": [
+    { "op": "editor.waitConnected", "with": { "timeoutMs": 20000 }, "expect": { "truthy": "result.connected" } },
+    { "op": "editor.open", "with": { "path": "${fixture}" }, "expect": { "truthy": "result.ok" } },
+    { "op": "editor.waitPreviewPanel", "expect": { "truthy": "result.mounted" } },
+    { "op": "editor.validate", "expect": { "truthy": "result.ok" } },
+    { "op": "editor.push", "expect": { "truthy": "result.ok" } },
+    { "op": "editor.play", "expect": { "truthy": "result.playing" } },
+    { "op": "editor.playbackAdvance", "with": { "windowMs": 4000 } },
+    { "op": "editor.framesGrew", "with": { "windowMs": 3000, "push": false } },
+    { "op": "editor.probeDiagnostics" },
+    { "op": "editor.stop", "expect": { "eq": ["result.playing", false] } }
+  ]
+}

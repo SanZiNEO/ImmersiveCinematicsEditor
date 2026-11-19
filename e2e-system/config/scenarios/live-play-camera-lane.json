@@ -1,0 +1,7 @@
+{
+  "id": "live-play-camera-lane",
+  "title": "真游戏：camera-lane-transition 全链路回放",
+  "template": "editor-script-play",
+  "params": { "fixture": "13/camera-lane-transition.json", "slug": "camera-lane-transition" },
+  "covers": ["08-08"]
+}

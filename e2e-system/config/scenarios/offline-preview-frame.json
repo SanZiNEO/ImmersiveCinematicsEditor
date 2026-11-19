@@ -1,0 +1,18 @@
+{
+  "id": "offline-preview-frame",
+  "title": "预览帧真实进入编辑器：onFrame 帧数增长、lastFrameAt 变化",
+  "template": "editor-preview-frame",
+  "params": {
+    "fixture": "13/offline-valid.json",
+    "slug": "offline-frame",
+    "width": 2,
+    "height": 2,
+    "files": {
+      "13/offline-valid.json": {
+        "meta": { "id": "offline_valid", "name": "离线有效脚本", "author": "e2e" },
+        "timeline": { "tracks": [] }
+      }
+    }
+  },
+  "covers": []
+}

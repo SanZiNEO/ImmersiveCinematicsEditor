@@ -1,0 +1,7 @@
+{
+  "id": "live-reconnect",
+  "title": "真游戏：断连→重启客户端并 F6→显式重试→重新连上并继续出帧",
+  "template": "live-reconnect",
+  "params": { "slug": "live-reconnect" },
+  "covers": ["01-05"]
+}

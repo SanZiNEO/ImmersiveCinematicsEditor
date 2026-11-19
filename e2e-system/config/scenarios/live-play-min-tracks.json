@@ -1,0 +1,7 @@
+{
+  "id": "live-play-min-tracks",
+  "title": "真游戏：min-tracks 打开→校验→推送→播放→时间推进→帧回传→停止",
+  "template": "editor-script-play",
+  "params": { "fixture": "13/min-tracks.json", "slug": "min-tracks" },
+  "covers": ["08-08"]
+}

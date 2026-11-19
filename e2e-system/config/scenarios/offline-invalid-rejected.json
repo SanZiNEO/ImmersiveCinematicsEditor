@@ -1,0 +1,16 @@
+{
+  "id": "offline-invalid-rejected",
+  "title": "非法脚本被拒：本地 issue / 校验失败在界面可见",
+  "template": "editor-invalid-rejected",
+  "params": {
+    "fixture": "13/offline-invalid.json",
+    "slug": "offline-invalid",
+    "files": {
+      "13/offline-invalid.json": {
+        "meta": { "id": "offline_invalid", "name": "非法脚本", "author": "e2e" },
+        "timeline": { "tracks": [ { "type": "NO_SUCH_TRACK", "clips": [] } ] }
+      }
+    }
+  },
+  "covers": ["03-06"]
+}

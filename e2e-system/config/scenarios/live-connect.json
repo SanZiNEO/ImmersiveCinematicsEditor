@@ -1,0 +1,7 @@
+{
+  "id": "live-connect",
+  "title": "真游戏：编辑器传输层连上真实 8765",
+  "template": "live-connect",
+  "params": { "slug": "live-connect" },
+  "covers": []
+}

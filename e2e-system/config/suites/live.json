@@ -1,0 +1,14 @@
+{
+  "id": "live",
+  "title": "真 Fabric 客户端 + F6 + 真实 8765 全链路",
+  "plugins": ["electron-host", "live-webui", "icdev-driver", "evidence"],
+  "scenarios": [
+    "live-connect",
+    "live-play-min-tracks",
+    "live-play-camera-lane",
+    "live-play-subtitles",
+    "live-play-full-showcase",
+    "live-reconnect",
+    "live-close-idempotent"
+  ]
+}

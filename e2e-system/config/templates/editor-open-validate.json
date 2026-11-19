@@ -1,0 +1,10 @@
+{
+  "id": "editor-open-validate",
+  "description": "打开脚本 → 本地结构检查/校验通过",
+  "requires": ["host.electron", "editor.doc"],
+  "steps": [
+    { "op": "editor.open", "with": { "path": "${fixture}" }, "expect": { "truthy": "result.ok" } },
+    { "op": "editor.validate", "expect": { "truthy": "result.ok" } },
+    { "op": "editor.saveState", "expect": { "truthy": "result.docId" } }
+  ]
+}

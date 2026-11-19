@@ -1,0 +1,7 @@
+{
+  "id": "live-close-idempotent",
+  "title": "真游戏：关闭幂等，重复关闭无异常",
+  "template": "editor-close-idempotent",
+  "params": { "slug": "live-close" },
+  "covers": ["01-05"]
+}

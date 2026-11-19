@@ -1,0 +1,8 @@
+{
+  "id": "live-forge-probe",
+  "title": "【探针 PROBE】Forge 轻量链路定性套件（独立记录；不并入正式 live-forge 套件，不与 Fabric 结果混算）",
+  "plugins": ["electron-host", "live-webui", "icdev-driver", "evidence"],
+  "scenarios": [
+    "probe-forge-min-tracks"
+  ]
+}

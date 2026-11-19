@@ -1,0 +1,7 @@
+{
+  "id": "offline-close-idempotent",
+  "title": "关闭幂等：同一窗口连关两次，第二次不报错",
+  "template": "editor-close-idempotent",
+  "params": { "slug": "offline-close" },
+  "covers": ["01-05"]
+}

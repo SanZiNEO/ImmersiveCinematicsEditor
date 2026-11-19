@@ -1,0 +1,46 @@
+{
+  "items": [
+    {
+      "id": "13-03-A",
+      "source": "plan/13/13-03-workspace-application.md",
+      "title": "六类工作台界面场景：布局拖动、停靠换位、抽屉拖出、小窗无重叠裁切、主题切换、IME 输入与撤销手感",
+      "reason": "13-03 明确要求手工操作与关键操作录屏；自动化只能断言静态 DOM 计数，无法覆盖拖拽手感、目视无重叠/无裁切与输入法不串命令。"
+    },
+    {
+      "id": "13-03-B",
+      "source": "plan/13/13-03-workspace-application.md",
+      "title": "重启后布局/窗口位置/主题/最近项目恢复；偏好、布局、窗口、草稿四文件分离且坏一个只恢复一个",
+      "reason": "需要跨重启操作并比对状态文件操作前后副本；本轮离线套件未做重启与文件级恢复核验。"
+    },
+    {
+      "id": "13-06-A",
+      "source": "plan/13/13-06-transport-preview-hardening.md",
+      "title": "双窗口：关闭 A 后 B 继续出帧；捕获中心未被关闭；他人飞控未被取消",
+      "reason": "需要两个 Electron 窗口同时挂在播飞控；本轮离线为单窗口重复关闭幂等用例，未覆盖跨端点会话隔离。"
+    },
+    {
+      "id": "13-06-B",
+      "source": "plan/13/13-06-transport-preview-hardening.md",
+      "title": "世界退出与总开关关闭后端口、捕获消费者、按键冷却、token 残留核验",
+      "reason": "需要真实游戏世界退出（退回主菜单/退出世界）与总开关操作，再核对端口、捕获消费者、按键冷却与 token 残留；本轮 live 只覆盖了 rig-down 杀进程后编辑器离线与重连，世界退出/总开关两条退出路径未执行。"
+    },
+    {
+      "id": "13-06-C",
+      "source": "plan/13/13-06-transport-preview-hardening.md",
+      "title": "资源抽屉按图片/视频/音频/全部类型列举的扩展名对齐、越界拒绝、超限截断与无 ffmpeg 音频状态",
+      "reason": "需要样例资源文件与资源抽屉交互；本轮未构造资源夹具，未自动化列举与播放状态断言。"
+    },
+    {
+      "id": "13-06-D",
+      "source": "plan/13/13-06-transport-preview-hardening.md",
+      "title": "预览档位选择器已移除、状态栏只读显示固定规格、回执尺寸异常可见不静默换档",
+      "reason": "属界面目视项，需要连接前后与重连后核对状态栏/预览设置页文案；本轮离线未注入固定规格回执，未做该目视断言。"
+    },
+    {
+      "id": "13-05",
+      "source": "plan/13/13-05-subtitle-e2e.md",
+      "title": "字幕 SRT/VTT 导入、UTF-8 与 cue 模型、批次拆轨、cue↔clip 定位全流程",
+      "reason": "本轮 live 已把字幕脚本 overlay-subtitle-letterbox 纳入真机回放；SRT/VTT 导入、UTF-8 与 cue 模型、批次拆轨、cue↔clip 定位仍需字幕样本文件与字幕抽屉交互，未执行。"
+    }
+  ]
+}

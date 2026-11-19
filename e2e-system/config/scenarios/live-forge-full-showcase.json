@@ -1,0 +1,7 @@
+{
+  "id": "live-forge-full-showcase",
+  "title": "真 Forge：full-showcase（全量展示）连接→打开→校验→推送→播放→时间推进→帧回传→画面非空→停止",
+  "template": "editor-script-play-forge",
+  "params": { "fixture": "13/full-showcase.json", "slug": "forge-full-showcase", "loader": "forge" },
+  "covers": ["08-08"]
+}
