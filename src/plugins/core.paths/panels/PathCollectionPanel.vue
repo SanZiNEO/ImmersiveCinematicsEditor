@@ -23,19 +23,32 @@ import {
 import type { ClipTargetOption, NewDraftState, PathDraftMap, PathFilterState, PathRowView } from '../../../features/paths/collectionPanel.ts'
 import { describeGeometry, geometryFieldIssues } from '../../../features/paths/geometryForm.ts'
 import { readTimingDraft, timingDraftJson, draftIssues } from '../../../features/paths/timingEditor.ts'
+import { planShapeEntry, detectControlMode, type ShapeEntryKind, type ShapeEntryParams } from '../../../features/paths/shapeEntries.ts'
+import { resampleTiming } from '../../../features/paths/resample.ts'
+import { canPickControlPoint, pickControlPoint, type PickFrame } from '../../../features/paths/picking.ts'
+import type { Vec3 } from '../../../core/paths/sampling.ts'
 import { buildPathPreview } from '../../../core/paths/preview.ts'
 import {
   defaultWizardState, readCenterContext, planWizard, canApply, buildApplyPayload, endpointOptions,
 } from '../../../features/paths/generatorWizard.ts'
 import type { GeneratorApplyPayload, WizardState } from '../../../features/paths/generatorWizard.ts'
+import {
+  POSE_BANK_SERVICE,
+  type PathPointApplyTarget,
+  type PoseBankService,
+  type PoseSlot,
+  type PoseValue,
+} from '../../../features/flight/public.ts'
 import PathListPane from './PathListPane.vue'
 import PathEntryEditor from './PathEntryEditor.vue'
 import PathPreviewCanvas from './PathPreviewCanvas.vue'
 import ShapeGeneratorWizard from './ShapeGeneratorWizard.vue'
+import PoseSlotPicker from '../../core.flight/panels/PoseSlotPicker.vue'
 
 const ctx = usePanelContext()
 const documentService = ctx.services.get(DOCUMENT_SERVICE)
 const catalog = ctx.services.get(CATALOG_SERVICE)
+const flightSlotService = ctx.services.get<PoseBankService>(POSE_BANK_SERVICE)
 
 /** 面板取用文档的修订号（父面板自己订阅，不缓存跨修订的派生值）。 */
 const revision = ref(documentService?.summary().revision ?? 0)
@@ -315,6 +328,232 @@ function onGeometryChange(geometry: JsonObject): void {
 function onTimingChange(draftValue: typeof timingDraft.value): void {
   const base = editingEntry.value ?? {}
   commitEdit({ ...base, timing: timingDraftJson(draftValue) })
+}
+
+// ── 12-10 曲线工具：形状入口 / 弧长重采样 / 控制点拾取 ─────────────────────
+
+/** 预览模型解析出的段端点向量（表达式空间）；未选中 / 端点未解析时为 null。 */
+const entryVectors = computed<{ from: Vec3; to: Vec3 } | null>(() => {
+  const model = previewModel.value
+  if (model === null) {
+    return null
+  }
+  return {
+    from: { x: model.from[0], y: model.from[1], z: model.from[2] },
+    to: { x: model.to[0], y: model.to[1], z: model.to[2] },
+  }
+})
+
+/** 形状按钮组禁用原因（空串 = 可用）。 */
+const shapeDisabledReason = computed<string>(() => {
+  if (mode.value === 'new') {
+    return '先保存新路径草稿，再应用形状'
+  }
+  if (editingEntry.value === null) {
+    return '先选中一条路径'
+  }
+  if (entryVectors.value === null) {
+    return '端点未解析，无法生成形状'
+  }
+  return ''
+})
+
+/** 九槽槽位（共享服务 + 共享选择器；不本地造槽）。 */
+const slotSlots = computed<readonly PoseSlot[]>(() => flightSlotService?.bank()?.slots() ?? [])
+const slotPickerOpen = ref(false)
+
+/** 九槽取点禁用原因（服务缺失 / 库空 / 无填充槽各给一句）；空串 = 可用。 */
+const slotDisabledReason = computed<string>(() => {
+  if (flightSlotService === undefined) {
+    return '九槽服务未注册：请先启用飞控插件；请改用数值输入'
+  }
+  const bank = flightSlotService.bank()
+  if (bank === null) {
+    return '文档未打开，九槽不可用；请改用数值输入'
+  }
+  if (bank.slots().every((slot) => slot.pose === null)) {
+    return '九槽为空，请先在飞控面板存槽；请改用数值输入'
+  }
+  return ''
+})
+
+/** 最近聚焦的控制点下标（画布手柄按下时记录）；九槽落槽默认写第 0 个控制点。 */
+const focusControlIndex = ref<number | null>(null)
+
+/** 控制点拾取资格：片段位置模式 / 基准 / 原点 / 注视 / 切线朝向判定；正交画布本身始终可用。 */
+const pickEligibility = computed(() => {
+  if (doc.value === null || entryClip.value === '') {
+    return { available: false, reasons: ['目标片段未设置：请改数值输入'] }
+  }
+  return canPickControlPoint(doc.value, entryClip.value)
+})
+
+/** 圆锥曲线缺省参数：由弦长派生（中点为心、半径 = 弦长一半、上半圆）；作者随后在几何表单微调。 */
+function conicDefaults(vectors: { from: Vec3; to: Vec3 }): ShapeEntryParams {
+  const chordLength = Math.hypot(
+    vectors.to.x - vectors.from.x,
+    vectors.to.y - vectors.from.y,
+    vectors.to.z - vectors.from.z,
+  )
+  const radius = Math.max(chordLength / 2, 0.5)
+  return {
+    center: {
+      x: (vectors.from.x + vectors.to.x) / 2,
+      y: (vectors.from.y + vectors.to.y) / 2,
+      z: (vectors.from.z + vectors.to.z) / 2,
+    },
+    radius,
+    semiMajor: radius,
+    semiMinor: Math.max(chordLength / 4, 0.25),
+    startAngle: 0,
+    endAngle: 180,
+    normal: { x: 0, y: 1, z: 0 },
+    referenceAxis: { x: 1, y: 0, z: 0 },
+  }
+}
+
+function onApplyShape(kind: ShapeEntryKind): void {
+  const entry = editingEntry.value
+  const vectors = entryVectors.value
+  if (entry === null || vectors === null) {
+    statusText.value = shapeDisabledReason.value || '先选中一条路径。'
+    statusKind.value = 'error'
+    return
+  }
+  const plan = planShapeEntry({
+    entry,
+    from: vectors.from,
+    to: vectors.to,
+    axes: entryAxes(entry),
+    kind,
+    params: conicDefaults(vectors),
+  })
+  if (!plan.ok || plan.geometry === null) {
+    statusText.value = plan.diagnostics.map((issue) => issue.message).join('；') || '形状计划被拒绝。'
+    statusKind.value = 'error'
+    return
+  }
+  commitEdit({ ...entry, geometry: plan.geometry })
+  statusText.value = `已应用形状（${kind}）；保存时一次提交、一次撤销。`
+  statusKind.value = 'info'
+}
+
+function onResample(samples: number): void {
+  const entry = editingEntry.value
+  const vectors = entryVectors.value
+  if (entry === null || vectors === null) {
+    statusText.value = shapeDisabledReason.value || '先选中一条路径。'
+    statusKind.value = 'error'
+    return
+  }
+  const geometry = isJsonObject(entry.geometry) ? entry.geometry : { type: 'line' }
+  const result = resampleTiming({
+    geometry,
+    from: vectors.from,
+    to: vectors.to,
+    axes: entryAxes(entry),
+    samples,
+    timing: entry.timing,
+  })
+  if (!result.ok || result.timing === null) {
+    statusText.value = result.diagnostics.map((issue) => issue.message).join('；') || '重采样被拒绝。'
+    statusKind.value = 'error'
+    return
+  }
+  commitEdit({ ...entry, timing: result.timing })
+  statusText.value = `已按弧长重采样为 ${result.points.length} 个时间点；预览为近似，最终以游戏播放为准。`
+  statusKind.value = 'info'
+}
+
+function onControlFocus(controlIndex: number): void {
+  focusControlIndex.value = controlIndex
+}
+
+function onControlPick(controlIndex: number, point: { x: number; y: number }, frame: PickFrame): void {
+  const eligibility = pickEligibility.value
+  if (!eligibility.available) {
+    statusText.value = `控制点不可拾取：${eligibility.reasons.join('；')}`
+    statusKind.value = 'error'
+    return
+  }
+  const entry = editingEntry.value
+  const vectors = entryVectors.value
+  if (entry === null || vectors === null) {
+    statusText.value = '先选中一条路径再拖动控制点。'
+    statusKind.value = 'error'
+    return
+  }
+  const geometry = isJsonObject(entry.geometry) ? entry.geometry : null
+  const list = geometry !== null && Array.isArray(geometry.control_points) ? geometry.control_points : []
+  if (controlIndex < 0 || controlIndex >= list.length) {
+    statusText.value = '控制点下标越界；请改数值输入。'
+    statusKind.value = 'error'
+    return
+  }
+  const existing = isJsonObject(list[controlIndex]) ? list[controlIndex] : undefined
+  const mode = detectControlMode(geometry) ?? 'relative'
+  const result = pickControlPoint({
+    screen: point,
+    frame,
+    segmentStart: vectors.from,
+    controlMode: mode,
+    axes: entryAxes(entry),
+    plane: vectors.from,
+    existingControl: existing,
+  })
+  if (result === null) {
+    statusText.value = '画布变换退化或尺寸非法，本次拾取已忽略；请改数值输入。'
+    statusKind.value = 'error'
+    return
+  }
+  // 只替换选中的这一个控制点；不增删数量、不写位置关键帧。
+  const nextList = list.map((item, index) => (index === controlIndex ? result.control : item))
+  const nextGeometry: JsonObject = { ...(geometry ?? {}), control_points: nextList }
+  commitEdit({ ...entry, geometry: nextGeometry })
+  statusText.value = `已更新控制点 ${controlIndex + 1}；${result.note}`
+  statusKind.value = 'info'
+}
+
+function onPickFromSlot(): void {
+  if (slotDisabledReason.value !== '') {
+    statusText.value = slotDisabledReason.value
+    statusKind.value = 'error'
+    return
+  }
+  slotPickerOpen.value = true
+}
+
+function closeSlotPicker(): void {
+  slotPickerOpen.value = false
+}
+
+function onSlotPick(index: number): void {
+  const pose: PoseValue | null = slotSlots.value[index]?.pose ?? null
+  const entry = editingEntry.value
+  if (pose === null || entry === null) {
+    return
+  }
+  const target: PathPointApplyTarget = {
+    kind: 'pathPoint',
+    pathId: editingId.value,
+    point: { type: 'control', index: focusControlIndex.value ?? 0 },
+    clipKey: entryClip.value === '' ? undefined : entryClip.value,
+  }
+  const plan = flightSlotService?.planApply(target, pose)
+  if (plan === undefined || !plan.ok || plan.command === null) {
+    statusText.value = plan?.diagnostics.map((issue) => issue.message).join('；') ?? '九槽计划被拒绝。'
+    statusKind.value = 'error'
+    return
+  }
+  const outcome = ctx.commands.commit(plan.command, 'paths.slot-apply')
+  if (!outcome.ok) {
+    statusText.value = outcome.error ?? '九槽应用被拒绝。'
+    statusKind.value = 'error'
+    return
+  }
+  slotPickerOpen.value = false
+  statusText.value = `已从九槽 #${index + 1} 写入控制点（一次撤销可回退）。`
+  statusKind.value = 'info'
 }
 
 function onSave(): void {
@@ -740,9 +979,14 @@ const newDisabledReason = computed(() => (doc.value === null ? '没有打开的�
             :timing-issues="timingIssueList"
             :can-save="canSave"
             :save-reasons="fieldProblems"
+            :shape-disabled-reason="shapeDisabledReason"
+            :slot-disabled-reason="slotDisabledReason"
             @update-field="onUpdateField"
             @geometry-change="onGeometryChange"
             @timing-change="onTimingChange"
+            @apply-shape="onApplyShape"
+            @resample="onResample"
+            @pick-from-slot="onPickFromSlot"
             @save="onSave"
             @cancel="onCancel"
           />
@@ -755,9 +999,13 @@ const newDisabledReason = computed(() => (doc.value === null ? '没有打开的�
             :space="previewSpace"
             :from-time="previewFrom"
             :to-time="previewTo"
+            :pick-enabled="pickEligibility.available"
+            :pick-reasons="pickEligibility.reasons"
             @push="onPushPreview"
             @seek="onSeekPreview"
             @recompute-endpoints="onRecomputeEndpoints"
+            @control-focus="onControlFocus"
+            @control-pick="onControlPick"
           />
         </div>
 
@@ -781,6 +1029,13 @@ const newDisabledReason = computed(() => (doc.value === null ? '没有打开的�
           </p>
         </div>
       </div>
+
+      <PoseSlotPicker
+        :open="slotPickerOpen"
+        :slots="slotSlots"
+        :on-pick="onSlotPick"
+        :on-close="closeSlotPicker"
+      />
 
       <footer
         v-if="statusText !== ''"

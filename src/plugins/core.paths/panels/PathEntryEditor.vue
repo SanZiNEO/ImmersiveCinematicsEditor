@@ -6,7 +6,7 @@
  * 几何与 timing 的草稿装配走 features/paths 纯逻辑，本组件不写判定规则，
  * 保存 / 撤销由父面板接 commit。宽时左右分栏由父面板控制，本组件只管条目列。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 import type { PathFieldIssue } from '../../../core/paths/types.ts'
 import type { GeometryIssue } from '../../../core/paths/geometry.ts'
@@ -24,6 +24,7 @@ import {
   type GeometryFormModel,
   type PointMode,
 } from '../../../features/paths/geometryForm.ts'
+import { SHAPE_ENTRIES, type ShapeEntryKind } from '../../../features/paths/shapeEntries.ts'
 import {
   addPoint,
   movePoint,
@@ -32,6 +33,7 @@ import {
   switchToKeyframes,
   switchToLinear,
   updatePoint,
+  TIMING_MAX_POINTS,
   type TimingDraft,
 } from '../../../features/paths/timingEditor.ts'
 import GeometryParamForm from './GeometryParamForm.vue'
@@ -51,12 +53,21 @@ const props = defineProps<{
   canSave: boolean
   saveReasons: readonly string[]
   disabled?: boolean
+  /** 形状入口禁用原因（非空时按钮组禁用并展示原因）。 */
+  shapeDisabledReason?: string
+  /** 九槽取点禁用原因（服务缺失 / 库空 / 无填充槽时展示）。 */
+  slotDisabledReason?: string
+  /** 重采样目标点数（含首末）。 */
+  resampleSamples?: number
 }>()
 
 const emit = defineEmits<{
   'update-field': [patch: Partial<JsonObject>]
   'geometry-change': [geometry: JsonObject]
   'timing-change': [draft: TimingDraft]
+  'apply-shape': [kind: ShapeEntryKind]
+  'resample': [samples: number]
+  'pick-from-slot': []
   save: []
   cancel: []
 }>()
@@ -170,6 +181,24 @@ function onResetS(): void {
   emit('timing-change', resetS(props.timingDraft))
 }
 
+// ── 12-10 曲线工具：形状入口 / 弧长重采样 / 九槽占位 ────────────────────────
+
+const shapeEntries = SHAPE_ENTRIES
+const resampleSampleCount = ref(props.resampleSamples ?? 8)
+
+function onApplyShape(kind: ShapeEntryKind): void {
+  emit('apply-shape', kind)
+}
+
+function onResample(): void {
+  const samples = Math.round(resampleSampleCount.value)
+  emit('resample', Number.isFinite(samples) ? samples : 8)
+}
+
+function onPickFromSlot(): void {
+  emit('pick-from-slot')
+}
+
 const geometryIssueMessages = computed(() => props.geometryIssues.map((issue) => issue.message))
 const timingIssueMessages = computed(() => props.timingIssues.map((issue) => issue.message))
 
@@ -243,6 +272,33 @@ function formatTime(value: number | null): string {
       </div>
 
       <div class="entry-editor__section">
+        <div class="entry-editor__row">
+          <span class="entry-editor__label">形状</span>
+          <button
+            v-for="entry in shapeEntries"
+            :key="entry.kind"
+            type="button"
+            class="entry-editor__button"
+            :disabled="props.disabled || !!props.shapeDisabledReason"
+            @click="onApplyShape(entry.kind)"
+          >
+            {{ entry.label }}
+          </button>
+          <button
+            type="button"
+            class="entry-editor__button"
+            :disabled="props.disabled || !!props.slotDisabledReason"
+            :title="props.slotDisabledReason ?? ''"
+            @click="onPickFromSlot"
+          >
+            从九槽取点
+          </button>
+        </div>
+        <p v-if="props.shapeDisabledReason" class="entry-editor__reason">{{ props.shapeDisabledReason }}</p>
+        <p v-if="props.slotDisabledReason" class="entry-editor__reason">{{ props.slotDisabledReason }}</p>
+      </div>
+
+      <div class="entry-editor__section">
         <h3 class="entry-editor__heading">几何</h3>
         <GeometryParamForm
           :model="props.model"
@@ -258,6 +314,27 @@ function formatTime(value: number | null): string {
 
       <div class="entry-editor__section">
         <h3 class="entry-editor__heading">时间映射</h3>
+        <div class="entry-editor__row">
+          <label class="entry-editor__label" for="resample-count">重采样点</label>
+          <input
+            id="resample-count"
+            class="entry-editor__input"
+            type="number"
+            min="2"
+            :max="TIMING_MAX_POINTS"
+            v-model.number="resampleSampleCount"
+            :disabled="props.disabled"
+          />
+          <button
+            type="button"
+            class="entry-editor__button"
+            :disabled="props.disabled"
+            @click="onResample"
+          >
+            按弧长重采样
+          </button>
+        </div>
+        <p class="entry-editor__note">预览为近似，最终以游戏播放为准。</p>
         <TimingEditor
           :draft="props.timingDraft"
           :issues="props.timingIssues"
@@ -404,6 +481,13 @@ function formatTime(value: number | null): string {
   flex: 1 1 100%;
   margin: 0;
   color: var(--warning);
+  font-size: 11px;
+}
+
+.entry-editor__note {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--text-muted);
   font-size: 11px;
 }
 

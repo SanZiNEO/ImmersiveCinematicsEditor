@@ -15,7 +15,16 @@ import {
   pointsToPath,
   type CanvasOptions,
   type ProjectionPair,
+  type ViewTransform,
 } from '../../../features/paths/previewCanvas.ts'
+
+/** 当次画布帧：真实宽高 + 正交变换 + 轴对（随拾取事件上抛给 picking 纯函数）。 */
+interface CanvasFrame {
+  width: number
+  height: number
+  transform: ViewTransform
+  pair: ProjectionPair
+}
 
 const props = defineProps<{
   model: PathPreviewModel | null
@@ -23,12 +32,17 @@ const props = defineProps<{
   space: 'world' | 'base'
   fromTime: number
   toTime: number
+  /** 控制点手柄是否可拾取（12-10）；false = 禁用并旁挂原因。 */
+  pickEnabled: boolean
+  pickReasons: readonly string[]
 }>()
 
 const emit = defineEmits<{
   push: []
   seek: [time: number]
   recomputeEndpoints: []
+  'control-focus': [controlIndex: number]
+  'control-pick': [controlIndex: number, point: { x: number; y: number }, frame: CanvasFrame]
 }>()
 
 const WIDTH = 320
@@ -60,6 +74,53 @@ const curvePath = computed(() => pointsToPath(geometry.value.curve, transform.va
 const controlPath = computed(() => geometry.value.controlPolygon === null
   ? ''
   : pointsToPath(geometry.value.controlPolygon, transform.value))
+
+/**
+ * 贝塞尔控制点手柄：控制多边形为 [from, cp0, cp1, to]，手柄取内点；
+ * 返回 control_points 数组下标与画布坐标。非贝塞尔 / 手柄不足时为空。
+ */
+const handles = computed<Array<{ controlIndex: number; point: { x: number; y: number } }>>(() => {
+  const polygon = geometry.value.controlPolygon
+  if (polygon === null || polygon.length < 3) {
+    return []
+  }
+  return polygon.slice(1, polygon.length - 1).map((point, innerIndex) => ({
+    controlIndex: innerIndex,
+    point: mapped(point),
+  }))
+})
+
+const dragHandle = ref<number | null>(null)
+
+function currentFrame(): CanvasFrame {
+  return { width: WIDTH, height: HEIGHT, transform: transform.value, pair: pair.value }
+}
+
+function onHandleDown(controlIndex: number, event: PointerEvent): void {
+  if (!props.pickEnabled) {
+    return
+  }
+  dragHandle.value = controlIndex
+  emit('control-focus', controlIndex)
+  const target = event.target as Element | null
+  target?.setPointerCapture?.(event.pointerId)
+}
+
+function onHandleUp(controlIndex: number, event: PointerEvent): void {
+  if (dragHandle.value !== controlIndex) {
+    return
+  }
+  dragHandle.value = null
+  const svg = (event.currentTarget as Element | null)?.closest('svg')
+  if (svg === null || svg === undefined) {
+    return
+  }
+  const rect = svg.getBoundingClientRect()
+  emit('control-pick', controlIndex, {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+  }, currentFrame())
+}
 
 function mapped(point: { x: number; y: number }): { x: number; y: number } {
   return applyTransform(point, transform.value)
@@ -103,6 +164,7 @@ const hiddenNote = computed(() => {
       <span class="preview-canvas__badge">{{ model?.anchorLabel ?? '无预览' }}</span>
       <span v-if="hiddenNote" class="preview-canvas__note">{{ hiddenNote }}</span>
       <span v-if="geometry.mode === '1d'" class="preview-canvas__note">一维图：横轴 u，纵轴 {{ geometry.verticalAxis }}</span>
+      <span class="preview-canvas__note">显示近似，实际以运行时为准</span>
     </div>
 
     <svg :viewBox="`0 0 ${WIDTH} ${HEIGHT}`" class="preview-canvas__svg" role="img" aria-label="路径预览画布">
@@ -111,6 +173,18 @@ const hiddenNote = computed(() => {
 
       <polyline v-if="controlPath" :points="controlPath" class="preview-canvas__control" />
       <path v-if="curvePath" :d="curvePath" class="preview-canvas__curve" />
+
+      <circle
+        v-for="handle in handles"
+        :key="handle.controlIndex"
+        :cx="handle.point.x"
+        :cy="handle.point.y"
+        r="5"
+        :class="['preview-canvas__handle', { 'is-disabled': !props.pickEnabled }]"
+        :aria-label="`控制点 ${handle.controlIndex + 1}`"
+        @pointerdown="onHandleDown(handle.controlIndex, $event)"
+        @pointerup="onHandleUp(handle.controlIndex, $event)"
+      />
 
       <line
         v-if="geometry.deviations.start > 1e-6"
@@ -153,6 +227,10 @@ const hiddenNote = computed(() => {
     <ul v-if="geometry.warnings.length > 0" class="preview-canvas__warnings">
       <li v-for="(warning, index) in geometry.warnings" :key="index">{{ warning }}</li>
     </ul>
+
+    <p v-if="!props.pickEnabled && props.pickReasons.length > 0" class="preview-canvas__pick-reason">
+      控制点不可拾取：{{ props.pickReasons.join('；') }}（请改用数值输入）
+    </p>
 
     <div class="preview-canvas__actions">
       <button type="button" class="preview-canvas__btn" @click="emit('push')">推送当前脚本</button>
@@ -240,6 +318,24 @@ const hiddenNote = computed(() => {
   fill: none;
   stroke: var(--accent);
   stroke-width: 2;
+}
+
+.preview-canvas__handle {
+  fill: var(--accent);
+  stroke: var(--bg-panel);
+  stroke-width: 1;
+  cursor: grab;
+}
+
+.preview-canvas__handle.is-disabled {
+  fill: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.preview-canvas__pick-reason {
+  margin: 4px 0 0;
+  color: var(--warning);
+  font-size: 11px;
 }
 
 .preview-canvas__deviation {
