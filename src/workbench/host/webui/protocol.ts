@@ -10,8 +10,14 @@ import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 /** 默认端点；token 通过查询串追加。 */
 export const WEBUI_DEFAULT_URL = 'ws://127.0.0.1:8765/ws'
 
-/** 断线重连间隔（与旧前端一致）。 */
+/** 断线重连初始间隔（退避基数）。 */
 export const WEBUI_RECONNECT_MS = 1500
+/** 退避基数：首次失败后等待的毫秒数。 */
+export const WEBUI_RECONNECT_BASE_MS = 1500
+/** 退避上限：两次自动重连之间最长等待。 */
+export const WEBUI_RECONNECT_MAX_MS = 15000
+/** 连续失败达到此次数后停止自动重连，等待用户显式重试。 */
+export const WEBUI_RECONNECT_MAX_ATTEMPTS = 8
 
 /** 消息类型常量（服务端权威）。 */
 export const WEBUI_MESSAGE = {

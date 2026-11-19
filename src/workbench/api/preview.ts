@@ -69,6 +69,10 @@ export interface PreviewServicePort {
   play(start?: number, end?: number): void
   pause(): void
   stop(): void
+  /** 只读连接状态与可读原因（可选；缺失时面板回落到 `connected()`）。 */
+  connection?(): { status: string; reason: string | null }
+  /** 显式重试连接（可选；退避停止/缺 token 后由用户触发）。 */
+  retry?(): void
 }
 
 /** 解析一帧；格式不对返回 `null`（丢弃，不抛异常）。 */

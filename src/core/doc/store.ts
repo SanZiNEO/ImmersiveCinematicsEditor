@@ -25,6 +25,7 @@ import {
 } from './identity.ts'
 import { isJsonObject } from './json.ts'
 import { parseDoc } from './parse.ts'
+import { validateResources, type ResourceExists } from './resources.ts'
 import { validateStructure } from './structural.ts'
 import {
   createDerivedState,
@@ -112,6 +113,9 @@ export class DocStore {
   private coalesceAt = 0
   private readonly coalesceWindowMs: number
   private readonly now: () => number
+  /** 资源存在性检查：资源根 + 注入的存在性解析器；缺省未配置 → 派生层如实跳过。 */
+  private resourceRoot: string | null = null
+  private resourceExists: ResourceExists | null = null
 
   constructor(options: DocStoreOptions) {
     this.catalog = options.catalog
@@ -195,6 +199,7 @@ export class DocStore {
     this.derived.serverIssuesStale = false
     this.derived.catalogIssues = []
     this.derived.previewStale = false
+    this.derived.resourceCheck = { checked: false, skippedReason: '未提供资源根，资源存在性未检查（不判定缺失）。' }
     this.undoStack = []
     this.redoStack = []
     this.dirtyFlag = false
@@ -256,6 +261,17 @@ export class DocStore {
       metaKeys: this.metaKeys,
       registry: this.registry,
     })
+  }
+
+  /**
+   * 配置资源存在性检查（13 轮）：资源根 `<workspace>/immersive_cinematics/resource`
+   * 与存在性解析器由宿主注入；`root=null` 或 `exists=null` 时派生层如实跳过、不判定缺失。
+   * 配置变更后立即重算本地 issue。
+   */
+  setResourceCheck(root: string | null, exists: ResourceExists | null): void {
+    this.resourceRoot = root
+    this.resourceExists = exists
+    this.recomputeDerived()
   }
 
   /**
@@ -613,11 +629,17 @@ export class DocStore {
       this.derived.infinite = false
       return
     }
-    this.derived.localIssues = validateStructure(doc, {
+    const structuralIssues = validateStructure(doc, {
       catalog: this.catalog,
       metaKeys: this.metaKeys,
       registry: this.registry,
     })
+    const resourceResult = validateResources(doc, this.resourceRoot, this.resourceExists)
+    this.derived.resourceCheck = {
+      checked: resourceResult.checked,
+      ...(resourceResult.skippedReason === undefined ? {} : { skippedReason: resourceResult.skippedReason }),
+    }
+    this.derived.localIssues = [...structuralIssues, ...resourceResult.issues]
     const content = deriveContent(doc)
     this.derived.contentEnd = content.contentEnd
     this.derived.infinite = content.infinite

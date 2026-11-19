@@ -88,8 +88,8 @@ const workbench = {
     scriptExists: (path) => ipcRenderer.invoke('workspace:script-exists', path),
   },
 
-  // WebUI 握手 token：主进程读 mod 写的 token 文件；每次连接都取新值。
-  webuiToken: () => ipcRenderer.sendSync('webui:token'),
+  // WebUI 握手 token：异步取（主进程每次重读 token 文件，支持令牌轮换）；返回 Promise。
+  webuiToken: () => ipcRenderer.invoke('webui:token'),
 }
 
 contextBridge.exposeInMainWorld('workbench', workbench)

@@ -14,6 +14,7 @@ import type { CatalogIndex } from '../../core/schema/index.ts'
 import { buildCatalog, indexCatalog } from '../../core/schema/index.ts'
 import type { DocTransport } from '../../core/doc/io.ts'
 import type { JsonValue } from '../../core/doc/types.ts'
+import type { ResourceExists } from '../../core/doc/resources.ts'
 import { cloneJson } from '../../core/doc/json.ts'
 import type { ValidationTransport } from '../../core/doc/validate.ts'
 import type { DiagnosticSink } from '../api/diagnostics.ts'
@@ -251,8 +252,8 @@ export class WorkbenchApp {
     })
 
     // WebUI 传输：Electron 宿主才有 token；浏览器 dev 也尝试连（Origin 会被服务端拒，属真实限制）。
-    const token = readBrowserToken()
-    const client = new WebUiClient({ token: () => token })
+    // token 不取闭包缓存：每次连接/重连前都重新调用 `readWebuiToken()`，令牌轮换后能读到新值。
+    const client = new WebUiClient({ token: readWebuiToken })
     this.client = client
     this.transport = new WebUiTransport({ client })
     this.resources = new ResourceServiceImpl({ client })
@@ -285,6 +286,7 @@ export class WorkbenchApp {
         void this.clearDrafts()
       },
     })
+    this.bindResourceCheck()
 
     this.mutations = new ScriptMutationService({
       source: scriptSource,
@@ -541,6 +543,39 @@ export class WorkbenchApp {
     })
   }
 
+  /**
+   * 绑定资源存在性检查（13 轮）：工作区根 → `<root>/resource`；
+   * 存在性解析器由资源清单（`resource.list('all')`）填充。根未设置或清单不可用
+   * （游戏未连接）时，store 派生层如实跳过、不判定缺失。
+   */
+  private bindResourceCheck(): void {
+    void (async () => {
+      let root: string | null = null
+      try {
+        root = await this.host.workspace.root()
+      } catch {
+        root = null
+      }
+      if (root === null) {
+        this.documents.store.setResourceCheck(null, null)
+        return
+      }
+      let exists: ResourceExists | null = null
+      try {
+        const all = await this.resources.list('all')
+        if ('files' in all) {
+          const files = new Set(
+            all.files.map((file) => file.replace(/\\/g, '/').toLowerCase()),
+          )
+          exists = (relative) => files.has(relative.replace(/\\/g, '/').toLowerCase())
+        }
+      } catch {
+        exists = null
+      }
+      this.documents.store.setResourceCheck(exists === null ? null : `${root}/resource`, exists)
+    })()
+  }
+
   private async writeDraft(payload: string, revision: number): Promise<void> {
     const summary = this.documents.summary()
     if (summary.docId === null) {
@@ -583,11 +618,22 @@ function safeParse(text: string): unknown {
   }
 }
 
-function readBrowserToken(): string {
-  // Electron：preload 桥由主进程同步读 token 文件；浏览器 dev：URL 查询串携带。
+/**
+ * 每次连接/重连前重新取 token：
+ * Electron 走 preload 桥（异步读 token 文件，支持轮换）；浏览器 dev 回落到 URL 查询串。
+ * 取不到返回空串，由客户端如实显示「缺少 token」，不伪造令牌。
+ */
+async function readWebuiToken(): Promise<string> {
   const bridge = typeof window !== 'undefined' ? window.workbench : undefined
-  const fromBridge = bridge?.webuiToken?.()
-  if (typeof fromBridge === 'string' && fromBridge.trim().length > 0) return fromBridge.trim()
+  if (bridge?.webuiToken !== undefined) {
+    try {
+      const value = await bridge.webuiToken()
+      if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+    } catch {
+      // 落到 URL 查询串；仍为空则按无 token 处理。
+    }
+  }
+  if (typeof window === 'undefined') return ''
   const params = new URLSearchParams(window.location.search)
   return params.get('token') ?? ''
 }

@@ -1,5 +1,6 @@
 /**
- * 本地结构检查 L01–L34（03-06）。
+ * 本地结构检查 L01–L34（03-06）；13 轮补充 L91（同轨字幕重叠）、L92（资源存在性，
+ * 由 `resources.ts` 独立检查挂载到同一本地链路）、L93（OVERLAY 字段错层适用性）。
  *
  * 分层原则：本地只查「文档结构对不对」，不判世界状态、不复刻 parser 的语义求值；
  * 语义以服务端 `script.validate` 为权威。
@@ -48,6 +49,11 @@ import {
   triggerTimingIssues,
 } from '../../features/behavior/trigger.ts'
 import { validateTriggerConditions } from '../../features/behavior/triggerConditions.ts'
+import {
+  isOverlayLayerType,
+  isOverlayFieldApplicable,
+  type OverlayLayerType,
+} from '../../features/overlay/layers.ts'
 import {
   requirementEntries,
   resolveRequirement,
@@ -519,6 +525,7 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
       add('block', 'L08', '轨道 clips 缺失或不是数组', memberPath(trackPath, 'clips'))
       continue
     }
+    const trackContexts: ClipContext[] = []
     for (let clipIndexInTrack = 0; clipIndexInTrack < clips.length; clipIndexInTrack += 1) {
       const clipPath = `${trackPath}.clips[${clipIndexInTrack}]`
       const context = readClipInto(clips[clipIndexInTrack], true, type, clipPath, ctx, issues)
@@ -528,6 +535,7 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
       if (PINGPONG_REJECT_TRACKS.has(type) && readLoopMode(clips[clipIndexInTrack]) === 'pingpong') {
         add(severityForContract('L85'), 'L85', `${type} 轨道不支持 pingpong（该轨没有反向时间语义）`, memberPath(clipPath, 'loop_mode'))
       }
+      trackContexts.push(context)
       clipContexts.push(context)
       const id = clipIdOf(context.clip)
       if (id !== undefined) {
@@ -542,6 +550,7 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
         }
       }
     }
+    checkSubtitleOverlap(trackContexts, add)
   }
 
   // ── L09 / L18：独立片段 ──────────────────────────────────────────────────
@@ -549,6 +558,7 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
   if (standalone !== undefined && !Array.isArray(standalone)) {
     add('block', 'L09', 'clips 需要数组（脚本级独立片段表）', 'clips')
   } else if (Array.isArray(standalone)) {
+    const standaloneContexts: ClipContext[] = []
     for (let index = 0; index < standalone.length; index += 1) {
       const clipPath = `clips[${index}]`
       const raw = standalone[index]
@@ -561,6 +571,7 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
       if (context === undefined) {
         continue
       }
+      standaloneContexts.push(context)
       clipContexts.push(context)
       const id = clipIdOf(context.clip)
       if (id !== undefined) {
@@ -575,6 +586,7 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
         }
       }
     }
+    checkSubtitleOverlap(standaloneContexts, add)
   }
 
   // ── L20 / L21 / L22 / L24：CAMERA 语义、requires、参考系切换对齐 ────────────
@@ -587,6 +599,7 @@ export function validateStructure(doc: ScriptDoc, ctx: StructuralContext): DocIs
     if (context.trackType === 'ADJUST') {
       checkAdjustSemantics(context, add)
     }
+    checkOverlayFieldApplicability(context, ctx, add)
   }
 
   // ── L25–L28 / L33：paths[] ───────────────────────────────────────────────
@@ -1437,6 +1450,122 @@ function checkCameraSemantics(
         objectPath: 'zoom',
       })
     }
+  }
+}
+
+/** 片段是否为 OVERLAY 字幕层（`layer_type=subtitle`，取 t=0 有效值）。 */
+function isSubtitleClip(context: ClipContext): boolean {
+  if (context.trackType !== 'OVERLAY') {
+    return false
+  }
+  const property = context.shape.objects.layer_type
+  if (property === undefined) {
+    return false
+  }
+  let token = 'fade'
+  const frames = property.keyframes ?? []
+  if (frames.length > 0) {
+    token = tokenOf(frames[0].value)
+  } else if (Object.prototype.hasOwnProperty.call(property, 'value')) {
+    token = tokenOf(property.value)
+  }
+  return token === 'subtitle'
+}
+
+/**
+ * 同轨字幕片段 `[start,end)` 重叠 → block L91。
+ *
+ * 只比对传入的同一轨道内片段（跨轨重叠由调用方分组隔离，不在此误报）；
+ * 半开区间，端点相接不算重叠。issue 定位到后出现片段的 `start_time`。
+ */
+function checkSubtitleOverlap(
+  contexts: readonly ClipContext[],
+  add: (severity: Severity, code: string, message: string, jsonPath: string, extra?: IssueExtra) => void,
+): void {
+  const subtitles = contexts.filter(isSubtitleClip)
+  for (let later = 0; later < subtitles.length; later += 1) {
+    const right = subtitles[later]
+    const rightStart = right.shape.startTime ?? 0
+    const rightEnd = right.shape.duration < 0 ? Number.POSITIVE_INFINITY : rightStart + right.shape.duration
+    for (let earlier = 0; earlier < later; earlier += 1) {
+      const left = subtitles[earlier]
+      const leftStart = left.shape.startTime ?? 0
+      const leftEnd = left.shape.duration < 0 ? Number.POSITIVE_INFINITY : leftStart + left.shape.duration
+      const overlapStart = Math.max(leftStart, rightStart)
+      const overlapEnd = Math.min(leftEnd, rightEnd)
+      if (overlapEnd - overlapStart <= 1e-9) {
+        continue
+      }
+      const leftLabel = left.shape.id ?? left.jsonPath
+      add(
+        'block',
+        'L91',
+        `同轨字幕片段重叠：与片段「${leftLabel}」在 ${overlapStart.toFixed(3)}–${overlapEnd.toFixed(3)}s 区间重叠（同轨字幕必须分轨）`,
+        memberPath(right.jsonPath, 'start_time'),
+        {
+          ...(right.clipKey === undefined ? {} : { clipKey: right.clipKey }),
+          objectPath: 'layer_type',
+        },
+      )
+    }
+  }
+}
+
+/** 取 OVERLAY 片段 t=0 生效层类型；非 OVERLAY 或 layer_type 非法返回 null（非法枚举另由 def 校验报）。 */
+function effectiveOverlayLayerType(context: ClipContext): OverlayLayerType | null {
+  if (context.trackType !== 'OVERLAY') {
+    return null
+  }
+  const property = context.shape.objects.layer_type
+  let token = 'fade'
+  if (property !== undefined) {
+    const frames = property.keyframes ?? []
+    if (frames.length > 0) {
+      token = tokenOf(frames[0].value)
+    } else if (Object.prototype.hasOwnProperty.call(property, 'value')) {
+      token = tokenOf(property.value)
+    }
+  }
+  return isOverlayLayerType(token) ? token : null
+}
+
+/**
+ * L93：OVERLAY 片段写了当前层类型字段面之外的已登记对象路径 → block。
+ *
+ * 字段面矩阵与 `features/overlay/layers.ts` 的 `OVERLAY_FIELD_PATHS` 同源；未登记路径
+ * 仍由 readClip 的 L34 拦截，本检查只覆盖「已登记但不适用于当前 layer_type」
+ * （09-01 §4.4：字段存在但当前层类型不在适用范围 → 拦截，定位到 objects.<字段>）。
+ */
+function checkOverlayFieldApplicability(
+  context: ClipContext,
+  ctx: StructuralContext,
+  add: (severity: Severity, code: string, message: string, jsonPath: string, extra?: IssueExtra) => void,
+): void {
+  const layerType = effectiveOverlayLayerType(context)
+  if (layerType === null) {
+    return
+  }
+  const objectsPath = memberPath(context.jsonPath, 'objects')
+  for (const path of Object.keys(context.shape.objects)) {
+    if (path === 'layer_type') {
+      continue
+    }
+    if (ctx.catalog.objectDef(context.trackType, path) === undefined) {
+      continue // 未登记路径由 L34 拦截，不在此重复报
+    }
+    if (isOverlayFieldApplicable(layerType, path)) {
+      continue
+    }
+    add(
+      'block',
+      'L93',
+      `字段 ${path} 不适用于 ${layerType} 层（该层运行时不读取）`,
+      memberPath(objectsPath, path),
+      {
+        ...(context.clipKey === undefined ? {} : { clipKey: context.clipKey }),
+        objectPath: path,
+      },
+    )
   }
 }
 

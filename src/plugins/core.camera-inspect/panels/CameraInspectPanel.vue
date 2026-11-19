@@ -369,29 +369,61 @@ const OFF = (): void => undefined
 let stopPreviewSubscription: () => void = OFF
 let receiptTimer: ReturnType<typeof setTimeout> | undefined
 
+// 预览读数节流：播放中 `subscribe` 随帧/状态高频触发，这里只保留最新一份回执，
+// 按 125ms 合并刷新；连接状态跳变属于必须立刻可见的变化，立即应用。
+const PREVIEW_FLUSH_MS = 125
+let previewFlushTimer: ReturnType<typeof setTimeout> | undefined
+let pendingReport: PlaybackReport | null = null
+let lastConnected: boolean | null = null
+
+function flushPreviewReport(): void {
+  previewFlushTimer = undefined
+  const report = pendingReport
+  pendingReport = null
+  if (report === null || previewService === null) return
+  serverState.value = report
+  playback.value = applyReport(playback.value, report)
+  playback.value = applyConnection(playback.value, previewService.connected())
+  if (receiptTimer !== undefined) {
+    clearTimeout(receiptTimer)
+    receiptTimer = undefined
+  }
+}
+
+function schedulePreviewReport(): void {
+  if (previewService === null) return
+  const report = previewService.playback()
+  pendingReport = report
+  const connectedNow = previewService.connected()
+  if (lastConnected !== null && connectedNow !== lastConnected) {
+    lastConnected = connectedNow
+    flushPreviewReport()
+    return
+  }
+  lastConnected = connectedNow
+  if (previewFlushTimer !== undefined) return
+  previewFlushTimer = setTimeout(flushPreviewReport, PREVIEW_FLUSH_MS)
+}
+
 /** 只在回放 tab 激活时订阅播放状态；切走取消订阅但不停止播放。 */
 function subscribePreview(): void {
   if (previewService === null || stopPreviewSubscription !== OFF) {
     return
   }
+  lastConnected = previewService.connected()
   stopPreviewSubscription = previewService.subscribe(() => {
-    const report = previewService === null ? null : previewService.playback()
-    if (report === null) {
-      return
-    }
-    serverState.value = report
-    playback.value = applyReport(playback.value, report)
-    playback.value = applyConnection(playback.value, previewService !== null && previewService.connected())
-    if (receiptTimer !== undefined) {
-      clearTimeout(receiptTimer)
-      receiptTimer = undefined
-    }
+    schedulePreviewReport()
   })
 }
 
 function unsubscribePreview(): void {
   stopPreviewSubscription()
   stopPreviewSubscription = OFF
+  if (previewFlushTimer !== undefined) {
+    clearTimeout(previewFlushTimer)
+    previewFlushTimer = undefined
+  }
+  pendingReport = null
 }
 
 watch(
@@ -575,6 +607,10 @@ onBeforeUnmount(() => {
   if (receiptTimer !== undefined) {
     clearTimeout(receiptTimer)
     receiptTimer = undefined
+  }
+  if (previewFlushTimer !== undefined) {
+    clearTimeout(previewFlushTimer)
+    previewFlushTimer = undefined
   }
 })
 

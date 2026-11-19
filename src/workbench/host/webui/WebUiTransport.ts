@@ -16,6 +16,7 @@ import type { ServerValidateResult, ValidationTransport } from '../../../core/do
 import type { PlaybackState, PreviewFrame, PreviewServicePort, PreviewStats } from '../../api/preview.ts'
 import { parsePreviewFrame } from '../../api/preview.ts'
 import { WebUiClient } from './WebUiClient.ts'
+import type { WebUiConnectionInfo } from './WebUiClient.ts'
 import { WEBUI_MESSAGE } from './protocol.ts'
 
 export interface WebUiTransportOptions {
@@ -159,6 +160,16 @@ export class WebUiTransport implements DocTransport, ValidationTransport, Previe
 
   connected(): boolean {
     return this.client.connected()
+  }
+
+  /** 只读连接状态与可读原因（13 轮新增；缺失时面板回落到 `connected()`）。 */
+  connection(): WebUiConnectionInfo {
+    return this.client.connection()
+  }
+
+  /** 显式重试连接（退避到上限/缺 token 后由用户触发）。 */
+  retry(): void {
+    this.client.retry()
   }
 
   stats(): PreviewStats | null {

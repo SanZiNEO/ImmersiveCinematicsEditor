@@ -8,7 +8,8 @@ files:
   - package.json
 asar: true
 compression: maximum
-electronDist: E:\Documents\GitHub\liveget\app\node_modules\electron\dist
+# Electron 运行时走本地依赖解析（node_modules/electron/dist），不写死构建机绝对路径；
+# 如需本机覆盖，可用命令行 `--config.electronDist=<路径>` 传入，覆盖配置不入包。
 electronLanguages:
   - zh-CN
   - en-US

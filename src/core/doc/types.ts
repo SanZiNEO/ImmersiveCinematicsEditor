@@ -24,7 +24,7 @@ export type Severity = (typeof SEVERITIES)[number]
 
 /** 一条文档 issue；定位一律用 `jsonPath` + 可选的片段 / 对象 / 关键帧三元组。 */
 export interface DocIssue {
-  /** L01–L34 本地结构检查编号，或 `E_*` / `S_*` 的其它来源。 */
+  /** L01–L34 本地结构检查编号；13 轮补充 L91（同轨字幕重叠）、L92（资源存在性）；或 `E_*` / `S_*` 的其它来源。 */
   code: string
   severity: Severity
   message: string
@@ -155,6 +155,16 @@ export interface DerivedState {
   catalogIssues: DocIssue[]
   /** 预览推送状态。 */
   previewStale: boolean
+  /** 资源存在性检查状态；未提供资源根 / 解析器时为未检查（不判定缺失）。 */
+  resourceCheck: ResourceCheckState
+}
+
+/** 资源存在性检查的派生状态（不含 issue 本体，issue 进 `localIssues`）。 */
+export interface ResourceCheckState {
+  /** 是否真正做了存在性检查；`false` = 已跳过。 */
+  checked: boolean
+  /** 跳过时说明未检查的原因；检查时为空。 */
+  skippedReason?: string
 }
 
 /** transport 层：连接、请求计数、预览帧。 */
@@ -201,6 +211,7 @@ export function createDerivedState(): DerivedState {
     catalogHash: null,
     catalogIssues: [],
     previewStale: false,
+    resourceCheck: { checked: false, skippedReason: '未提供资源根，资源存在性未检查（不判定缺失）。' },
   }
 }
 

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, screen, session, shell } = require('electron')
 const crypto = require('crypto')
 const fs = require('fs')
+const fsp = require('node:fs/promises')
 const os = require('os')
 const path = require('path')
 const { fileURLToPath } = require('url')
@@ -81,9 +82,14 @@ function webuiTokenFile() {
   return path.join(os.homedir(), '.immersivecinematics', 'webui-token')
 }
 
-function readWebuiToken() {
+/**
+ * WebUI 握手 token：异步读文件（游戏重启会轮换 token，每次连接前重新取）。
+ * 读不到返回空串，由渲染层如实显示「缺少 token」，不伪造令牌。
+ */
+async function readWebuiToken() {
   try {
-    return fs.readFileSync(webuiTokenFile(), 'utf8').trim()
+    const text = await fsp.readFile(webuiTokenFile(), 'utf8')
+    return text.trim()
   } catch {
     return ''
   }
@@ -148,7 +154,9 @@ function clampInside(bounds, area) {
 }
 
 /**
- * 原子写：tmp + rename。
+ * 同步原子写（**仅保留给窗口状态 `window-state.json`**：防抖保存 + 关闭 flush，
+ * 单文件、KB 级、不在脚本/资源热路径上）。其余 IPC 文件读写一律用
+ * `atomicWriteTextAsync` / `fsp` 异步版本。
  *
  * **不生成 `.bak`**：工作区脚本可能有上万个，逐个备份既浪费空间又拖慢写入；
  * 版本历史交给 git（工作区本身就是仓库），损坏文件另有 `quarantineCorrupt` 单独处理。
@@ -173,6 +181,50 @@ function writeJsonAtomic(file, value) {
   atomicWriteText(file, JSON.stringify(value, null, 2))
 }
 
+/** 异步原子写（IPC 热路径用；不生成 `.bak`，版本历史交给 git）。 */
+async function atomicWriteTextAsync(file, text) {
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  try {
+    await fsp.writeFile(tmp, text, 'utf8')
+    await fsp.rename(tmp, file)
+  } catch (error) {
+    try {
+      await fsp.unlink(tmp)
+    } catch {
+      // ignore
+    }
+    throw error
+  }
+}
+
+async function writeJsonAtomicAsync(file, value) {
+  await atomicWriteTextAsync(file, JSON.stringify(value, null, 2))
+}
+
+/**
+ * 有界并发映射：一次 `Promise.all` 可能对上万个文件打爆文件句柄与事件循环，
+ * 这里用固定数量的 worker 消费队列，结果按原顺序回传。
+ */
+async function mapBounded(items, limit, fn) {
+  const out = new Array(items.length)
+  let cursor = 0
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      const index = cursor++
+      if (index >= items.length) return
+      out[index] = await fn(items[index], index)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+/** 脚本 stat 并发上限（增量扫描热路径）。 */
+const SCRIPT_STAT_CONCURRENCY = 16
+/** 目录遍历中每收集多少条目让出一次事件循环，避免长递归阻塞主进程。 */
+const WALK_YIELD_BUDGET = 64
+
 // ── 工作区（<gameDir>/immersive_cinematics）───────────────
 //
 // 编辑器直接读写这里的脚本与资源，不经模组 WebSocket：
@@ -189,13 +241,13 @@ function workspaceRootFile() {
 }
 
 /** 工作区根：显式设置过的优先；E2E 可用 `IC_EDITOR_WORKSPACE` 直接指定。 */
-function readWorkspaceRoot() {
+async function readWorkspaceRoot() {
   const override = process.env.IC_EDITOR_WORKSPACE
   if (typeof override === 'string' && override.trim() !== '') {
     return override.trim()
   }
   try {
-    const raw = JSON.parse(fs.readFileSync(workspaceRootFile(), 'utf8'))
+    const raw = JSON.parse(await fsp.readFile(workspaceRootFile(), 'utf8'))
     const root = typeof raw?.root === 'string' ? raw.root.trim() : ''
     return root === '' ? null : root
   } catch {
@@ -233,14 +285,15 @@ function scriptAbsolutePath(root, relativePath) {
   return full
 }
 
-/** 递归列出脚本相对路径（跳过隐藏目录与 .bak/.tmp）。 */
-function listScriptFiles(root) {
+/** 递归列出脚本相对路径（跳过隐藏目录与 .bak/.tmp）；异步遍历，分批让出事件循环。 */
+async function listScriptFiles(root) {
   const base = scriptsDirOf(root)
   const out = []
-  const walk = (dir, prefix) => {
+  let yieldBudget = 0
+  const walk = async (dir, prefix) => {
     let entries
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true })
+      entries = await fsp.readdir(dir, { withFileTypes: true })
     } catch {
       return
     }
@@ -249,36 +302,46 @@ function listScriptFiles(root) {
       if (name.startsWith('.')) continue
       const relative = prefix === '' ? name : `${prefix}/${name}`
       if (entry.isDirectory()) {
-        walk(path.join(dir, name), relative)
+        await walk(path.join(dir, name), relative)
         continue
       }
       if (!entry.isFile()) continue
       if (!name.toLowerCase().endsWith('.json')) continue
       if (name.endsWith('.bak') || name.includes('.tmp-')) continue
       out.push(relative)
+      yieldBudget += 1
+      if (yieldBudget >= WALK_YIELD_BUDGET) {
+        yieldBudget = 0
+        await Promise.resolve()
+      }
     }
   }
-  walk(base, '')
+  await walk(base, '')
   out.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
   return out
 }
 
-/** 脚本指纹（`mtime:size`）；增量扫描用。 */
-function scriptStamps(root) {
-  const stamps = {}
-  for (const relative of listScriptFiles(root)) {
+/** 脚本指纹（`mtime:size`）；增量扫描用。stat 有界并发，不一次性 `Promise.all` 上万个。 */
+async function scriptStamps(root) {
+  const files = await listScriptFiles(root)
+  const pairs = await mapBounded(files, SCRIPT_STAT_CONCURRENCY, async (relative) => {
     try {
-      const stat = fs.statSync(scriptAbsolutePath(root, relative))
-      stamps[relative] = `${Math.round(stat.mtimeMs)}:${stat.size}`
+      const stat = await fsp.stat(scriptAbsolutePath(root, relative))
+      return [relative, `${Math.round(stat.mtimeMs)}:${stat.size}`]
     } catch {
       // 扫描与 stat 之间被删掉：当作不存在，下次扫描自然消失。
+      return null
     }
+  })
+  const stamps = {}
+  for (const pair of pairs) {
+    if (pair !== null) stamps[pair[0]] = pair[1]
   }
   return stamps
 }
 
-function requireWorkspaceRoot() {
-  const root = readWorkspaceRoot()
+async function requireWorkspaceRoot() {
+  const root = await readWorkspaceRoot()
   if (root === null) throw new Error('工作区未设置：请先选择游戏目录')
   return root
 }
@@ -345,12 +408,12 @@ function isInsidePath(parent, child) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
-function isShellPathAllowed(target) {
+async function isShellPathAllowed(target) {
   if (isInsidePath(userDataDir(), target)) return true
   for (const approved of approvedShellPaths) {
     if (target === approved || isInsidePath(approved, target)) return true
     try {
-      const stat = fs.statSync(approved)
+      const stat = await fsp.stat(approved)
       if (stat.isFile() && path.dirname(approved) === target) return true
     } catch {
       // ignore
@@ -654,44 +717,53 @@ function isAuxiliaryName(fileName) {
   return fileName.endsWith('.bak') || fileName.includes('.tmp-') || fileName.includes('.corrupt-')
 }
 
-function walkFiles(dir, base, out) {
+async function walkFiles(dir, base, out) {
   let entries
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true })
+    entries = await fsp.readdir(dir, { withFileTypes: true })
   } catch {
     return
   }
   for (const entry of entries) {
     const relative = base === '' ? entry.name : `${base}/${entry.name}`
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) walkFiles(full, relative, out)
+    if (entry.isDirectory()) await walkFiles(full, relative, out)
     else if (entry.isFile()) out.push(relative)
   }
 }
 
-function listStorageNames(rawPrefix, corruptOnly) {
+async function storageEntryExists(target) {
+  try {
+    await fsp.stat(target)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function listStorageNames(rawPrefix, corruptOnly) {
   const prefix = normalizeStoragePrefix(rawPrefix)
   if (prefix === null) throw new Error(`storage: 非法前缀 ${String(rawPrefix)}`)
   const root = userDataDir()
   const files = []
   if (prefix === '') {
     for (const file of STORAGE_ROOT_FILES) {
-      if (fs.existsSync(path.join(root, file))) files.push(file)
+      if (await storageEntryExists(path.join(root, file))) files.push(file)
     }
     for (const namespace of STORAGE_NAMESPACES) {
-      walkFiles(path.join(root, namespace), namespace, files)
+      await walkFiles(path.join(root, namespace), namespace, files)
     }
   } else if (STORAGE_ROOT_FILES.has(prefix)) {
-    if (fs.existsSync(path.join(root, prefix))) files.push(prefix)
+    if (await storageEntryExists(path.join(root, prefix))) files.push(prefix)
   } else {
     const full = storagePathOf(prefix)
     let stat = null
     try {
-      stat = fs.statSync(full)
+      stat = await fsp.stat(full)
     } catch {
       stat = null
     }
-    if (stat !== null && stat.isDirectory()) walkFiles(full, prefix, files)
+    if (stat !== null && stat.isDirectory()) await walkFiles(full, prefix, files)
     else if (stat !== null && stat.isFile()) files.push(prefix)
   }
   const filtered = files.filter((name) => {
@@ -715,10 +787,10 @@ function isValidDraftId(draftId) {
   return typeof draftId === 'string' && DRAFT_ID_PATTERN.test(draftId)
 }
 
-function countDraftFiles() {
+async function countDraftFiles() {
   let entries
   try {
-    entries = fs.readdirSync(draftDir(), { withFileTypes: true })
+    entries = await fsp.readdir(draftDir(), { withFileTypes: true })
   } catch {
     return 0
   }
@@ -747,12 +819,12 @@ function normalizeDraftRecord(raw) {
   return record
 }
 
-function readDraftRecord(draftId) {
+async function readDraftRecord(draftId) {
   if (!isValidDraftId(draftId)) return null
   const file = draftFilePath(draftId)
   let text
   try {
-    text = fs.readFileSync(file, 'utf8')
+    text = await fsp.readFile(file, 'utf8')
   } catch {
     return null
   }
@@ -766,23 +838,25 @@ function readDraftRecord(draftId) {
   return normalizeDraftRecord(parsed)
 }
 
-function listDraftSummaries() {
+async function listDraftSummaries() {
   let entries
   try {
-    entries = fs.readdirSync(draftDir(), { withFileTypes: true })
+    entries = await fsp.readdir(draftDir(), { withFileTypes: true })
   } catch {
     return []
   }
-  const summaries = []
+  const draftIds = []
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.json') || isAuxiliaryName(entry.name)) continue
     const draftId = entry.name.slice(0, -'.json'.length)
-    if (!isValidDraftId(draftId)) continue
-    const record = readDraftRecord(draftId)
-    if (record === null) continue
+    if (isValidDraftId(draftId)) draftIds.push(draftId)
+  }
+  const records = await mapBounded(draftIds, SCRIPT_STAT_CONCURRENCY, async (draftId) => {
+    const record = await readDraftRecord(draftId)
+    if (record === null) return null
     let bytes = 0
     try {
-      bytes = fs.statSync(draftFilePath(draftId)).size
+      bytes = (await fsp.stat(draftFilePath(draftId))).size
     } catch {
       bytes = 0
     }
@@ -795,13 +869,14 @@ function listDraftSummaries() {
       bytes,
     }
     if (record.sourcePath !== undefined) summary.sourcePath = record.sourcePath
-    summaries.push(summary)
-  }
+    return summary
+  })
+  const summaries = records.filter((summary) => summary !== null)
   summaries.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))
   return summaries
 }
 
-function writeDraftRecord(raw) {
+async function writeDraftRecord(raw) {
   const record = normalizeDraftRecord(raw)
   if (record === null) throw new Error('drafts: 记录格式错误')
   const file = draftFilePath(record.draftId)
@@ -809,16 +884,17 @@ function writeDraftRecord(raw) {
   if (Buffer.byteLength(serialized, 'utf8') > DRAFT_MAX_BYTES) {
     throw new Error('drafts: 单条草稿超过 5 MB，拒绝写入')
   }
-  if (!fs.existsSync(file) && countDraftFiles() >= DRAFT_MAX_COUNT) {
+  const exists = await storageEntryExists(file)
+  if (!exists && await countDraftFiles() >= DRAFT_MAX_COUNT) {
     throw new Error('drafts: 草稿数量已达上限 50 条，拒绝新增')
   }
-  writeJsonAtomic(file, record)
+  await writeJsonAtomicAsync(file, record)
 }
 
-function removeDraftRecord(draftId) {
+async function removeDraftRecord(draftId) {
   if (!isValidDraftId(draftId)) return
   try {
-    fs.unlinkSync(draftFilePath(draftId))
+    await fsp.unlink(draftFilePath(draftId))
   } catch (error) {
     if (error && error.code !== 'ENOENT') throw error
   }
@@ -1076,12 +1152,16 @@ function createWindow() {
 // ── IPC 注册 ────────────────────────────────────────────────
 
 function registerIpcHandlers() {
-  // WebUI 握手 token：同步读取（游戏重启会轮换 token）。
-  ipcMain.on('webui:token', (event) => {
-    event.returnValue = isMainSender(event) ? readWebuiToken() : ''
+  // WebUI 握手 token：异步读文件（游戏重启会轮换 token，每次连接/重连前由渲染层重新取）。
+  ipcMain.handle('webui:token', async (event) => {
+    if (!isMainSender(event)) return ''
+    return readWebuiToken()
   })
 
-  // 启动主题缓存：preload 同步取一次，用于首屏无白闪。
+  // 启动主题缓存：**这是全主进程唯一保留的同步 IPC**。
+  // 理由（04-09 合同）：preload 在页面脚本执行前同步取一次主题缓存，
+  // 让首屏底色在窗口显示前就应用上，避免白闪；只读一个小 JSON 文件，仅启动一次，
+  // 不落在任何频繁调用的热路径上。除这里之外，其余文件读写一律走 `fs.promises` 异步版本。
   ipcMain.on('theme:initial', (event) => {
     event.returnValue = isMainSender(event) ? readThemeCache() : null
   })
@@ -1198,11 +1278,12 @@ function registerIpcHandlers() {
 
   handleMain('files:read-text', async (targetPath) => {
     if (typeof targetPath !== 'string' || !targetPath.toLowerCase().endsWith('.json')) return null
-    if (!isShellPathAllowed(path.resolve(targetPath))) return null
+    const resolved = path.resolve(targetPath)
+    if (!(await isShellPathAllowed(resolved))) return null
     try {
-      const stat = fs.statSync(targetPath)
+      const stat = await fsp.stat(resolved)
       if (!stat.isFile() || stat.size > 256 * 1024) return null
-      return fs.readFileSync(targetPath, 'utf8')
+      return await fsp.readFile(resolved, 'utf8')
     } catch {
       return null
     }
@@ -1232,7 +1313,7 @@ function registerIpcHandlers() {
     } catch {
       return { status: 'rejected', reason: 'extension' }
     }
-    if (!isShellPathAllowed(resolved)) {
+    if (!(await isShellPathAllowed(resolved))) {
       return { status: 'rejected', reason: 'extension' }
     }
     const ext = path.extname(resolved).toLowerCase()
@@ -1241,7 +1322,7 @@ function registerIpcHandlers() {
     }
     let stat
     try {
-      stat = fs.statSync(resolved)
+      stat = await fsp.stat(resolved)
     } catch {
       return { status: 'rejected', reason: 'not-a-file' }
     }
@@ -1253,7 +1334,7 @@ function registerIpcHandlers() {
     }
     let bytes
     try {
-      bytes = fs.readFileSync(resolved)
+      bytes = await fsp.readFile(resolved)
     } catch {
       return { status: 'rejected', reason: 'not-a-file' }
     }
@@ -1292,7 +1373,7 @@ function registerIpcHandlers() {
   })
 
   // ── shell（白名单） ─────────────────────────────────────
-  onMain('shell:show-item-in-folder', (target) => {
+  onMain('shell:show-item-in-folder', async (target) => {
     if (typeof target !== 'string' || target.length === 0) return
     let resolved
     try {
@@ -1300,8 +1381,8 @@ function registerIpcHandlers() {
     } catch {
       return
     }
-    if (!isShellPathAllowed(resolved)) return
-    if (!fs.existsSync(resolved)) return
+    if (!(await isShellPathAllowed(resolved))) return
+    if (!(await storageEntryExists(resolved))) return
     shell.showItemInFolder(resolved)
   })
 
@@ -1318,13 +1399,13 @@ function registerIpcHandlers() {
   })
 
   // ── 草稿 ────────────────────────────────────────────────
-  handleMain('drafts:list', () => listDraftSummaries())
-  handleMain('drafts:read', (draftId) => readDraftRecord(draftId))
-  handleMain('drafts:write', (record) => {
-    writeDraftRecord(record)
+  handleMain('drafts:list', async () => listDraftSummaries())
+  handleMain('drafts:read', async (draftId) => readDraftRecord(draftId))
+  handleMain('drafts:write', async (record) => {
+    await writeDraftRecord(record)
   })
-  handleMain('drafts:remove', (draftId) => {
-    removeDraftRecord(draftId)
+  handleMain('drafts:remove', async (draftId) => {
+    await removeDraftRecord(draftId)
   })
 
   // ── 菜单同步（macOS native menu；其他平台只存快照） ───────
@@ -1355,34 +1436,30 @@ function registerIpcHandlers() {
     return text
   })
 
-  handleMain('storage:write', (name, text) => {
+  handleMain('storage:write', async (name, text) => {
     const normalized = normalizeStorageName(name)
     if (normalized === null) throw new Error(`storage: 非法文件名 ${String(name)}`)
     if (typeof text !== 'string') throw new Error('storage: 内容必须是字符串')
-    atomicWriteText(storagePathOf(normalized), text)
+    await atomicWriteTextAsync(storagePathOf(normalized), text)
   })
 
-  handleMain('storage:remove', (name) => {
+  handleMain('storage:remove', async (name) => {
     const normalized = normalizeStorageName(name)
     if (normalized === null) throw new Error(`storage: 非法文件名 ${String(name)}`)
     try {
-      fs.unlinkSync(storagePathOf(normalized))
+      await fsp.unlink(storagePathOf(normalized))
     } catch (error) {
       if (error && error.code !== 'ENOENT') throw error
     }
   })
 
-  handleMain('storage:list', (prefix) => listStorageNames(prefix, false))
-  handleMain('storage:list-corrupt', (prefix) => listStorageNames(prefix, true))
+  handleMain('storage:list', async (prefix) => listStorageNames(prefix, false))
+  handleMain('storage:list-corrupt', async (prefix) => listStorageNames(prefix, true))
 
   // 最近项目 missing 探测：只读布尔，不返回内容；相对路径一律 false。
-  handleMain('storage:exists', (target) => {
+  handleMain('storage:exists', async (target) => {
     if (typeof target !== 'string' || !path.isAbsolute(target)) return false
-    try {
-      return fs.existsSync(target)
-    } catch {
-      return false
-    }
+    return storageEntryExists(target)
   })
 
   onMain('storage:reveal', () => {
@@ -1399,21 +1476,25 @@ function registerIpcHandlers() {
     // 接受两种选择：`immersive_cinematics` 本身，或它所在的那一层目录。
     const direct = target
     const nested = path.join(target, WORKSPACE_DIR_NAME)
-    const root = fs.existsSync(scriptsDirOf(direct)) ? direct
-      : fs.existsSync(scriptsDirOf(nested)) ? nested
+    const root = await storageEntryExists(scriptsDirOf(direct)) ? direct
+      : await storageEntryExists(scriptsDirOf(nested)) ? nested
         : direct
-    fs.mkdirSync(scriptsDirOf(root), { recursive: true })
-    atomicWriteText(workspaceRootFile(), JSON.stringify({ root }, null, 2))
+    await fsp.mkdir(scriptsDirOf(root), { recursive: true })
+    await writeJsonAtomicAsync(workspaceRootFile(), { root })
     return root
   })
 
-  handleMain('workspace:list-scripts', async () => listScriptFiles(requireWorkspaceRoot()))
+  handleMain('workspace:list-scripts', async () => {
+    const root = await requireWorkspaceRoot()
+    return listScriptFiles(root)
+  })
 
   handleMain('workspace:read-script', async (relativePath) => {
-    const file = scriptAbsolutePath(requireWorkspaceRoot(), relativePath)
+    const root = await requireWorkspaceRoot()
+    const file = scriptAbsolutePath(root, relativePath)
     try {
-      const text = await fs.promises.readFile(file, 'utf8')
-      const stat = await fs.promises.stat(file)
+      const text = await fsp.readFile(file, 'utf8')
+      const stat = await fsp.stat(file)
       // 指纹随内容一起返回：与 `scriptStamps()` 同格式，上层才能判断「没变」。
       return { text, stamp: `${Math.round(stat.mtimeMs)}:${stat.size}` }
     } catch (error) {
@@ -1424,16 +1505,17 @@ function registerIpcHandlers() {
 
   handleMain('workspace:write-script', async (relativePath, text) => {
     if (typeof text !== 'string') throw new Error('工作区: 内容必须是字符串')
-    const file = scriptAbsolutePath(requireWorkspaceRoot(), relativePath)
+    const root = await requireWorkspaceRoot()
+    const file = scriptAbsolutePath(root, relativePath)
     // 脚本是用户作品：原子写但不留 .bak。
-    fs.mkdirSync(path.dirname(file), { recursive: true })
+    await fsp.mkdir(path.dirname(file), { recursive: true })
     const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
     try {
-      await fs.promises.writeFile(tmp, text, 'utf8')
-      await fs.promises.rename(tmp, file)
+      await fsp.writeFile(tmp, text, 'utf8')
+      await fsp.rename(tmp, file)
     } catch (error) {
       try {
-        await fs.promises.unlink(tmp)
+        await fsp.unlink(tmp)
       } catch {
         // ignore
       }
@@ -1442,22 +1524,29 @@ function registerIpcHandlers() {
   })
 
   handleMain('workspace:remove-script', async (relativePath) => {
-    const file = scriptAbsolutePath(requireWorkspaceRoot(), relativePath)
+    const root = await requireWorkspaceRoot()
+    const file = scriptAbsolutePath(root, relativePath)
     try {
-      await fs.promises.unlink(file)
+      await fsp.unlink(file)
     } catch (error) {
       if (error && error.code !== 'ENOENT') throw error
     }
   })
 
-  handleMain('workspace:script-stamps', async () => scriptStamps(requireWorkspaceRoot()))
+  handleMain('workspace:script-stamps', async () => {
+    const root = await requireWorkspaceRoot()
+    return scriptStamps(root)
+  })
 
   handleMain('workspace:script-exists', async (relativePath) => {
+    let file
     try {
-      return fs.existsSync(scriptAbsolutePath(requireWorkspaceRoot(), relativePath))
+      const root = await requireWorkspaceRoot()
+      file = scriptAbsolutePath(root, relativePath)
     } catch {
       return false
     }
+    return storageEntryExists(file)
   })
 
   // ── 系统主题变化（nativeTheme → renderer） ────────────────

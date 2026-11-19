@@ -205,6 +205,6 @@ export interface HostPort {
 
 /** preload 暴露的桥（`window.workbench`）；渲染进程只能看到这些字段。 */
 export interface WorkbenchBridge extends HostPort {
-  /** WebUI 握手 token（由主进程读 token 文件；不落盘、不写偏好）。 */
-  webuiToken(): string
+  /** WebUI 握手 token（由主进程异步读 token 文件；不落盘、不写偏好；每次连接前重新取）。 */
+  webuiToken(): Promise<string>
 }
