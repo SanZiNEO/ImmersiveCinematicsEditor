@@ -1,0 +1,178 @@
+/**
+ * 12-06 / 12-07 模板面板与快捷效果文案表（前缀 `templates.*` / `quick.*`）。
+ *
+ * 集成方在 `src/workbench/i18n/index.ts` 把 ZH / EN 展开进 `MESSAGES.zh_cn / en_us`；
+ * 本切片不直接改 `i18n/index.ts`。模板参数 / 标题 / 说明文案由 `features/templates/i18n.ts`
+ * 提供（`templates.param.*` / `templates.clip.*` 等），本表只放面板外壳与快捷效果。
+ */
+
+export const ZH: Record<string, string> = {
+  // ── 面板外壳 ──────────────────────────────────────────────────────────────
+  'templates.panel.title': '模板',
+  'templates.layer.clip': '片段',
+  'templates.layer.track': '轨道',
+  'templates.layer.script': '脚本',
+  'templates.search.placeholder': '搜索模板…',
+  'templates.list.empty': '没有匹配的模板。',
+  'templates.empty.noDoc': '未打开文档。',
+
+  // ── 参数表单 ───────────────────────────────────────────────────────────────
+  'templates.form.params': '参数',
+  'templates.form.target': '插入目标',
+  'templates.form.summary': '结构摘要',
+  'templates.apply': '生成',
+  'templates.apply.confirm': '确认生成',
+  'templates.apply.cancel': '取消',
+  'templates.apply.undoHint': '一次撤销可整体回退',
+  'templates.pick.fromSlot': '从槽位取',
+  'templates.pose.empty': '未设置姿态',
+  'templates.poseList.add': '添加姿态',
+  'templates.poseList.remove': '移除',
+  'templates.poseList.count': '姿态 {count} / {max}',
+
+  // ── 插入目标 ─────────────────────────────────────────────────────────────
+  'templates.target.atPlayhead': '播放头',
+  'templates.target.afterSelection': '选中片段之后',
+  'templates.target.atTrack': '指定轨道',
+  'templates.target.newTrack': '新建轨道',
+  'templates.target.appendTrack': '追加到同类型轨道',
+  'templates.target.newDocument': '新建文档',
+  'templates.target.replaceEmpty': '替换空文档',
+
+  // ── 禁用原因（面板按 reasonCode 取文案）─────────────────────────────────────
+  'templates.reason.noSelection': '没有选中片段',
+  'templates.reason.selectionTypeMismatch': '选中片段的轨道类型与模板目标类型不符',
+  'templates.reason.noMatchingTrack': '没有同类型轨道，可改为新建轨道',
+  'templates.reason.docNonEmpty': '当前文档非空，不能替换；请改用新建文档',
+  'templates.reason.serviceMissing': '姿态槽服务未注册',
+  'templates.reason.noDoc': '文档未打开',
+  'templates.reason.slotsEmpty': '九槽为空，请先从飞控存一个姿态',
+  'templates.reason.noTarget': '请选择插入目标',
+
+  // ── 摘要事实 ─────────────────────────────────────────────────────────────
+  'templates.snapshot.clips': '片段',
+  'templates.snapshot.tracks': '轨道',
+  'templates.snapshot.paths': '路径',
+  'templates.snapshot.triggers': '触发器',
+  'templates.snapshot.totalDuration': '总时长',
+  'templates.snapshot.createsTrack': '将新建轨道',
+  'templates.snapshot.createsDocument': '将新建文档',
+  'templates.snapshot.conflicts': '冲突片段',
+  'templates.snapshot.segment': '段 {index}：{start}s 起，时长 {duration}s',
+  'templates.snapshot.targetTypes': '目标轨道类型',
+
+  // ── 状态提示 ─────────────────────────────────────────────────────────────
+  'templates.status.done': '已生成 {clipCount} 个片段；一次撤销可整体回退',
+  'templates.status.failed': '生成失败，请按红字提示调整参数或目标',
+  'templates.status.planFailed': '计划未通过：{message}',
+
+  // ── 快捷效果 ─────────────────────────────────────────────────────────────
+  'quick.bar.title': '快捷效果',
+  'quick.fade_in_black.title': '淡入黑场',
+  'quick.fade_in_black.desc': '画面逐渐变黑（覆盖层淡入）',
+  'quick.fade_out_black.title': '淡出黑场',
+  'quick.fade_out_black.desc': '黑场逐渐消失（覆盖层淡出）',
+  'quick.static_breath.title': '固定加呼吸',
+  'quick.static_breath.desc': '固定机位叠加常量呼吸抖动',
+  'quick.push_in.title': '推近',
+  'quick.push_in.desc': '沿当前视线前进推近',
+  'quick.pull_out.title': '拉远',
+  'quick.pull_out.desc': '沿当前视线后退拉远',
+  'quick.orbit_90.title': '环绕九十度',
+  'quick.orbit_90.desc': '以指定槽为圆心扫一段九十度弧',
+  'quick.orbit_full.title': '环绕整圈',
+  'quick.orbit_full.desc': '新建轨道，多段硬切环绕整圈',
+  'quick.multi_cam.title': '多机位切换',
+  'quick.multi_cam.desc': '按槽位姿态生成两个硬切机位',
+  'quick.camera_intro.title': '开场起手',
+  'quick.camera_intro.desc': '新建文档：相机 + 遮幅 + 开场黑场',
+  'quick.follow_black.title': '跟随收尾黑场',
+  'quick.follow_black.desc': '跟随选择器收尾，结束淡入黑场',
+
+  'quick.reason.noDoc': '未打开文档',
+  'quick.reason.noPose': '缺少可用姿态：请先选中相机片段或从飞控存槽',
+  'quick.reason.needSlots': '槽位不足（需要 {count} 个）',
+  'quick.reason.needSelector': '需要跟随选择器：请在表单填写',
+}
+
+export const EN: Record<string, string> = {
+  'templates.panel.title': 'Templates',
+  'templates.layer.clip': 'Clips',
+  'templates.layer.track': 'Tracks',
+  'templates.layer.script': 'Scripts',
+  'templates.search.placeholder': 'Search templates…',
+  'templates.list.empty': 'No matching templates.',
+  'templates.empty.noDoc': 'No document open.',
+
+  'templates.form.params': 'Parameters',
+  'templates.form.target': 'Insert target',
+  'templates.form.summary': 'Structure summary',
+  'templates.apply': 'Generate',
+  'templates.apply.confirm': 'Confirm generate',
+  'templates.apply.cancel': 'Cancel',
+  'templates.apply.undoHint': 'Undo once to revert everything',
+  'templates.pick.fromSlot': 'Pick from slot',
+  'templates.pose.empty': 'Pose not set',
+  'templates.poseList.add': 'Add pose',
+  'templates.poseList.remove': 'Remove',
+  'templates.poseList.count': 'Poses {count} / {max}',
+
+  'templates.target.atPlayhead': 'At playhead',
+  'templates.target.afterSelection': 'After selected clip',
+  'templates.target.atTrack': 'On track',
+  'templates.target.newTrack': 'New track',
+  'templates.target.appendTrack': 'Append to same-type track',
+  'templates.target.newDocument': 'New document',
+  'templates.target.replaceEmpty': 'Replace empty document',
+
+  'templates.reason.noSelection': 'No selected clip',
+  'templates.reason.selectionTypeMismatch': 'Selected clip track type does not match the template target',
+  'templates.reason.noMatchingTrack': 'No same-type track; choose new track instead',
+  'templates.reason.docNonEmpty': 'Current document is not empty; use new document instead',
+  'templates.reason.serviceMissing': 'Pose slot service is not registered',
+  'templates.reason.noDoc': 'No document open',
+  'templates.reason.slotsEmpty': 'All pose slots are empty; save a pose from flight first',
+  'templates.reason.noTarget': 'Choose an insert target',
+
+  'templates.snapshot.clips': 'Clips',
+  'templates.snapshot.tracks': 'Tracks',
+  'templates.snapshot.paths': 'Paths',
+  'templates.snapshot.triggers': 'Triggers',
+  'templates.snapshot.totalDuration': 'Total duration',
+  'templates.snapshot.createsTrack': 'Will create a track',
+  'templates.snapshot.createsDocument': 'Will create a document',
+  'templates.snapshot.conflicts': 'Conflicting clips',
+  'templates.snapshot.segment': 'Segment {index}: starts at {start}s, duration {duration}s',
+  'templates.snapshot.targetTypes': 'Target track types',
+
+  'templates.status.done': 'Generated {clipCount} clip(s); undo once to revert all',
+  'templates.status.failed': 'Generation failed; fix the red-field issues or target',
+  'templates.status.planFailed': 'Plan rejected: {message}',
+
+  'quick.bar.title': 'Quick effects',
+  'quick.fade_in_black.title': 'Fade to black in',
+  'quick.fade_in_black.desc': 'Screen fades to black (overlay fade-in)',
+  'quick.fade_out_black.title': 'Fade from black out',
+  'quick.fade_out_black.desc': 'Black fades away (overlay fade-out)',
+  'quick.static_breath.title': 'Static with breath',
+  'quick.static_breath.desc': 'Fixed camera with constant breath shake',
+  'quick.push_in.title': 'Push in',
+  'quick.push_in.desc': 'Move forward along the current view',
+  'quick.pull_out.title': 'Pull out',
+  'quick.pull_out.desc': 'Move backward along the current view',
+  'quick.orbit_90.title': 'Orbit 90°',
+  'quick.orbit_90.desc': 'Sweep a 90° arc around the selected slot',
+  'quick.orbit_full.title': 'Orbit full turn',
+  'quick.orbit_full.desc': 'New track: hard-cut segments around a full turn',
+  'quick.multi_cam.title': 'Multi-camera cut',
+  'quick.multi_cam.desc': 'Two hard-cut cameras from slot poses',
+  'quick.camera_intro.title': 'Opening setup',
+  'quick.camera_intro.desc': 'New document: camera + letterbox + opening black',
+  'quick.follow_black.title': 'Follow-out black',
+  'quick.follow_black.desc': 'Follow selector, fade in black at the end',
+
+  'quick.reason.noDoc': 'No document open',
+  'quick.reason.noPose': 'No usable pose: select a camera clip or save a slot from flight',
+  'quick.reason.needSlots': 'Not enough slots ({count} required)',
+  'quick.reason.needSelector': 'Follow selector required: fill it in the form',
+}
