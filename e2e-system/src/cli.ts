@@ -5,8 +5,10 @@
  *   node --experimental-strip-types e2e-system/src/cli.ts list
  *   node --experimental-strip-types e2e-system/src/cli.ts dry-run --suite <id> [--scenario <id>]
  *   node --experimental-strip-types e2e-system/src/cli.ts run --suite <id> [--scenario <id>]
+ *   node --experimental-strip-types e2e-system/src/cli.ts review [--fixture <本地 JSON 路径>]
  *
- * 退出码：0 全 PASS；1 任一 FAIL；2 BLOCKED 且无 FAIL。
+ * 退出码：0 全 PASS；1 任一 FAIL；2 BLOCKED 且无 FAIL。review 正常关闭为 0，启动或落盘失败为 1；
+ * Ctrl+C 时 Playwright 可能以自己的 SIGINT 处理退出 130（本会话 Vite 已在信号处理里同步停止）。
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,14 +17,22 @@ import { ConfigLoader, ConfigError } from './config.ts'
 import { collectEnvironment, createRegistry, runSuite, type RunReport } from './runner.ts'
 import { writeRunJson } from './report/json.ts'
 import { writeReportMarkdown } from './report/markdown.ts'
+import { runReview } from './review.ts'
 
-function parseArgs(argv: string[]): { command: string; suite?: string; scenario?: string } {
+function parseArgs(argv: string[]): { command: string; suite?: string; scenario?: string; fixture?: string } {
   const [command, ...rest] = argv
-  const options: { suite?: string; scenario?: string } = {}
+  const options: { suite?: string; scenario?: string; fixture?: string } = {}
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index]
     if (token === '--suite') options.suite = rest[++index]
     else if (token === '--scenario') options.scenario = rest[++index]
+    else if (token === '--fixture') {
+      const value = rest[++index]
+      if (value === undefined || value === '') {
+        throw new ConfigError('E_CONFIG', '--fixture 需要本地 JSON 文件路径')
+      }
+      options.fixture = value
+    }
   }
   return { command: command ?? 'list', ...options }
 }
@@ -104,11 +114,11 @@ async function execute(
 }
 
 async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2))
-  const loader = new ConfigLoader(repoRoot())
-  const registry = createRegistry()
-
   try {
+    const args = parseArgs(process.argv.slice(2))
+    const loader = new ConfigLoader(repoRoot())
+    const registry = createRegistry()
+
     if (args.command === 'list') {
       printList(loader, registry)
       return 0
@@ -121,7 +131,10 @@ async function main(): Promise<number> {
       if (!args.suite) throw new ConfigError('E_CONFIG', 'run 需要 --suite <id>')
       return await execute(loader, registry, 'run', args.suite, args.scenario)
     }
-    console.error(`未知命令: ${args.command}（可用: list / dry-run / run）`)
+    if (args.command === 'review') {
+      return await runReview(loader, { fixture: args.fixture })
+    }
+    console.error(`未知命令: ${args.command}（可用: list / dry-run / run / review）`)
     return 1
   } catch (error) {
     if (error instanceof ConfigError) {

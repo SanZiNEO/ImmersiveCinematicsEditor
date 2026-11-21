@@ -16,6 +16,7 @@
     "e2e:system:list": "node --experimental-strip-types e2e-system/src/cli.ts list",
     "e2e:system:dry": "node --experimental-strip-types e2e-system/src/cli.ts dry-run",
     "e2e:system:run": "node --experimental-strip-types e2e-system/src/cli.ts run",
+    "e2e:system:review": "node --experimental-strip-types e2e-system/src/cli.ts review",
     "verify": "node --experimental-strip-types src/workbench/verify.ts",
     "verify:08": "node --experimental-strip-types src/workbench/verify-08.ts",
     "verify:12": "node --experimental-strip-types src/workbench/verify-12.ts",

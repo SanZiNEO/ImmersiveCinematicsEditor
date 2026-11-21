@@ -44,6 +44,23 @@ npm run electron:build  # Windows NSIS 安装包，输出到 release/
 
 没连游戏时编辑器以离线演示模式运行（示例脚本 + 内置 schema），可以单独浏览界面。
 
+### 交互走查
+
+```sh
+npm run e2e:system:review                                    # 默认夹具 seven-tracks.json
+npm run e2e:system:review -- --fixture "D:\path\script.json" # 可选本地 JSON（相对当前 cwd）
+```
+
+每次启动独立环境：本会话专属 profile、workspace 与空 token，不连真实游戏；Vite dev server 独占 `127.0.0.1:5174`（配置端口 +1，可与离线回归套件并行），端口被占用会直接报错。默认夹具为仓库内 `src/core/schema/fixtures/scripts/valid/seven-tracks.json`，复制进本次产物工作区后用真实打开路径载入，不改原文件。
+
+终端打印产物目录（`e2e-system/artifacts/review-*/`）和 `REVIEW_READY` 后即可操作窗口：操作到问题界面后自行截图，把图片发到聊天并说明图中编号。页面走 Vite HMR；刷新后可从工作台脚本列表重新打开该隔离夹具。
+
+关闭窗口或按 Ctrl+C 结束，本会话的 Electron/Vite 会被清理；关闭后可用 `netstat -ano | findstr :5174` 确认无本次会话监听。
+
+正常关窗仍会询问如何处理未保存的修改。按 Ctrl+C 中止走查或自动套件收尾时，测试宿主只回收本次启动的进程，不会把未保存的修改写入样例。需要保留走查修改时，先保存到隔离副本。
+
+普通离线回归仍用 `npm run e2e:system:run -- --suite offline`（默认离线夹具，不依赖真实游戏）。
+
 ## 注意事项
 
 - `electron-builder.yml` 的 `electronDist` 写死了本机绝对路径（`E:\Documents\GitHub\liveget\...`），换机器打包前需要按环境调整或删掉该行。

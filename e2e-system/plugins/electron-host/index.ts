@@ -7,12 +7,14 @@
  * 预览帧与本地语料校验的 op。断言只面向用户可见行为（连接状态、状态区文案、
  * 帧计数、播放头），不触碰内部定时器与私有字段。
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import http from 'node:http'
+import { connect as netConnect } from 'node:net'
 
 import { _electron, type Page } from '@playwright/test'
 import type { ElectronApplication } from 'playwright-core'
@@ -31,6 +33,8 @@ interface HostState {
   consoleCounts: Record<string, number>
   /** 【探针】主进程 stderr 里 CDP 待写积压告警行（Too large write data pending）。 */
   mainPending: string[]
+  /** 走查模式：Vite 启动 stderr（端口占用/提前退出时原样报出）。 */
+  viteStderr: string[]
 }
 
 /** canvasInk 单次像素取样结果；tiles 为降采样后的平铺 RGB（仅用于两帧 diff，不进报告）。 */
@@ -69,7 +73,114 @@ async function waitHttpReady(port: number, timeoutMs: number): Promise<void> {
   throw new Error(`vite dev server 在 ${timeoutMs}ms 内未就绪（端口 ${port}）`)
 }
 
-export function createElectronHostPlugin(): E2ePlugin {
+/** 端口上是否有任意监听者（不限于 HTTP），走查模式据此拒绝复用陌生应用。 */
+function portListening(port: number): Promise<boolean> {
+  const { promise, resolve } = Promise.withResolvers<boolean>()
+  const socket = netConnect({ host: '127.0.0.1', port })
+  const finish = (value: boolean): void => {
+    socket.destroy()
+    resolve(value)
+  }
+  socket.setTimeout(500)
+  socket.once('connect', () => finish(true))
+  socket.once('timeout', () => finish(false))
+  socket.once('error', () => finish(false))
+  return promise
+}
+
+/** 读取 HTTP 响应体（最多 64 KiB），用于确认端口上是本会话的 Vite dev server。 */
+function fetchHttpBody(port: number, timeoutMs = 1000): Promise<string | null> {
+  const { promise, resolve } = Promise.withResolvers<string | null>()
+  const request = http.get({ host: '127.0.0.1', port, path: '/', timeout: timeoutMs }, (response) => {
+    let body = ''
+    response.setEncoding('utf8')
+    response.on('data', (chunk: string) => {
+      if (body.length < 65536) body += chunk
+    })
+    response.on('end', () => resolve(body))
+    response.on('error', () => resolve(null))
+  })
+  request.on('error', () => resolve(null))
+  request.on('timeout', () => {
+    request.destroy()
+    resolve(null)
+  })
+  return promise
+}
+
+function viteStderrTail(state: HostState): string {
+  const tail = state.viteStderr.slice(-8).join('\n')
+  return tail === '' ? '' : `\nVite stderr:\n${tail}`
+}
+
+/**
+ * 走查模式的 Vite 就绪判定：进程必须仍存活，且 `/` 响应含 Vite 客户端脚本注入。
+ * 端口在启动前已确认独占、vite 又用 --strictPort 启动，因此不会把陌生 HTTP 当成就绪。
+ */
+async function waitReviewViteReady(port: number, child: ChildProcess, state: HostState, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let lastReason = '未收到 HTTP 响应'
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`隔离 Vite 进程提前退出（退出码 ${String(child.exitCode)}，端口 ${port}）${viteStderrTail(state)}`)
+    }
+    const body = await fetchHttpBody(port)
+    if (body !== null) {
+      if (body.includes('/@vite/client')) return
+      lastReason = '端口有 HTTP 响应但缺少 /@vite/client 标记，不是本会话的 Vite dev server'
+    }
+    await sleep(300)
+  }
+  throw new Error(`隔离 Vite 在 ${timeoutMs}ms 内未就绪（端口 ${port}）：${lastReason}${viteStderrTail(state)}`)
+}
+
+const ELECTRON_CLOSE_TIMEOUT_MS = 5_000
+
+async function requestElectronExit(owned: ElectronApplication, mode: 'graceful' | 'dispose'): Promise<void> {
+  const exited = owned.waitForEvent('close', { timeout: ELECTRON_CLOSE_TIMEOUT_MS })
+  const requested = owned.evaluate(({ app, BrowserWindow }, closeMode) => {
+    // 先让主进程调试调用返回，再申请退出，避免正常退出被误报为连接断开。
+    setImmediate(() => {
+      if (closeMode === 'dispose') {
+        // 仅由测试宿主回收本次启动的窗口；不保存测试草稿，也不等待未保存对话框。
+        for (const win of BrowserWindow.getAllWindows()) win.destroy()
+      }
+      app.quit()
+    })
+  }, mode)
+  // 以进程退出事件为准，不能把请求已发送当成关闭完成。
+  await Promise.race([exited, requested.then(() => exited)])
+}
+
+async function stopOwnedElectron(child: ChildProcess): Promise<void> {
+  const pid = child.pid
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return
+  if (process.platform === 'win32') {
+    // Playwright 在 Windows 下有一层启动 shell，只终止 shell 会留下 Electron。
+    const result = spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+      encoding: 'utf8', windowsHide: true, timeout: ELECTRON_CLOSE_TIMEOUT_MS,
+    })
+    if (result.error !== undefined) throw result.error
+    if (result.status !== 0) throw new Error(result.stderr.trim() || `taskkill 退出码 ${result.status}`)
+  } else {
+    // Playwright 在非 Windows 平台把 Electron 放在独立的进程组中。
+    process.kill(-pid, 'SIGKILL')
+  }
+  await once(child, 'close', { signal: AbortSignal.timeout(ELECTRON_CLOSE_TIMEOUT_MS) })
+}
+
+export interface ElectronHostPluginOptions {
+  /**
+   * 交互走查模式：独立 profile/工作区/空 token，独占 configured vite + 1 端口上的
+   * 隔离 Vite（不复用现有 dev server），不连真实游戏。
+   */
+  review?: boolean
+  /** 走查模式 Vite 就绪后回报 loopback URL（供终端打印端口与生命周期）。 */
+  onReviewUrl?: (url: string) => void
+}
+
+export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}): E2ePlugin {
+  const reviewMode = options.review === true
   const state: HostState = {
     app: null,
     page: null,
@@ -80,6 +191,7 @@ export function createElectronHostPlugin(): E2ePlugin {
     rendererErrors: [],
     consoleCounts: {},
     mainPending: [],
+    viteStderr: [],
   }
 
   const missingFor = (ctx: PluginContext): string[] => {
@@ -155,18 +267,42 @@ export function createElectronHostPlugin(): E2ePlugin {
       mkdirSync(state.workspaceDir, { recursive: true })
       mkdirSync(state.userDataDir, { recursive: true })
 
-      const port = ctx.config.ports.vite
-      if (!(await probeHttp(port))) {
-        const viteBin = path.join(repo, 'node_modules', 'vite', 'bin', 'vite.js')
-        ctx.log(`启动 vite: node ${viteBin} --config ${e2eViteConfig} --port ${port} --strictPort`)
-        state.viteChild = spawn(process.execPath, [viteBin, '--config', e2eViteConfig, '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
+      const viteBin = path.join(repo, 'node_modules', 'vite', 'bin', 'vite.js')
+      if (reviewMode) {
+        if (!existsSync(viteBin)) throw new Error(`vite 未安装（${viteBin}），无法启动走查用的隔离 dev server`)
+        const electronBin = path.join(repo, 'node_modules', 'electron', 'dist', 'electron.exe')
+        if (!existsSync(electronBin)) throw new Error(`Electron 可执行文件不存在: ${electronBin}`)
+      }
+
+      // 走查模式独占 configured vite + 1：与离线套件的 5173 并行，且绝不复用陌生应用。
+      const port = reviewMode ? ctx.config.ports.vite + 1 : ctx.config.ports.vite
+      if (reviewMode) {
+        if (await portListening(port)) {
+          throw new Error(
+            `走查隔离端口 ${port} 已被占用（需要独占，不复用离线套件或其他应用的监听）。` +
+            `请结束占用 ${port} 的进程，或修改 e2e-system/config/default.json 的 ports.vite 后重试。`,
+          )
+        }
+      }
+
+      if (reviewMode || !(await probeHttp(port))) {
+        ctx.log(`启动${reviewMode ? '隔离 ' : ''}vite: node ${viteBin} --config ${e2eViteConfig} --port ${port} --strictPort`)
+        state.viteStderr = []
+        const child = spawn(process.execPath, [viteBin, '--config', e2eViteConfig, '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
           cwd: repo,
           stdio: ['ignore', 'pipe', 'pipe'],
           env: { ...process.env },
         })
-        state.viteChild.stdout?.on('data', (chunk) => ctx.log(`[vite] ${String(chunk).trim()}`))
-        state.viteChild.stderr?.on('data', (chunk) => ctx.log(`[vite:err] ${String(chunk).trim()}`))
-        await waitHttpReady(port, ctx.config.launchTimeoutMs)
+        state.viteChild = child
+        child.on('error', (error) => state.viteStderr.push(`spawn: ${String(error)}`))
+        child.stdout?.on('data', (chunk) => ctx.log(`[vite] ${String(chunk).trim()}`))
+        child.stderr?.on('data', (chunk) => {
+          const text = String(chunk).trim()
+          if (text !== '') state.viteStderr.push(text)
+          ctx.log(`[vite:err] ${text}`)
+        })
+        if (reviewMode) await waitReviewViteReady(port, child, state, ctx.config.launchTimeoutMs)
+        else await waitHttpReady(port, ctx.config.launchTimeoutMs)
       } else {
         ctx.log(`vite 端口 ${port} 已在监听，复用现有 dev server`)
       }
@@ -174,27 +310,41 @@ export function createElectronHostPlugin(): E2ePlugin {
       state.tokenFile = isLive
         ? ctx.config.env.webuiTokenFile
         : path.join(ctx.artifactsDir, 'no-token.txt')
+      const devUrl = `http://127.0.0.1:${port}`
       const env: NodeJS.ProcessEnv = {
         ...process.env,
-        IC_EDITOR_DEV_URL: `http://127.0.0.1:${port}`,
+        IC_EDITOR_DEV_URL: devUrl,
         IC_EDITOR_USER_DATA: state.userDataDir,
         IC_EDITOR_WORKSPACE: state.workspaceDir,
         IC_WEBUI_TOKEN_FILE: state.tokenFile,
       }
-      // 离线套件：写入一个占位 token，假 WebUI 场景才能走到握手；
-      // 无 token 场景由 editor.writeToken 清空后复验。
-      if (!isLive) {
+      if (reviewMode) {
+        // 外部 ELECTRON_RENDERER_URL 优先级高于 IC_EDITOR_DEV_URL；走查必须锁到隔离 Vite。
+        options.onReviewUrl?.(devUrl)
+        env.ELECTRON_RENDERER_URL = devUrl
+        // 走查不尝试连真实游戏：空 token 文件，握手如实失败并保持离线。
+        writeFileSync(state.tokenFile, '', 'utf8')
+      } else if (!isLive) {
+        // 离线套件：写入一个占位 token，假 WebUI 场景才能走到握手；
+        // 无 token 场景由 editor.writeToken 清空后复验。
         writeFileSync(state.tokenFile, 'e2e-dummy-token', 'utf8')
       }
 
-      ctx.log('启动 Electron 编辑器')
+      ctx.log(reviewMode ? '启动 Electron 编辑器（走查模式：独立 profile/工作区）' : '启动 Electron 编辑器')
       state.app = await _electron.launch({
         args: ['.'],
         cwd: repo,
         env,
         timeout: ctx.config.launchTimeoutMs,
       })
-      state.page = await state.app.firstWindow()
+      const launched = state.app
+      launched.on('close', () => {
+        if (state.app === launched) {
+          state.app = null
+          state.page = null
+        }
+      })
+      state.page = await launched.firstWindow()
       state.page.on('pageerror', (error) => {
         state.rendererErrors.push(String(error))
         ctx.log(`[pageerror] ${String(error)}`)
@@ -205,7 +355,7 @@ export function createElectronHostPlugin(): E2ePlugin {
         if (type === 'error') ctx.log(`[console:error] ${message.text()}`)
       })
       // 【探针】主进程 stderr：记录 CDP 待写积压告警（不经 evaluate，直接读子进程 stderr）。
-      const mainProc = state.app?.process()
+      const mainProc = launched.process()
       mainProc?.stderr?.on('data', (chunk) => {
         for (const line of String(chunk).split(/\r?\n/)) {
           if (line.includes('Too large write data is pending')) state.mainPending.push(line.trim())
@@ -218,15 +368,9 @@ export function createElectronHostPlugin(): E2ePlugin {
 
     async teardown() {
       const errors: string[] = []
-      if (state.app !== null) {
-        try {
-          await state.app.close()
-        } catch (error) {
-          errors.push(`Electron 关闭: ${String(error)}`)
-        }
-        state.app = null
-        state.page = null
-      }
+      // 先同步终止本会话 Vite。Win32 Ctrl+C 下 Playwright 的 SIGINT 处理会在
+      // Electron 关闭后直接 process.exit(130)，排在 await 之后的工作不保证执行；
+      // Vite 必须在本函数首个 await 之前就停掉，避免遗留 dev server。
       if (state.viteChild !== null) {
         try {
           state.viteChild.kill()
@@ -234,6 +378,22 @@ export function createElectronHostPlugin(): E2ePlugin {
           errors.push(`vite 子进程关闭: ${String(error)}`)
         }
         state.viteChild = null
+      }
+      const owned = state.app
+      if (owned !== null) {
+        const child = owned.process()
+        state.app = null
+        state.page = null
+        try {
+          await requestElectronExit(owned, 'dispose')
+        } catch (error) {
+          errors.push(`Electron 关闭: ${String(error)}`)
+          try {
+            await stopOwnedElectron(child)
+          } catch (stopError) {
+            errors.push(`Electron 子进程回收: ${String(stopError)}`)
+          }
+        }
       }
       return errors
     },
@@ -675,22 +835,18 @@ export function createElectronHostPlugin(): E2ePlugin {
         }
 
         case 'editor.closeWindow': {
-          const repeat = Number(params.repeat ?? 2)
-          if (state.app !== null) {
+          const repeat = Number(params.repeat ?? 2) >= 2 ? 2 : 1
+          for (let attempt = 1; attempt <= repeat; attempt += 1) {
+            const owned = state.app
+            if (owned === null) continue
             try {
-              await state.app.close()
+              // 验收走正常关窗，保留未保存确认；只有 teardown 可以回收隔离草稿。
+              await requestElectronExit(owned, 'graceful')
             } catch (error) {
-              return { ok: false, reason: `第一次关闭报错: ${String(error)}`, expected: '关闭无异常', actual: String(error) }
+              return { ok: false, reason: `第 ${attempt} 次关闭失败: ${String(error)}`, expected: '窗口正常退出', actual: String(error) }
             }
           }
-          if (repeat >= 2 && state.app !== null) {
-            try {
-              await state.app.close()
-            } catch (error) {
-              return { ok: false, reason: `第二次关闭报错: ${String(error)}`, expected: '第二次关闭不报错', actual: String(error) }
-            }
-          }
-          return { ok: true, value: { secondError: null }, summary: `关闭 ${repeat} 次，第二次无异常` }
+          return { ok: true, value: { secondError: null }, summary: repeat === 2 ? '关闭 2 次，第二次无异常' : '关闭无异常' }
         }
 
         case 'ui.click': {
