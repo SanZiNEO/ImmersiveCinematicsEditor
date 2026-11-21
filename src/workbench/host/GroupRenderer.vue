@@ -5,7 +5,7 @@
  * `keepAlive` 的面板由 PanelHost 自己用 `v-show` 保留挂载；这里只负责
  * 按布局树渲染全部标签实例，不写布局、不持尺寸。
  */
-import { computed, inject, nextTick, onBeforeUnmount, provide, ref, type ComponentPublicInstance } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, provide, ref } from 'vue'
 import type { GroupNode } from '../api/layout.ts'
 import type { PanelRef } from '../api/ids.ts'
 import type { DrawerTabRegistry } from '../api/registries.ts'
@@ -38,7 +38,8 @@ interface MenuState {
 }
 
 const menu = ref<MenuState | null>(null)
-const firstMenuItem = ref<ComponentPublicInstance | null>(null)
+const firstMenuItem = ref<HTMLButtonElement | null>(null)
+let menuTrigger: HTMLElement | null = null
 let removeMenuListeners: (() => void) | null = null
 
 function panelRefOf(panelId: string): PanelRef | null {
@@ -85,10 +86,14 @@ function resetLayout(): void {
 
 function openMenu(panelId: string, x: number, y: number): void {
   closeMenu()
-  menu.value = { panelId, x, y }
   if (typeof document === 'undefined') {
     return
   }
+  const trigger = document.activeElement
+  menuTrigger = trigger instanceof HTMLElement && trigger.getAttribute('role') === 'tab'
+    ? trigger
+    : null
+  menu.value = { panelId, x, y }
   const onPointerDown = (event: PointerEvent): void => {
     const target = event.target
     if (target instanceof HTMLElement && target.closest('.group-renderer__menu') !== null) {
@@ -108,17 +113,18 @@ function openMenu(panelId: string, x: number, y: number): void {
     document.removeEventListener('keydown', onKeyDown)
   }
   void nextTick(() => {
-    const element = firstMenuItem.value?.$el
-    if (element instanceof HTMLElement) {
-      element.focus()
-    }
+    firstMenuItem.value?.focus()
   })
 }
 
-function closeMenu(): void {
+function closeMenu(restoreFocus = false): void {
   menu.value = null
   removeMenuListeners?.()
   removeMenuListeners = null
+  if (restoreFocus) {
+    menuTrigger?.focus()
+  }
+  menuTrigger = null
 }
 
 function hideFromMenu(): void {
@@ -133,6 +139,37 @@ function hideFromMenu(): void {
 function resetFromMenu(): void {
   closeMenu()
   resetLayout()
+}
+
+function onMenuKeyDown(event: KeyboardEvent): void {
+  const items = Array.from(
+    event.currentTarget instanceof HTMLElement
+      ? event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+      : [],
+  )
+  if (items.length === 0) {
+    return
+  }
+  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement)
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeMenu(true)
+    return
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    const step = event.key === 'ArrowDown' ? 1 : -1
+    const nextIndex = currentIndex < 0
+      ? 0
+      : (currentIndex + step + items.length) % items.length
+    items[nextIndex]?.focus()
+    return
+  }
+  if (event.key === 'Home' || event.key === 'End') {
+    event.preventDefault()
+    items[event.key === 'Home' ? 0 : items.length - 1]?.focus()
+  }
 }
 
 onBeforeUnmount(() => {
@@ -153,9 +190,7 @@ const emptyLabel = '该区域没有可用面板'
       v-if="group.panels.length > 0"
       :panels="group.panels"
       :active-panel-id="activeId"
-      :closable="true"
       @activate="activate"
-      @close="closePanel"
       @context-menu="openMenu"
     />
     <div class="group-renderer__body">
@@ -180,6 +215,7 @@ const emptyLabel = '该区域没有可用面板'
       class="group-renderer__menu"
       role="menu"
       :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+      @keydown="onMenuKeyDown"
     >
       <button
         ref="firstMenuItem"

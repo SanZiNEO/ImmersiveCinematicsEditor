@@ -460,6 +460,7 @@ onBeforeUnmount(() => {
   align-items: stretch;
   justify-content: space-between;
   min-height: 28px;
+  padding: 0 6px;
   background: var(--bg-app);
   border-bottom: 1px solid var(--border);
 }
@@ -467,34 +468,45 @@ onBeforeUnmount(() => {
 .drawer-group__tabs {
   display: flex;
   align-items: stretch;
-  gap: 1px;
+  gap: 2px;
   overflow-x: auto;
 }
 
 .drawer-group__tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
   max-width: 200px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 2px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1;
   white-space: nowrap;
   cursor: default;
   user-select: none;
 }
 
 .drawer-group__tab:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
   color: var(--text);
 }
 
 .drawer-group__tab--active {
-  background: var(--bg-panel);
-  border-color: var(--border);
+  background: transparent;
   color: var(--text);
+}
+
+.drawer-group__tab--active::after {
+  position: absolute;
+  right: 8px;
+  bottom: 0;
+  left: 8px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+  content: '';
 }
 
 .drawer-group__tab:focus-visible {
@@ -509,12 +521,12 @@ onBeforeUnmount(() => {
 
 .drawer-group__close {
   flex: 0 0 auto;
-  padding: 0 10px;
+  padding: 0 8px;
   border: none;
   border-left: 1px solid var(--border);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
 }
 

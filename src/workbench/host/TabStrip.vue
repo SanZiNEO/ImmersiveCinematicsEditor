@@ -2,7 +2,8 @@
 /**
  * 标签条（04-05）。
  *
- * 只负责标签展示、激活、关闭、右键菜单和拖动入口；不写布局、不持尺寸。
+ * 只负责标签展示、激活、右键菜单和拖动入口；不写布局、不持尺寸。
+ * 面板管理集中在右键菜单，标签本身保持纯文字行，避免每个标签都挂关闭按钮。
  * 键盘：Enter / Space 激活；Delete 不绑定；拖动交给注入的 `DockContext`。
  */
 import { computed, inject } from 'vue'
@@ -17,12 +18,10 @@ import { WORKBENCH_SERVICES_KEY } from './panelContext.ts'
 const props = defineProps<{
   panels: PanelNode[]
   activePanelId?: string
-  closable: boolean
 }>()
 
 const emit = defineEmits<{
   activate: [panelId: string]
-  close: [panelId: string]
   contextMenu: [panelId: string, x: number, y: number]
 }>()
 
@@ -76,9 +75,17 @@ function onContextMenu(event: MouseEvent, panel: PanelNode): void {
   emit('contextMenu', panel.panelId, event.clientX, event.clientY)
 }
 
-function onClose(event: MouseEvent, panel: PanelNode): void {
-  event.stopPropagation()
-  emit('close', panel.panelId)
+function onKeyboardContextMenu(event: KeyboardEvent, panel: PanelNode): void {
+  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) {
+    return
+  }
+  event.preventDefault()
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) {
+    return
+  }
+  const rect = target.getBoundingClientRect()
+  emit('contextMenu', panel.panelId, rect.left, rect.bottom)
 }
 </script>
 
@@ -93,6 +100,8 @@ function onClose(event: MouseEvent, panel: PanelNode): void {
       tabindex="0"
       :aria-selected="isActive(panel)"
       :aria-label="titleOf(panel)"
+      aria-haspopup="menu"
+      :title="titleOf(panel)"
       :data-dock-kind="'tabbar'"
       :data-dock-group-id="groupId"
       :data-dock-tab-index="index"
@@ -102,19 +111,9 @@ function onClose(event: MouseEvent, panel: PanelNode): void {
       @contextmenu="onContextMenu($event, panel)"
       @keydown.enter.prevent="onActivate(panel)"
       @keydown.space.prevent="onActivate(panel)"
+      @keydown="onKeyboardContextMenu($event, panel)"
     >
       <span class="tab-strip__title">{{ titleOf(panel) }}</span>
-      <button
-        v-if="closable && panel.visible"
-        type="button"
-        class="tab-strip__close"
-        :aria-label="`关闭 ${titleOf(panel)}`"
-        tabindex="-1"
-        @pointerdown.stop
-        @click="onClose($event, panel)"
-      >
-        ×
-      </button>
     </div>
   </div>
 </template>
@@ -124,8 +123,9 @@ function onClose(event: MouseEvent, panel: PanelNode): void {
   display: flex;
   flex: 0 0 auto;
   align-items: stretch;
-  gap: 1px;
+  gap: 2px;
   min-height: 28px;
+  padding: 0 6px;
   overflow-x: auto;
   overflow-y: hidden;
   background: var(--bg-app);
@@ -133,31 +133,41 @@ function onClose(event: MouseEvent, panel: PanelNode): void {
 }
 
 .tab-strip__tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   max-width: 220px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 2px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1;
   cursor: default;
   user-select: none;
   white-space: nowrap;
 }
 
 .tab-strip__tab:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
   color: var(--text);
 }
 
 .tab-strip__tab--active {
-  background: var(--bg-panel);
-  border-color: var(--border);
+  background: transparent;
   color: var(--text);
+}
+
+.tab-strip__tab--active::after {
+  position: absolute;
+  right: 8px;
+  bottom: 0;
+  left: 8px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+  content: '';
 }
 
 .tab-strip__tab--dragging {
@@ -172,31 +182,5 @@ function onClose(event: MouseEvent, panel: PanelNode): void {
 .tab-strip__title {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.tab-strip__close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.tab-strip__close:hover {
-  background: var(--bg-selected);
-  color: var(--text);
-}
-
-.tab-strip__close:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
 }
 </style>
