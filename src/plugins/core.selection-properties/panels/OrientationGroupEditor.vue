@@ -1,388 +1,594 @@
 <script setup lang="ts">
 /**
- * 朝向组控制条（07-04）：优先级链文案 + look_at 注入载荷 + 两基准轴 + 锁 + 切线偏移提示。
+ * 朝向卡片（正式 Editor）：只决定布局、标签与可用性，值编辑全部经统一 `row` 槽。
  *
- * 三角度值行由组内行组件渲染，本组件不重复列值行；命令通过 `apply` 事件交父面板提交。
- * 角度值不归一化；`orient` 是静态值字段，不进效果面板。
+ * 与主模组 `OrientationEvaluator` 同序：`look_at` 目标可解析 → 切线 → 手动。
+ * - 注视目标与适用载荷在组上方；目标可解析时角度设置作为后备入口收进小组；
+ * - 手动支的偏航 / 俯仰与切线支的偏航偏移 / 俯仰偏移分开标注，不混同一个标签；
+ * - 每轴基准 / 锁、线基准端点、目标偏移冻结等低频项按适用条件放进小组，隐藏项不清值；
+ * - `roll` 始终在底部（渲染期绕视线轴追加，不参与 yaw/pitch 基准）。
+ *
+ * 本卡片不解析世界坐标，也不声称目标一定能解析；目标失效的文案只描述运行时回落条件。
  */
-import { computed, ref } from 'vue'
-import type { CatalogIndex } from '../../../core/schema/index.ts'
-import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
-import type { DocCommand } from '../../../core/doc/commands.ts'
+import { computed } from 'vue'
+import type { ClipTiming } from '../../../features/effects/rows.ts'
+import type { PropertyRow } from '../../../features/effects/types.ts'
+import type { JsonObject } from '../../../core/doc/types.ts'
+import type { InspectorValueOptions } from '../../../features/effects/panels/inspectorValueOptions.ts'
 import {
-  projectOrientationBar,
-  lockNote,
-  baseNote,
-  type OrientationRuntimeFlags,
-} from '../../../features/authoring/ui/orientationFields.ts'
-import { planSimpleWrite, staticField, type ApplyItem } from '../../../features/authoring/ui/positionFields.ts'
-import {
-  draftPointSource,
-  draftLookAt,
-  validateLookAtDraft,
-  type CoordTriple,
-  type LookAtBranch,
-  type LookAtDraft,
-  type PointSourceDraft,
-} from '../../../features/authoring/ui/pointSourceFields.ts'
-import type { RefKind } from '../../../features/authoring/pointSource.ts'
-import PointSourceForm from './PointSourceForm.vue'
+  isPresent,
+  pointReference,
+  relabel,
+  rowsByPath,
+  sampledString,
+  withUnavailable,
+} from './cameraInspector.ts'
 
 const props = defineProps<{
-  clipKey: string
+  /** 朝向 section 的完整 schema 行（父不装饰；本卡片只换标签 / 标原因）。 */
+  rows: readonly PropertyRow[]
   objects: JsonObject
-  trackType: string
-  catalog: CatalogIndex
-  time: number
-  flags?: Partial<OrientationRuntimeFlags>
-  /** 该组在效果面板的叶子数。 */
-  effectCount?: number
+  /** 片段局部秒。 */
+  playhead: number
+  timing: ClipTiming
 }>()
 
-const emit = defineEmits<{
-  apply: [items: ApplyItem[]]
+defineSlots<{
+  row: (slotProps: { row: PropertyRow; options: InspectorValueOptions; axis: boolean }) => unknown
 }>()
 
-const bar = computed(() => projectOrientationBar(props.objects, props.flags ?? {}))
+// ── 行索引与分支取样 ────────────────────────────────────────────────────────
 
-const LOOK_AT_BRANCHES: LookAtBranch[] = ['none', 'player', 'coordinate', 'entity', 'block']
-const BASE_KINDS = ['world', 'entity', 'line'] as const
+const byPath = computed(() => rowsByPath(props.rows))
+function pick(path: string) {
+  return computed(() => byPath.value.get(path))
+}
 
-const lookAt = ref<LookAtDraft>(draftLookAt(props.objects))
+const lookAtRow = pick('look_at')
+const selectorRow = pick('look_at_selector')
+const partXRow = pick('look_at_part.x')
+const partYRow = pick('look_at_part.y')
+const partZRow = pick('look_at_part.z')
+const targetXRow = pick('look_at_target_x')
+const targetYRow = pick('look_at_target_y')
+const targetZRow = pick('look_at_target_z')
+const targetStructureRow = pick('look_at_target_structure')
+const targetBlockRow = pick('look_at_target_block')
+const offsetXRow = pick('look_at_offset.x')
+const offsetYRow = pick('look_at_offset.y')
+const offsetZRow = pick('look_at_offset.z')
+const offsetSpaceRow = pick('look_at_offset.space')
+const targetFreezeRow = pick('look_at_freeze')
+const orientRow = pick('orient')
+const yawRow = pick('yaw')
+const pitchRow = pick('pitch')
+const yawOffsetRow = pick('yaw_offset')
+const pitchOffsetRow = pick('pitch_offset')
+const rollRow = pick('roll')
+const yawBaseRow = pick('yaw_base')
+const pitchBaseRow = pick('pitch_base')
+const yawLockRow = pick('yaw_lock')
+const pitchLockRow = pick('pitch_lock')
+const baseSelectorRow = pick('yaw_base_selector')
+const fromRow = pick('yaw_base_from')
+const fromXRow = pick('yaw_base_from_x')
+const fromYRow = pick('yaw_base_from_y')
+const fromZRow = pick('yaw_base_from_z')
+const fromOffsetXRow = pick('yaw_base_from_offset.x')
+const fromOffsetYRow = pick('yaw_base_from_offset.y')
+const fromOffsetZRow = pick('yaw_base_from_offset.z')
+const fromOffsetSpaceRow = pick('yaw_base_from_offset.space')
+const fromFreezeRow = pick('yaw_base_from_freeze')
+const toRow = pick('yaw_base_to')
+const toXRow = pick('yaw_base_to_x')
+const toYRow = pick('yaw_base_to_y')
+const toZRow = pick('yaw_base_to_z')
+const toOffsetXRow = pick('yaw_base_to_offset.x')
+const toOffsetYRow = pick('yaw_base_to_offset.y')
+const toOffsetZRow = pick('yaw_base_to_offset.z')
+const toOffsetSpaceRow = pick('yaw_base_to_offset.space')
+const toFreezeRow = pick('yaw_base_to_freeze')
 
-const selectorDraft = computed<PointSourceDraft>(() => draftPointSource(
-  staticField(props.objects, 'yaw_base_selector', '@p'),
-  {},
+const lookAt = computed(() => sampledString(lookAtRow.value, props.playhead, props.timing, 'none'))
+const orient = computed(() => sampledString(orientRow.value, props.playhead, props.timing, 'manual'))
+const tangent = computed(() => orient.value === 'tangent')
+const yawBase = computed(() => sampledString(yawBaseRow.value, props.playhead, props.timing, 'world'))
+const pitchBase = computed(() => sampledString(pitchBaseRow.value, props.playhead, props.timing, 'world'))
+const hasTarget = computed(() => (
+  lookAt.value === 'player'
+  || lookAt.value === 'coordinate'
+  || lookAt.value === 'entity'
+  || lookAt.value === 'block'
 ))
+const baseNeedsSelector = computed(() => yawBase.value === 'entity' || pitchBase.value === 'entity')
+const baseNeedsLine = computed(() => yawBase.value === 'line' || pitchBase.value === 'line')
 
-const COORD_KEYS = ['x', 'y', 'z'] as const
+/** 坐标 / 偏移空间的引用形态（坐标三轴不在 ref 字符串里）。 */
+const fromIsCoordinate = computed(() => sampledString(fromRow.value, props.playhead, props.timing, '') === 'coordinate')
+const toIsCoordinate = computed(() => sampledString(toRow.value, props.playhead, props.timing, '') === 'coordinate')
+const fromOffsetBaseIgnored = computed(() => sampledString(fromOffsetSpaceRow.value, props.playhead, props.timing, 'world') === 'base')
+const toOffsetBaseIgnored = computed(() => sampledString(toOffsetSpaceRow.value, props.playhead, props.timing, 'world') === 'base')
+const targetOffsetBaseIgnored = computed(() => sampledString(offsetSpaceRow.value, props.playhead, props.timing, 'world') === 'base')
 
-function emitApply(commands: DocCommand[], successText: string): void {
-  if (commands.length === 0) {
-    return
-  }
-  emit('apply', commands.map((command) => ({ command, successText })))
+/** 手动模式下已有切线偏移值要能找回；无值时不额外铺行。 */
+const hasOffsetValues = computed(() => isPresent(yawOffsetRow.value) || isPresent(pitchOffsetRow.value))
+
+// ── 选项 ────────────────────────────────────────────────────────────────────
+
+const plainOptions: InspectorValueOptions = {}
+const axisOptions: InspectorValueOptions = {}
+const partOptions: InspectorValueOptions = { range: [0, 100, 1] }
+
+const lookAtOptions: InspectorValueOptions = {
+  labels: {
+    none: '关闭',
+    player: '玩家激活位置',
+    coordinate: '指定坐标',
+    entity: '实体',
+    block: '附近方块中心',
+  },
 }
 
-function write(path: string, value: JsonValue): DocCommand {
-  return planSimpleWrite(props.clipKey, props.objects, path, props.time, value)
+const orientOptions: InspectorValueOptions = {
+  labels: { manual: '手动', tangent: '切线' },
 }
 
-function coordCommands(prefix: string, coords: CoordTriple): DocCommand[] {
-  return coords.map((value, index) => write(`${prefix}_${COORD_KEYS[index]}`, value))
+const baseOptions: InspectorValueOptions = {
+  labels: { world: '世界基准', entity: '实体基准', line: '线基准' },
 }
 
-// ── look_at 载荷 ────────────────────────────────────────────────────────────
-
-const lookAtIssues = computed(() => validateLookAtDraft(lookAt.value))
-
-/** look_at 载荷按分支收窄允许形态；none/player 无载荷表单。 */
-const LOOK_KINDS: Record<LookAtBranch, RefKind[]> = {
-  none: [],
-  player: [],
-  coordinate: ['coordinate', 'structure'],
-  entity: ['selector'],
-  block: ['block'],
+const offsetSpaceOptions: InspectorValueOptions = {
+  labels: { world: '世界轴', base: '基准轴' },
 }
 
-const lookTargetDraft = computed<PointSourceDraft>(() => {
-  const draft = lookAt.value
-  if (draft.branch === 'entity') {
-    return { kind: 'selector', text: draft.selector, radius: 16, coords: [null, null, null] }
-  }
-  if (draft.branch === 'coordinate') {
-    return draft.structure !== ''
-      ? { kind: 'structure', text: draft.structure, radius: 16, coords: draft.coords }
-      : { kind: 'coordinate', text: '', radius: 16, coords: draft.coords }
-  }
-  if (draft.branch === 'block') {
-    return { kind: 'block', text: draft.block, radius: 16, coords: [null, null, null] }
-  }
-  return { kind: 'empty', text: '', radius: 16, coords: [null, null, null] }
-})
-
-function patchLookAt(partial: Partial<LookAtDraft>): void {
-  lookAt.value = { ...lookAt.value, ...partial }
+const selectorOptions: InspectorValueOptions = {
+  reference: pointReference('yaw_base_selector', '默认 · @p'),
+}
+const fromOptions: InspectorValueOptions = {
+  reference: pointReference('yaw_base_from', '未指定'),
+}
+const toOptions: InspectorValueOptions = {
+  reference: pointReference('yaw_base_to', '未指定'),
 }
 
-function setBranch(branch: LookAtBranch): void {
-  patchLookAt({ branch })
-  commitLookAt()
+const blockOptions: InspectorValueOptions = {
+  placeholder: 'minecraft:stone',
 }
 
-function setPart(index: 0 | 1 | 2, raw: string): void {
-  const part: CoordTriple = [...lookAt.value.part]
-  part[index] = raw.trim() === '' ? null : Number(raw)
-  patchLookAt({ part })
+const structureOptions: InspectorValueOptions = {
+  placeholder: 'minecraft:village_plains',
 }
 
-function onLookDraft(draft: PointSourceDraft): void {
-  const current = lookAt.value
-  if (current.branch === 'entity') {
-    patchLookAt({ selector: draft.text })
-  } else if (current.branch === 'coordinate') {
-    if (draft.kind === 'structure') {
-      patchLookAt({ structure: draft.text, coords: current.coords })
-    } else {
-      patchLookAt({ coords: draft.coords, structure: '' })
-    }
-  } else if (current.branch === 'block') {
-    patchLookAt({ block: draft.text })
-  }
-  commitLookAt()
-}
-
-function commitLookAt(): void {
-  const draft = lookAt.value
-  if (lookAtIssues.value.length > 0) {
-    return
-  }
-  const commands: DocCommand[] = [write('look_at', draft.branch)]
-  if (draft.branch === 'entity') {
-    commands.push(write('look_at_selector', draft.selector))
-    draft.part.forEach((value, index) => {
-      commands.push(write(`look_at_part.${COORD_KEYS[index]}`, value ?? 50))
-    })
-  } else if (draft.branch === 'coordinate') {
-    commands.push(...coordCommands('look_at_target', draft.coords))
-    commands.push(write('look_at_target_structure', draft.structure))
-  } else if (draft.branch === 'block') {
-    commands.push(write('look_at_target_block', draft.block))
-  }
-  emitApply(commands, '已更新注视目标')
-}
-
-// ── 基准 / 锁 / 端点 ─────────────────────────────────────────────────────────
-
-function setBase(axis: 'yaw' | 'pitch', value: string): void {
-  emitApply([write(`${axis}_base`, value)], `已切换 ${axis}_base`)
-}
-
-function onSelectorDraft(draft: PointSourceDraft): void {
-  if (draft.text.trim().length === 0) {
-    return
-  }
-  emitApply([write('yaw_base_selector', draft.text)], '已更新基准选择器')
-}
-
-function onFromDraft(draft: PointSourceDraft): void {
-  const ref = draft.kind === 'coordinate' ? 'coordinate' : draft.text
-  const commands: DocCommand[] = [write('yaw_base_from', ref)]
-  if (draft.kind === 'coordinate') {
-    commands.push(...coordCommands('yaw_base_from', draft.coords))
-  }
-  emitApply(commands, '已更新线基准起点')
-}
-
-function onToDraft(draft: PointSourceDraft): void {
-  const ref = draft.kind === 'coordinate' ? 'coordinate' : draft.text
-  const commands: DocCommand[] = [write('yaw_base_to', ref)]
-  if (draft.kind === 'coordinate') {
-    commands.push(...coordCommands('yaw_base_to', draft.coords))
-  }
-  emitApply(commands, '已更新线基准终点')
-}
-
-function setLock(axis: 'yaw' | 'pitch', raw: string): void {
-  const value: JsonValue = raw.trim() === '' ? null : Number(raw)
-  emitApply([write(`${axis}_lock`, value)], `已切换 ${axis}_lock`)
-}
-
-function toggleFreeze(path: string, checked: boolean): void {
-  emitApply([write(path, checked)], `已切换 ${path}`)
-}
-
-function disabled(path: string): boolean {
-  return bar.value.state.disabled[path] !== undefined
-}
-
-function lockText(axis: 'yaw' | 'pitch'): string {
-  return lockNote(axis, axis === 'yaw' ? bar.value.values.yaw_lock : bar.value.values.pitch_lock)
-}
-
-function baseText(axis: 'yaw' | 'pitch'): string {
-  const base = axis === 'yaw' ? bar.value.values.yaw_base : bar.value.values.pitch_base
-  return baseNote(axis, base, disabled(`${axis}_base`))
-}
-
-const yawLockText = computed(() => {
-  const value = bar.value.values.yaw_lock
-  return value === null ? '' : String(value)
-})
-const pitchLockText = computed(() => {
-  const value = bar.value.values.pitch_lock
-  return value === null ? '' : String(value)
-})
+/** 基准 / 锁说明（锁替换基准，再叠加角度；不是绝对值钳制）。 */
+const LOCK_NOTE = '锁非空时替换该轴基准，随后再叠加偏航 / 俯仰角。'
 </script>
 
 <template>
-  <div class="ori-editor">
-    <div class="ori-editor__summary">{{ bar.state.summary }}</div>
+  <section class="ori-card" aria-label="朝向">
+    <header class="ori-card__head">
+      <span class="ori-card__title">朝向</span>
+      <span class="ori-card__meta">注视目标 → 切线 → 手动</span>
+    </header>
 
-    <div class="ori-editor__row">
-      <span class="ori-editor__label">look_at</span>
-      <select
-        :value="lookAt.branch"
-        @change="setBranch(($event.target as HTMLSelectElement).value as LookAtBranch)"
-      >
-        <option v-for="branch in LOOK_AT_BRANCHES" :key="branch" :value="branch">{{ branch }}</option>
-      </select>
-      <span v-if="lookAt.branch === 'player'" class="ori-editor__note">注视玩家实体</span>
-    </div>
-
-    <div v-if="lookAt.branch !== 'none' && lookAt.branch !== 'player'" class="ori-editor__row">
-      <span class="ori-editor__label">目标</span>
-      <PointSourceForm
-        field="look_at"
-        :draft="lookTargetDraft"
-        :kinds="LOOK_KINDS[lookAt.branch]"
-        @update:draft="onLookDraft"
+    <div class="ori-card__body">
+      <slot
+        v-if="lookAtRow"
+        name="row"
+        :row="relabel(lookAtRow, '注视目标')"
+        :options="lookAtOptions"
+        :axis="false"
       />
+
+      <!-- 随注视目标展开的适用载荷 -->
+      <template v-if="lookAt === 'coordinate'">
+        <div class="ori-axis">
+          <div v-if="targetXRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(targetXRow, '目标 X')" :options="plainOptions" :axis="true" />
+          </div>
+          <div v-if="targetYRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(targetYRow, '目标 Y')" :options="plainOptions" :axis="true" />
+          </div>
+          <div v-if="targetZRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(targetZRow, '目标 Z')" :options="plainOptions" :axis="true" />
+          </div>
+        </div>
+        <p class="ori-note">目标结构非空时优先于这三个坐标。</p>
+      </template>
+
+      <template v-else-if="lookAt === 'entity'">
+        <slot
+          v-if="selectorRow"
+          name="row"
+          :row="relabel(selectorRow, '注视实体')"
+          :options="plainOptions"
+          :axis="false"
+        />
+        <div class="ori-axis">
+          <div v-if="partXRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(partXRow, '取点 X')" :options="partOptions" :axis="true" />
+          </div>
+          <div v-if="partYRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(partYRow, '取点 Y')" :options="partOptions" :axis="true" />
+          </div>
+          <div v-if="partZRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(partZRow, '取点 Z')" :options="partOptions" :axis="true" />
+          </div>
+        </div>
+        <p class="ori-note">取点是实体包围盒内的百分比；空选择器按目录缺省 @p。</p>
+      </template>
+
+      <template v-else-if="lookAt === 'block'">
+        <slot
+          v-if="targetBlockRow"
+          name="row"
+          :row="relabel(targetBlockRow, '方块 ID 和可选半径')"
+          :options="blockOptions"
+          :axis="false"
+        />
+        <p class="ori-note">取玩家附近最近方块中心；默认半径 16，实际取 max(16, 半径)。</p>
+      </template>
+
+      <template v-else-if="lookAt === 'player'">
+        <p class="ori-note">注视玩家激活脚本时的位置（整场固定），不读取注视实体选择器。</p>
+      </template>
+
+      <!-- 目标偏移 / 结构 / 冻结：适用但低频 -->
+      <details v-if="hasTarget" class="ori-fold">
+        <summary>目标附加（结构 / 偏移 / 冻结）</summary>
+        <slot
+          v-if="lookAt === 'coordinate' && targetStructureRow"
+          name="row"
+          :row="relabel(targetStructureRow, '目标结构')"
+          :options="structureOptions"
+          :axis="false"
+        />
+        <div class="ori-axis">
+          <div v-if="offsetXRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(offsetXRow, '目标偏移 X')" :options="plainOptions" :axis="true" />
+          </div>
+          <div v-if="offsetYRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(offsetYRow, '目标偏移 Y')" :options="plainOptions" :axis="true" />
+          </div>
+          <div v-if="offsetZRow" class="ori-axis__cell">
+            <slot name="row" :row="relabel(offsetZRow, '目标偏移 Z')" :options="plainOptions" :axis="true" />
+          </div>
+        </div>
+        <slot
+          v-if="offsetSpaceRow"
+          name="row"
+          :row="relabel(offsetSpaceRow, '偏移空间')"
+          :options="offsetSpaceOptions"
+          :axis="false"
+        />
+        <slot
+          v-if="targetFreezeRow"
+          name="row"
+          :row="relabel(targetFreezeRow, '目标冻结')"
+          :options="plainOptions"
+          :axis="false"
+        />
+        <p v-if="targetOffsetBaseIgnored" class="ori-note">
+          基准空间偏移只在位置空间为基准轴时生效；否则只读世界轴分量。
+        </p>
+      </details>
+
+      <!-- 角度：无目标时为主入口；有目标时作为目标不可解析的后备入口 -->
+      <details class="ori-angle" :open="!hasTarget">
+        <summary v-if="hasTarget">目标不可用时的朝向</summary>
+
+        <slot
+          v-if="orientRow"
+          name="row"
+          :row="relabel(orientRow, '朝向模式')"
+          :options="orientOptions"
+          :axis="false"
+        />
+
+        <template v-if="tangent">
+          <div class="ori-axis">
+            <div v-if="yawOffsetRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(yawOffsetRow, '偏航偏移')" :options="plainOptions" :axis="true" />
+            </div>
+            <div v-if="pitchOffsetRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(pitchOffsetRow, '俯仰偏移')" :options="plainOptions" :axis="true" />
+            </div>
+          </div>
+          <details class="ori-fold">
+            <summary>切线无效时的手动角度</summary>
+            <div class="ori-axis">
+              <div v-if="yawRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(yawRow, '偏航')" :options="plainOptions" :axis="true" />
+              </div>
+              <div v-if="pitchRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(pitchRow, '俯仰')" :options="plainOptions" :axis="true" />
+              </div>
+            </div>
+            <p class="ori-note">切线方向缺失或长度过小时回退手动值；手动值不受切线偏移影响。</p>
+          </details>
+        </template>
+
+        <template v-else>
+          <div class="ori-axis">
+            <div v-if="yawRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(yawRow, '偏航')" :options="plainOptions" :axis="true" />
+            </div>
+            <div v-if="pitchRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(pitchRow, '俯仰')" :options="plainOptions" :axis="true" />
+            </div>
+          </div>
+          <details v-if="hasOffsetValues" class="ori-fold">
+            <summary>切线偏移（已有值）</summary>
+            <div class="ori-axis">
+              <div v-if="yawOffsetRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(yawOffsetRow, '偏航偏移')" :options="plainOptions" :axis="true" />
+              </div>
+              <div v-if="pitchOffsetRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(pitchOffsetRow, '俯仰偏移')" :options="plainOptions" :axis="true" />
+              </div>
+            </div>
+            <p class="ori-note">偏移只在朝向模式为切线且切线有效时叠加；当前手动模式不读取。</p>
+          </details>
+        </template>
+
+        <!-- 每轴基准 / 锁 -->
+        <div class="ori-base">
+          <div class="ori-axis">
+            <div v-if="yawBaseRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(yawBaseRow, '偏航基准')" :options="baseOptions" :axis="false" />
+            </div>
+            <div v-if="pitchBaseRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(pitchBaseRow, '俯仰基准')" :options="baseOptions" :axis="false" />
+            </div>
+          </div>
+          <div class="ori-axis">
+            <div v-if="yawLockRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(yawLockRow, '偏航锁')" :options="plainOptions" :axis="false" />
+            </div>
+            <div v-if="pitchLockRow" class="ori-axis__cell">
+              <slot name="row" :row="relabel(pitchLockRow, '俯仰锁')" :options="plainOptions" :axis="false" />
+            </div>
+          </div>
+          <p class="ori-note">{{ LOCK_NOTE }}</p>
+
+          <slot
+            v-if="baseNeedsSelector && baseSelectorRow"
+            name="row"
+            :row="relabel(baseSelectorRow, '基准选择器')"
+            :options="selectorOptions"
+            :axis="false"
+          />
+          <p v-if="baseNeedsSelector" class="ori-note">偏航基准读实体身体朝向；俯仰基准读视线俯仰。</p>
+
+          <details v-if="baseNeedsLine" class="ori-fold">
+            <summary>线基准端点</summary>
+
+            <slot
+              v-if="fromRow"
+              name="row"
+              :row="relabel(fromRow, '线基准起点')"
+              :options="fromOptions"
+              :axis="false"
+            />
+            <div v-if="fromIsCoordinate" class="ori-axis">
+              <div v-if="fromXRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(fromXRow, '起点 X')" :options="plainOptions" :axis="true" />
+              </div>
+              <div v-if="fromYRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(fromYRow, '起点 Y')" :options="plainOptions" :axis="true" />
+              </div>
+              <div v-if="fromZRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(fromZRow, '起点 Z')" :options="plainOptions" :axis="true" />
+              </div>
+            </div>
+
+            <slot
+              v-if="toRow"
+              name="row"
+              :row="relabel(toRow, '线基准终点')"
+              :options="toOptions"
+              :axis="false"
+            />
+            <div v-if="toIsCoordinate" class="ori-axis">
+              <div v-if="toXRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(toXRow, '终点 X')" :options="plainOptions" :axis="true" />
+              </div>
+              <div v-if="toYRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(toYRow, '终点 Y')" :options="plainOptions" :axis="true" />
+              </div>
+              <div v-if="toZRow" class="ori-axis__cell">
+                <slot name="row" :row="relabel(toZRow, '终点 Z')" :options="plainOptions" :axis="true" />
+              </div>
+            </div>
+
+            <details class="ori-fold">
+              <summary>端点偏移与冻结</summary>
+              <div class="ori-axis">
+                <div v-if="fromOffsetXRow" class="ori-axis__cell">
+                  <slot
+                    name="row"
+                    :row="fromOffsetBaseIgnored
+                      ? withUnavailable(relabel(fromOffsetXRow, '起点偏移 X'), '基准空间的偏移在运行时被忽略，只生效世界轴')
+                      : relabel(fromOffsetXRow, '起点偏移 X')"
+                    :options="plainOptions"
+                    :axis="true"
+                  />
+                </div>
+                <div v-if="fromOffsetYRow" class="ori-axis__cell">
+                  <slot
+                    name="row"
+                    :row="fromOffsetBaseIgnored
+                      ? withUnavailable(relabel(fromOffsetYRow, '起点偏移 Y'), '基准空间的偏移在运行时被忽略，只生效世界轴')
+                      : relabel(fromOffsetYRow, '起点偏移 Y')"
+                    :options="plainOptions"
+                    :axis="true"
+                  />
+                </div>
+                <div v-if="fromOffsetZRow" class="ori-axis__cell">
+                  <slot
+                    name="row"
+                    :row="fromOffsetBaseIgnored
+                      ? withUnavailable(relabel(fromOffsetZRow, '起点偏移 Z'), '基准空间的偏移在运行时被忽略，只生效世界轴')
+                      : relabel(fromOffsetZRow, '起点偏移 Z')"
+                    :options="plainOptions"
+                    :axis="true"
+                  />
+                </div>
+              </div>
+              <slot
+                v-if="fromOffsetSpaceRow"
+                name="row"
+                :row="relabel(fromOffsetSpaceRow, '起点偏移空间')"
+                :options="offsetSpaceOptions"
+                :axis="false"
+              />
+              <slot
+                v-if="fromFreezeRow"
+                name="row"
+                :row="relabel(fromFreezeRow, '起点冻结')"
+                :options="plainOptions"
+                :axis="false"
+              />
+
+              <div class="ori-axis">
+                <div v-if="toOffsetXRow" class="ori-axis__cell">
+                  <slot
+                    name="row"
+                    :row="toOffsetBaseIgnored
+                      ? withUnavailable(relabel(toOffsetXRow, '终点偏移 X'), '基准空间的偏移在运行时被忽略，只生效世界轴')
+                      : relabel(toOffsetXRow, '终点偏移 X')"
+                    :options="plainOptions"
+                    :axis="true"
+                  />
+                </div>
+                <div v-if="toOffsetYRow" class="ori-axis__cell">
+                  <slot
+                    name="row"
+                    :row="toOffsetBaseIgnored
+                      ? withUnavailable(relabel(toOffsetYRow, '终点偏移 Y'), '基准空间的偏移在运行时被忽略，只生效世界轴')
+                      : relabel(toOffsetYRow, '终点偏移 Y')"
+                    :options="plainOptions"
+                    :axis="true"
+                  />
+                </div>
+                <div v-if="toOffsetZRow" class="ori-axis__cell">
+                  <slot
+                    name="row"
+                    :row="toOffsetBaseIgnored
+                      ? withUnavailable(relabel(toOffsetZRow, '终点偏移 Z'), '基准空间的偏移在运行时被忽略，只生效世界轴')
+                      : relabel(toOffsetZRow, '终点偏移 Z')"
+                    :options="plainOptions"
+                    :axis="true"
+                  />
+                </div>
+              </div>
+              <slot
+                v-if="toOffsetSpaceRow"
+                name="row"
+                :row="relabel(toOffsetSpaceRow, '终点偏移空间')"
+                :options="offsetSpaceOptions"
+                :axis="false"
+              />
+              <slot
+                v-if="toFreezeRow"
+                name="row"
+                :row="relabel(toFreezeRow, '终点冻结')"
+                :options="plainOptions"
+                :axis="false"
+              />
+              <p class="ori-note">线基准端点的基准空间偏移永远不生效；端点不可解析或水平退化时回退世界基准。</p>
+            </details>
+          </details>
+
+          <p v-if="hasTarget" class="ori-note">
+            注视目标可解析时优先用目标方向；这里的手动 / 切线设置只在目标不可解析时回退使用。
+          </p>
+        </div>
+      </details>
+
+      <slot
+        v-if="rollRow"
+        name="row"
+        :row="relabel(rollRow, '横滚（绕视线轴）')"
+        :options="plainOptions"
+        :axis="false"
+      />
+      <p class="ori-note">横滚在渲染期绕视线轴追加，不参与偏航 / 俯仰基准。</p>
     </div>
-
-    <div v-if="lookAt.branch === 'entity'" class="ori-editor__row">
-      <span class="ori-editor__label">part</span>
-      <label class="ori-editor__coord">
-        <span>X</span>
-        <input type="number" min="0" max="100" :value="lookAt.part[0] ?? ''" @input="setPart(0, ($event.target as HTMLInputElement).value)" @change="commitLookAt" />
-      </label>
-      <label class="ori-editor__coord">
-        <span>Y</span>
-        <input type="number" min="0" max="100" :value="lookAt.part[1] ?? ''" @input="setPart(1, ($event.target as HTMLInputElement).value)" @change="commitLookAt" />
-      </label>
-      <label class="ori-editor__coord">
-        <span>Z</span>
-        <input type="number" min="0" max="100" :value="lookAt.part[2] ?? ''" @input="setPart(2, ($event.target as HTMLInputElement).value)" @change="commitLookAt" />
-      </label>
-    </div>
-
-    <p v-if="lookAtIssues.length > 0" class="ori-editor__warning" role="alert">
-      {{ lookAtIssues.map((issue) => issue.message).join('；') }}
-    </p>
-
-    <div class="ori-editor__row">
-      <label class="ori-editor__field">
-        <span class="ori-editor__label">yaw 基准</span>
-        <select :value="bar.values.yaw_base" :disabled="disabled('yaw_base')" @change="setBase('yaw', ($event.target as HTMLSelectElement).value)">
-          <option v-for="base in BASE_KINDS" :key="base" :value="base">{{ base }}</option>
-        </select>
-      </label>
-      <label class="ori-editor__field">
-        <span class="ori-editor__label">pitch 基准</span>
-        <select :value="bar.values.pitch_base" :disabled="disabled('pitch_base')" @change="setBase('pitch', ($event.target as HTMLSelectElement).value)">
-          <option v-for="base in BASE_KINDS" :key="base" :value="base">{{ base }}</option>
-        </select>
-      </label>
-      <span v-if="(effectCount ?? 0) > 0" class="ori-editor__effects">{{ effectCount }} 项在效果面板</span>
-    </div>
-
-    <div class="ori-editor__note">{{ baseText('yaw') }} ｜ {{ baseText('pitch') }}</div>
-
-    <div v-if="bar.selectorVisible" class="ori-editor__row">
-      <span class="ori-editor__label">基准选择器</span>
-      <PointSourceForm field="yaw_base_selector" :draft="selectorDraft" :disabled="disabled('yaw_base_selector')" @update:draft="onSelectorDraft" />
-    </div>
-
-    <div v-if="bar.values.yaw_base === 'line'" class="ori-editor__row">
-      <span class="ori-editor__label">线起点</span>
-      <PointSourceForm field="yaw_base_from" :draft="bar.lineFrom" @update:draft="onFromDraft" />
-      <label class="ori-editor__coord">
-        <input type="checkbox" :checked="staticField(objects, 'yaw_base_from_freeze', false) === true" @change="toggleFreeze('yaw_base_from_freeze', ($event.target as HTMLInputElement).checked)" />
-        <span>冻结</span>
-      </label>
-    </div>
-
-    <div v-if="bar.values.pitch_base === 'line'" class="ori-editor__row">
-      <span class="ori-editor__label">线终点</span>
-      <PointSourceForm field="yaw_base_to" :draft="bar.lineTo" @update:draft="onToDraft" />
-      <label class="ori-editor__coord">
-        <input type="checkbox" :checked="staticField(objects, 'yaw_base_to_freeze', false) === true" @change="toggleFreeze('yaw_base_to_freeze', ($event.target as HTMLInputElement).checked)" />
-        <span>冻结</span>
-      </label>
-    </div>
-
-    <div class="ori-editor__row">
-      <label class="ori-editor__field">
-        <span class="ori-editor__label">yaw 锁</span>
-        <input type="number" :value="yawLockText" :disabled="disabled('yaw_lock')" @input="setLock('yaw', ($event.target as HTMLInputElement).value)" />
-      </label>
-      <label class="ori-editor__field">
-        <span class="ori-editor__label">pitch 锁</span>
-        <input type="number" :value="pitchLockText" :disabled="disabled('pitch_lock')" @input="setLock('pitch', ($event.target as HTMLInputElement).value)" />
-      </label>
-    </div>
-    <div class="ori-editor__note">{{ lockText('yaw') }} ｜ {{ lockText('pitch') }}</div>
-
-    <p v-for="warning in bar.state.warnings" :key="warning" class="ori-editor__warning" role="alert">{{ warning }}</p>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.ori-editor {
+.ori-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-  font-size: 11px;
-}
-
-.ori-editor__summary {
-  color: var(--text-secondary);
-}
-
-.ori-editor__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.ori-editor__field {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.ori-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
 }
 
-.ori-editor__label {
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.ori-editor__text,
-.ori-editor__field select,
-.ori-editor__coord input {
-  padding: 1px 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  background: var(--bg-panel);
+.ori-card__title {
   color: var(--text);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 650;
 }
 
-.ori-editor__coord {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.ori-editor__note {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.ori-editor__effects {
+.ori-card__meta {
   margin-left: auto;
-  color: var(--accent);
+  color: var(--text-muted);
+  font-size: 11px;
   white-space: nowrap;
 }
 
-.ori-editor__warning {
+.ori-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ori-axis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.ori-axis__cell {
+  min-width: 0;
+}
+
+.ori-fold,
+.ori-angle {
+  margin: 2px 0 0;
+  padding: 2px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.ori-fold > summary,
+.ori-angle > summary {
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ori-base {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.ori-note {
   margin: 0;
-  color: var(--warning);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
 }
 </style>

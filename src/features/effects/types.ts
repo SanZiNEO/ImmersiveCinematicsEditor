@@ -351,12 +351,3 @@ export interface EffectPanelSession {
   selectedSegment: SegmentSelection | null
 }
 
-/** 属性面板会话状态（06-09 §4.1）。 */
-export interface PropertiesPanelSession {
-  collapsed: Set<string>
-  search: string
-  onlyUnset: boolean
-  scrollTop: number
-  /** 10 轮按片段首次装载时应用默认折叠；用户之后的选择原样保留。 */
-  initialized?: boolean
-}

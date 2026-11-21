@@ -46,7 +46,6 @@ function openEditor(): void {
   <div class="motion-row" :data-path="path">
     <div class="motion-row__head">
       <span class="motion-row__label" :title="path">{{ label }}</span>
-      <span class="motion-row__path">{{ path }}</span>
       <span class="motion-row__badge" :data-domain="badge.key">{{ badge.label }}</span>
       <span class="motion-row__count">{{ nodes }} 节点 · 深度 {{ depth }}</span>
     </div>
@@ -73,12 +72,12 @@ function openEditor(): void {
 .motion-row {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 3px 10px 5px;
+  gap: 2px;
+  padding: 3px 8px 4px;
   border-bottom: 1px solid var(--border);
   border-left: 2px solid transparent;
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .motion-row__head {
@@ -94,14 +93,6 @@ function openEditor(): void {
   white-space: nowrap;
 }
 
-.motion-row__path {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .motion-row__badge {
   padding: 0 4px;

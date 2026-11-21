@@ -35,6 +35,7 @@ import { DOCUMENT_SERVICE } from '../../../workbench/api/tokens.ts'
 import { commitPrefixFor } from '../customFields.ts'
 import StructTreeEditor from './StructTreeEditor.vue'
 import AnimationControls from './AnimationControls.vue'
+import type { InspectorValueOptions } from './inspectorValueOptions.ts'
 import type { AddKeyframePayload, SetValuePayload } from './effectRowEvents.ts'
 
 const props = defineProps<{
@@ -60,6 +61,11 @@ const props = defineProps<{
   compact?: boolean
   /** 片段对象（09 提交前缀用；省略时按 `DOCUMENT_SERVICE.clipObjects` 取）。 */
   objects?: JsonObject
+  /**
+   * 右侧 Inspector 显式 opt-in：分段枚举、实用滑杆、引用形态、长文本、复位与帧间只读。
+   * 不传时共享面板（效果面板 / 专用编辑器）行为不变。
+   */
+  inspector?: InspectorValueOptions
 }>()
 
 const emit = defineEmits<{
@@ -91,15 +97,25 @@ const ensureCommands = computed<DocCommand[]>(() => {
 
 const kind = computed(() => controlKindOf(props.row))
 const hasKeyframes = computed(() => props.rowHasKeyframes ?? props.row.keyframes.length > 0)
-const playheadHitsNode = computed(() =>
-  props.row.keyframes.some((frame) => Math.abs(frame.time - props.playhead) <= PLAYHEAD_EPSILON))
+const frameAtPlayhead = computed(() =>
+  props.row.keyframes.find((frame) => Math.abs(frame.time - props.playhead) <= PLAYHEAD_EPSILON))
+const playheadHitsNode = computed(() => frameAtPlayhead.value !== undefined)
+/** 右栏显式 opt-in：只在传入选项时改变排版 / 采样行为。 */
+const inspectorMode = computed(() => props.inspector !== undefined)
+/** 有帧但播放头在两帧之间：只显示采样值，先加帧才能编辑。 */
+const inspectorSampling = computed(() =>
+  inspectorMode.value && hasKeyframes.value && !playheadHitsNode.value)
+const inspectorLocked = computed(() => inspectorSampling.value)
 
 /** 该行是否支持关键帧（`mode=value` / `struct` / 未知路径都不支持）。 */
 const animatableRow = computed(() => animatable(props.row.def) && !props.row.unknown)
 
-/** 动画控件只对可动画的行显示（事件行走记录编辑器，值/结构行没有帧）。 */
+/** 右栏把帧按钮放在行上，共享表单里的旧动画控件在 Inspector 模式一律不显示。 */
 const showAnimationControls = computed(() =>
-  kind.value !== 'event' && kind.value !== 'readonly' && kind.value !== 'struct')
+  !inspectorMode.value
+  && kind.value !== 'event'
+  && kind.value !== 'readonly'
+  && kind.value !== 'struct')
 
 /** 该属性的上/下一个关键帧（升序数组里找最近的）。 */
 const hasPrevKeyframe = computed(() =>
@@ -198,14 +214,12 @@ const sampled = computed<{ ok: boolean; value?: unknown }>(() => {
 /** 控件显示的值：命中节点 → 节点值；否则采样值；再否则静态值 / 默认值。 */
 const displayValue = computed<unknown>(() => {
   if (playheadHitsNode.value) {
-    const frame = props.row.keyframes.find(
-      (item) => Math.abs(item.time - props.playhead) <= PLAYHEAD_EPSILON,
-    )
+    const frame = frameAtPlayhead.value
     if (frame !== undefined) {
       return frame.value
     }
   }
-  if (props.panel === 'effects' && sampled.value.ok) {
+  if ((props.panel === 'effects' || inspectorMode.value) && sampled.value.ok) {
     return sampled.value.value
   }
   if (props.row.hasValue) {
@@ -259,12 +273,25 @@ function syncDraft(): void {
 }
 
 watch(
-  () => [props.row.path, props.playhead, props.row.keyframes.length, props.row.hasValue, props.row.value, props.row.defaultValue],
+  () => [props.row.clipKey, props.row.path, props.playhead, props.row.keyframes.length, props.row.hasValue,
+    props.row.value, props.row.defaultValue, displayValue.value],
   () => {
     syncDraft()
   },
   { immediate: true },
 )
+
+/** 换片段 / 路径后丢弃上一片段的草稿与守卫挂起状态，直接跟随新文档。 */
+watch(
+  () => [props.row.clipKey, props.row.path],
+  () => {
+    dirty.value = false
+    applied.value = ''
+    clearError()
+    syncDraft()
+  },
+)
+
 
 /** 结构值的原文草稿：只有显式"应用"才提交。 */
 const rawOpen = ref(false)
@@ -299,7 +326,8 @@ function onTreeChange(next: JsonValue): void {
 
 const suffix = computed(() => unitSuffix(props.row))
 const hint = computed(() => rangeHint(props.row))
-const canEdit = computed(() => !props.disabled && kind.value !== 'readonly' && kind.value !== 'event')
+const canEdit = computed(() =>
+  !props.disabled && kind.value !== 'readonly' && kind.value !== 'event' && !inspectorLocked.value)
 
 /** 待新增节点的目标：效果面板播放头没有节点。 */
 const pendingNewNode = computed(() => {
@@ -309,14 +337,33 @@ const pendingNewNode = computed(() => {
   return !playheadHitsNode.value
 })
 
-const target = computed<{ ok: boolean; target?: CommitTarget; code?: RejectCode; message?: string }>(() =>
-  resolveTarget({
+const target = computed<{ ok: boolean; target?: CommitTarget; code?: RejectCode; message?: string }>(() => {
+  // 右栏：有帧时只允许写已存在的节点，并取规范帧时间（不新建、不改时间）。
+  if (inspectorMode.value && hasKeyframes.value) {
+    if (!playheadHitsNode.value) {
+      return {
+        ok: false,
+        code: 'mode_not_animatable',
+        message: '帧间为采样值：先在当前时间添加关键帧再编辑',
+      }
+    }
+    const frame = frameAtPlayhead.value
+    if (frame === undefined) {
+      return { ok: false, code: 'not_found', message: '找不到播放头处的关键帧' }
+    }
+    return {
+      ok: true,
+      target: { kind: 'node', clipKey: props.row.clipKey, path: props.row.path, time: frame.time },
+    }
+  }
+  return resolveTarget({
     panel: props.panel,
     row: props.row,
     rowHasKeyframes: hasKeyframes.value,
     playhead: props.playhead,
     playheadHitsNode: playheadHitsNode.value,
-  }))
+  })
+})
 
 function setError(code: RejectCode, message: string): void {
   errorCode.value = code
@@ -369,12 +416,18 @@ function submitValue(value: JsonValue): boolean {
     ? `setStatic:${targetValue.clipKey}:${targetValue.path}`
     : `setValue:${targetValue.clipKey}:${targetValue.path}:${targetValue.time}`
   const prefix = ensureCommands.value
-  const outcome = prefix.length > 0
-    ? ctx.commands.commitBatch([...prefix, write], coalesceKey)
-    : ctx.commands.commit(write, coalesceKey)
+  const commands = [...prefix, write]
+  const inspectorCommit = props.inspector?.commit
+  const outcome = inspectorMode.value && inspectorCommit !== undefined
+    ? inspectorCommit(commands, coalesceKey)
+    : prefix.length > 0
+      ? ctx.commands.commitBatch(commands, coalesceKey)
+      : ctx.commands.commit(write, coalesceKey)
   if (outcome.ok) {
     clearError()
-    applied.value = targetValue.kind === 'static' ? '已写入静态值。' : `已写入节点值 t=${targetValue.time}。`
+    applied.value = inspectorMode.value
+      ? ''
+      : targetValue.kind === 'static' ? '已写入静态值。' : `已写入节点值 t=${targetValue.time}。`
     dirty.value = false
     // 立刻用写入值刷新草稿，避免 props 尚未重算时闪回旧文本。
     if (kind.value === 'nullable-number' && normalized === null) {
@@ -384,6 +437,13 @@ function submitValue(value: JsonValue): boolean {
     }
     emitCommit(true, { value: normalized })
     return true
+  }
+  if ('pending' in outcome) {
+    // 守卫只在父面板显示。在确认写入前，控件继续回显当前文档值。
+    dirty.value = false
+    clearError()
+    syncDraft()
+    return false
   }
   const code: RejectCode = targetValue.kind === 'static' ? 'type_mismatch' : 'not_found'
   setError(code, outcome.error ?? '写入失败')
@@ -470,14 +530,20 @@ function onBooleanChange(event: Event): void {
   if (!canEdit.value) {
     return
   }
-  submitValue((event.target as HTMLInputElement).checked)
+  const input = event.target as HTMLInputElement
+  if (!submitValue(input.checked) && inspectorMode.value) {
+    input.checked = displayValue.value === true
+  }
 }
 
 function onEnumChange(event: Event): void {
   if (!canEdit.value) {
     return
   }
-  submitValue((event.target as HTMLSelectElement).value)
+  const select = event.target as HTMLSelectElement
+  if (!submitValue(select.value) && inspectorMode.value) {
+    select.value = typeof displayValue.value === 'string' ? displayValue.value : ''
+  }
 }
 
 /** 可空数字的"不设值"开关：勾选写 `null`（不是 0）并显示"不锁"；取消勾选可输入具体值。 */
@@ -571,13 +637,162 @@ const structValue = computed<JsonValue>(() => {
   }
   return {}
 })
+
+// ── Inspector opt-in：枚举操作词、实用滑杆、复位与引用形态 ─────────────
+
+/** 枚举显示文本：Inspector 可提供中文操作词；共享面板仍显示原值。 */
+function optionLabel(value: string): string {
+  return props.inspector?.labels?.[value] ?? value
+}
+
+const segmentedEnum = computed(() =>
+  inspectorMode.value && props.inspector?.segmented === true && enumValues.value.length > 0)
+
+const rangeSpec = computed<readonly [number, number, number] | undefined>(() =>
+  inspectorMode.value ? props.inspector?.range : undefined)
+const sliderMin = computed(() => rangeSpec.value?.[0] ?? 0)
+const sliderMax = computed(() => rangeSpec.value?.[1] ?? 0)
+const sliderStep = computed(() => rangeSpec.value?.[2] ?? 1)
+
+/** 滑杆位置：按实用区间夹取当前值；精确输入仍以输入框为准。 */
+const sliderValue = computed(() => {
+  const spec = rangeSpec.value
+  if (spec === undefined) {
+    return 0
+  }
+  const current = Number(draft.value)
+  if (!Number.isFinite(current)) {
+    return spec[0]
+  }
+  return Math.min(spec[1], Math.max(spec[0], current))
+})
+
+function onSliderInput(event: Event): void {
+  if (!canEdit.value) {
+    return
+  }
+  const next = (event.target as HTMLInputElement).valueAsNumber
+  if (!Number.isFinite(next)) {
+    return
+  }
+  const parsed = parseTextInput(kind.value, String(next))
+  if (!parsed.ok) {
+    return
+  }
+  if (submitValue(parsed.value as JsonValue)) {
+    draft.value = textOf(parsed.value as JsonValue)
+  }
+}
+
+function onSliderChange(): void {
+  ctx.commands.endCoalescing()
+}
+
+function submitEnum(value: string): void {
+  if (!canEdit.value) {
+    return
+  }
+  submitValue(value)
+}
+
+/** 复位目录默认值：只在静态值或当前帧可编辑时出现（帧间采样不提供）。 */
+const canReset = computed(() =>
+  inspectorMode.value
+  && props.row.hasDefault
+  && canEdit.value
+  && kind.value !== 'readonly'
+  && kind.value !== 'event'
+  && kind.value !== 'struct')
+
+function resetDefault(): void {
+  if (!canReset.value) {
+    return
+  }
+  submitValue(props.row.defaultValue as JsonValue)
+}
+
+const inspectorPlaceholder = computed(() =>
+  inspectorMode.value ? props.inspector?.placeholder : undefined)
+const inspectorMultiline = computed(() =>
+  inspectorMode.value && props.inspector?.multiline === true)
+
+const inspectorReference = computed(() =>
+  inspectorMode.value ? props.inspector?.reference : undefined)
+
+/** 引用形态：把当前已存值（含自定义值）归到某个形态。 */
+const refForm = computed(() => {
+  const reference = inspectorReference.value
+  const value = displayValue.value
+  if (reference === undefined || typeof value !== 'string') {
+    return ''
+  }
+  return reference.preset(value)
+})
+
+const refChoices = computed(() => inspectorReference.value?.choices ?? [])
+const refFormKnown = computed(() =>
+  refChoices.value.some((choice) => choice.value === refForm.value))
+const refPayload = computed(() => inspectorReference.value?.payloads?.[refForm.value])
+const refPayloadPlaceholder = computed(() => refPayload.value?.placeholder)
+const refPayloadLabel = computed(() => refPayload.value?.label ?? '')
+
+/** 载荷输入：同形态下保留已存值；有前缀时只显示前缀后的部分。 */
+const refPayloadValue = computed(() => {
+  const payload = refPayload.value
+  const value = displayValue.value
+  if (payload === undefined || typeof value !== 'string') {
+    return ''
+  }
+  const reference = inspectorReference.value
+  if (reference === undefined || reference.preset(value) !== refForm.value) {
+    return ''
+  }
+  const prefix = payload.prefix ?? ''
+  return prefix !== '' && value.startsWith(prefix) ? value.slice(prefix.length) : value
+})
+
+/** 形态下拉：value 直接交给真实字段校验；失败时恢复原选中项。 */
+function onRefFormChange(event: Event): void {
+  const select = event.target as HTMLSelectElement
+  const next = select.value
+  if (!canEdit.value || next === refForm.value) {
+    return
+  }
+  if (!submitValue(next)) {
+    select.value = refForm.value
+  }
+}
+
+/** 载荷输入：拼回真实字段值，并要求仍归在同一形态（保留自定义值）。 */
+function onRefPayloadChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const payload = refPayload.value
+  const reference = inspectorReference.value
+  if (payload === undefined || reference === undefined || !canEdit.value) {
+    return
+  }
+  const composed = (payload.prefix ?? '') + input.value.trim()
+  if (composed === '' || reference.preset(composed) !== refForm.value) {
+    setError('type_mismatch', `输入需要匹配「${payload.label}」`)
+    input.value = refPayloadValue.value
+    return
+  }
+  if (!submitValue(composed)) {
+    input.value = refPayloadValue.value
+  }
+}
 </script>
 
 <template>
-  <div class="value-form" :class="{ 'value-form--compact': compact === true }" :data-kind="kind" :data-panel="panel">
+  <div
+    class="value-form"
+    :class="{ 'value-form--compact': compact === true, 'value-form--inspector': inspectorMode }"
+    :data-kind="kind"
+    :data-panel="panel"
+  >
     <!-- number / integer / nullable-number：带范围与单位的数字输入 -->
     <template v-if="kind === 'number' || kind === 'integer' || kind === 'nullable-number'">
-      <div class="value-form__line">
+      <div class="value-form__line value-form__line--number">
         <label v-if="kind === 'nullable-number'" class="value-form__toggle" title="勾选表示不设值（写 null，不是 0）">
           <input
             type="checkbox"
@@ -587,6 +802,19 @@ const structValue = computed<JsonValue>(() => {
           >
           <span>不设值</span>
         </label>
+        <input
+          v-if="rangeSpec !== undefined"
+          class="value-form__slider"
+          type="range"
+          :min="sliderMin"
+          :max="sliderMax"
+          :step="sliderStep"
+          :value="sliderValue"
+          :disabled="!canEdit || (kind === 'nullable-number' && nullableUnset)"
+          :aria-label="`${row.label}滑杆`"
+          @input="onSliderInput"
+          @change="onSliderChange"
+        >
         <input
           class="value-form__input value-form__input--number"
           type="number"
@@ -606,6 +834,14 @@ const structValue = computed<JsonValue>(() => {
         >
         <span v-if="suffix !== ''" class="value-form__suffix" aria-hidden="true">{{ suffix }}</span>
         <span v-if="kind === 'nullable-number' && nullableUnset" class="value-form__muted">不锁</span>
+        <button
+          v-if="canReset"
+          type="button"
+          class="value-form__reset"
+          :title="`恢复默认值 ${row.defaultValue}`"
+          :aria-label="`恢复${row.label}默认值`"
+          @click="resetDefault"
+        >↺</button>
         <AnimationControls
           v-if="showAnimationControls"
           :has-keyframes="hasKeyframes"
@@ -622,7 +858,7 @@ const structValue = computed<JsonValue>(() => {
           @toggle-animation="onToggleAnimation"
         />
       </div>
-      <p v-if="hint !== null" class="value-form__hint">范围 {{ hint }}</p>
+      <p v-if="hint !== null && !inspectorMode" class="value-form__hint">范围 {{ hint }}</p>
     </template>
 
     <!-- boolean：开关，立即提交 -->
@@ -630,14 +866,24 @@ const structValue = computed<JsonValue>(() => {
       <div class="value-form__line">
         <label class="value-form__toggle">
           <input
+            class="value-form__switch"
             type="checkbox"
             :checked="boolValue"
             :disabled="!canEdit"
+            role="switch"
             :aria-label="`${row.label} 开关`"
             @change="onBooleanChange"
           >
           <span>{{ boolValue ? '开' : '关' }}</span>
         </label>
+        <button
+          v-if="canReset"
+          type="button"
+          class="value-form__reset"
+          :title="`恢复默认值 ${row.defaultValue}`"
+          :aria-label="`恢复${row.label}默认值`"
+          @click="resetDefault"
+        >↺</button>
         <AnimationControls
           v-if="showAnimationControls"
           :has-keyframes="hasKeyframes"
@@ -656,15 +902,79 @@ const structValue = computed<JsonValue>(() => {
       </div>
     </template>
 
-    <!-- text / ref：失焦或回车提交 -->
+    <!-- text / ref：失焦或回车提交；Inspector 增加引用形态与多行 -->
     <template v-else-if="kind === 'text' || kind === 'ref'">
-      <div class="value-form__line">
+      <!-- 引用形态：下拉选形态，载荷输入拼回真实字段值 -->
+      <template v-if="kind === 'ref' && inspectorReference !== undefined">
+        <div class="value-form__line value-form__reference">
+          <select
+            class="value-form__input"
+            :value="refForm"
+            :disabled="!canEdit"
+            :aria-label="`${row.label}形态`"
+            @change="onRefFormChange"
+          >
+            <option v-if="!refFormKnown" :value="refForm" disabled>
+              {{ refForm === '' ? '（现有值）' : refForm }}
+            </option>
+            <option v-for="choice in refChoices" :key="choice.value" :value="choice.value">
+              {{ choice.label }}
+            </option>
+          </select>
+          <button
+            v-if="canReset"
+            type="button"
+            class="value-form__reset"
+            :title="`恢复默认值 ${row.defaultValue}`"
+            :aria-label="`恢复${row.label}默认值`"
+            @click="resetDefault"
+          >↺</button>
+        </div>
+        <div v-if="refPayload !== undefined" class="value-form__line value-form__reference-payload">
+          <input
+            class="value-form__input"
+            type="text"
+            :value="refPayloadValue"
+            :placeholder="refPayloadPlaceholder"
+            :disabled="!canEdit"
+            :aria-label="`${row.label} · ${refPayloadLabel}`"
+            @change="onRefPayloadChange"
+          >
+        </div>
+      </template>
+
+      <!-- 长文本：回车换行，失焦提交 -->
+      <div v-else-if="inspectorMultiline" class="value-form__line">
+        <textarea
+          class="value-form__input value-form__textarea value-form__textarea--inspector"
+          rows="2"
+          :value="draft"
+          :placeholder="inspectorPlaceholder"
+          :disabled="!canEdit"
+          :aria-label="`${row.label} 文本`"
+          @input="onDraftInput"
+          @focus="onDraftFocus"
+          @blur="onDraftBlur"
+          @keydown.esc.prevent="onDraftEscape"
+        />
+        <button
+          v-if="canReset"
+          type="button"
+          class="value-form__reset"
+          :title="`恢复默认值 ${row.defaultValue}`"
+          :aria-label="`恢复${row.label}默认值`"
+          @click="resetDefault"
+        >↺</button>
+      </div>
+
+      <div v-else class="value-form__line">
         <input
           v-if="kind === 'ref' && refCandidates.length > 0"
           class="value-form__input"
           type="text"
           list="value-form-ref-candidates"
           :value="draft"
+          :placeholder="inspectorPlaceholder"
           :disabled="!canEdit"
           :aria-label="`${row.label} 引用`"
           @input="onDraftInput"
@@ -677,6 +987,7 @@ const structValue = computed<JsonValue>(() => {
           class="value-form__input"
           type="text"
           :value="draft"
+          :placeholder="inspectorPlaceholder"
           :disabled="!canEdit"
           :aria-label="`${row.label} 文本`"
           @input="onDraftInput"
@@ -687,6 +998,14 @@ const structValue = computed<JsonValue>(() => {
         <datalist v-if="kind === 'ref' && refCandidates.length > 0" id="value-form-ref-candidates">
           <option v-for="item in refCandidates" :key="item" :value="item" />
         </datalist>
+        <button
+          v-if="canReset"
+          type="button"
+          class="value-form__reset"
+          :title="`恢复默认值 ${row.defaultValue}`"
+          :aria-label="`恢复${row.label}默认值`"
+          @click="resetDefault"
+        >↺</button>
         <AnimationControls
           v-if="showAnimationControls"
           :has-keyframes="hasKeyframes"
@@ -703,13 +1022,27 @@ const structValue = computed<JsonValue>(() => {
           @toggle-animation="onToggleAnimation"
         />
       </div>
-      <p v-if="refUnconstrained" class="value-form__hint">未约束形态：schema 没有给出候选，按自由文本写入。</p>
+      <p v-if="refUnconstrained && !inspectorMode" class="value-form__hint">未约束形态：schema 没有给出候选，按自由文本写入。</p>
     </template>
 
-    <!-- enum：只出现 schema 声明的选项，立即提交 -->
+    <!-- enum：只出现 schema 声明的选项；Inspector 可分段并显示操作词 -->
     <template v-else-if="kind === 'enum'">
       <div class="value-form__line">
+        <div v-if="segmentedEnum" class="value-form__segmented" role="group" :aria-label="`${row.label}`">
+          <button
+            v-for="item in enumValues"
+            :key="item"
+            type="button"
+            class="value-form__segment"
+            :class="{ 'value-form__segment--on': typeof displayValue === 'string' && displayValue === item }"
+            :aria-pressed="typeof displayValue === 'string' && displayValue === item"
+            :disabled="!canEdit"
+            :data-value="item"
+            @click="submitEnum(item)"
+          >{{ optionLabel(item) }}</button>
+        </div>
         <select
+          v-else
           class="value-form__input"
           :value="typeof displayValue === 'string' ? displayValue : ''"
           :disabled="!canEdit"
@@ -717,8 +1050,18 @@ const structValue = computed<JsonValue>(() => {
           @change="onEnumChange"
         >
           <option v-if="typeof displayValue !== 'string'" value="" disabled>（未设置）</option>
-          <option v-for="item in enumValues" :key="item" :value="item">{{ item === '' ? '（空字符串）' : item }}</option>
+          <option v-for="item in enumValues" :key="item" :value="item">
+            {{ item === '' ? '（空字符串）' : optionLabel(item) }}
+          </option>
         </select>
+        <button
+          v-if="canReset"
+          type="button"
+          class="value-form__reset"
+          :title="`恢复默认值 ${row.defaultValue}`"
+          :aria-label="`恢复${row.label}默认值`"
+          @click="resetDefault"
+        >↺</button>
         <AnimationControls
           v-if="showAnimationControls"
           :has-keyframes="hasKeyframes"
@@ -780,6 +1123,11 @@ const structValue = computed<JsonValue>(() => {
       <code class="value-form__readonly" :title="readonlyPreview">{{ readonlyPreview }}</code>
     </template>
 
+    <!-- 帧间：显示按目录插值 / 作者态缓动采样出的值，先加帧才能编辑 -->
+    <p v-if="inspectorSampling" class="value-form__hint value-form__hint--sampling">
+      采样值 · 添加当前帧后可编辑
+    </p>
+
     <!-- 效果面板播放头没有节点：草稿 + 显式加帧 -->
     <div v-if="pendingNewNode && canEdit" class="value-form__add">
       <button type="button" class="value-form__button value-form__button--primary" @click="addKeyframe">
@@ -788,7 +1136,7 @@ const structValue = computed<JsonValue>(() => {
       <span class="value-form__muted">播放头 t={{ playhead }} 没有节点</span>
     </div>
 
-    <p v-if="applied !== '' && error === ''" class="value-form__hint" role="status">{{ applied }}</p>
+    <p v-if="applied !== '' && error === '' && !inspectorMode" class="value-form__hint" role="status">{{ applied }}</p>
     <p v-if="error !== ''" class="value-form__error" role="alert" :data-code="errorCode ?? ''">
       {{ error }}
     </p>
@@ -801,6 +1149,185 @@ const structValue = computed<JsonValue>(() => {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  font-size: 11px;
+}
+
+/* Inspector opt-in：只作用于右栏显式传入 options 的实例，共享面板不受影响。 */
+.value-form--inspector {
+  gap: 3px;
+  font-size: 12px;
+}
+
+.value-form--inspector .value-form__line {
+  gap: 5px;
+}
+
+.value-form--inspector .value-form__input {
+  min-height: 25px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.value-form--inspector .value-form__input--number {
+  max-width: 84px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.value-form--inspector .value-form__suffix {
+  font-size: 11px;
+}
+
+.value-form--inspector .value-form__slider {
+  flex: 1 1 45px;
+  min-width: 30px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.value-form--inspector .value-form__slider:disabled {
+  opacity: 0.55;
+}
+
+/* 布尔开关：右栏用明确的开关形状，不依赖浏览器默认勾选框。 */
+.value-form--inspector .value-form__switch {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  appearance: none;
+  cursor: pointer;
+}
+
+.value-form--inspector .value-form__switch::after {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  content: '';
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.value-form--inspector .value-form__switch:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.value-form--inspector .value-form__switch:checked::after {
+  background: var(--bg-panel);
+  transform: translateX(12px);
+}
+
+.value-form--inspector .value-form__switch:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 复位：静态值 / 当前帧才出现；帧间采样由 canReset 关闭。 */
+.value-form--inspector .value-form__reset {
+  flex: 0 0 auto;
+  min-width: 20px;
+  min-height: 24px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.value-form--inspector .value-form__reset:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.value-form--inspector .value-form__reset:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 分段枚举：每个选项等宽，标签可换行，窄栏不溢出。 */
+.value-form--inspector .value-form__segmented {
+  display: grid;
+  flex: 1 1 auto;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.value-form--inspector .value-form__segment {
+  min-width: 0;
+  min-height: 25px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.value-form--inspector .value-form__segment:hover:enabled {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.value-form--inspector .value-form__segment:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.value-form--inspector .value-form__segment--on {
+  background: var(--bg-selected);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.value-form--inspector .value-form__segment:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+.value-form--inspector .value-form__textarea--inspector {
+  width: 100%;
+  min-height: 52px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.value-form--inspector .value-form__hint,
+.value-form--inspector .value-form__error {
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.value-form--inspector .value-form__hint--sampling {
+  color: var(--text-muted);
+}
+
+.value-form--inspector .value-form__readonly {
   font-size: 11px;
 }
 

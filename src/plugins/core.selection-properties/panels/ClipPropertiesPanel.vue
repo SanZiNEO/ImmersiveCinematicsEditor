@@ -1,26 +1,11 @@
 <script setup lang="ts">
-/**
- * 片段属性面板（06-09）：`selection.properties` 的真实内容。
- *
- * 列**全部适用叶子**（含未设置），按 schema 的 section/group 归组；已在效果面板的叶子
- * 不在这里重复出现值控件，组头给出"N 项在效果面板"并可跳到效果面板。
- *
- * 四态与效果面板对称：`none` / `multi` / `clip` / `invalid`（+ `foreign`）。
- * 面板没有关键帧轴、没有节点几何、没有局部标尺；几何只在效果面板。
- *
- * 所有写入走 `ctx.commands.commit`；行集合每次按文档修订号重算，不缓存文档对象。
- */
-import { computed, defineAsyncComponent, nextTick, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import type { Component } from 'vue'
 import type { DocCommand } from '../../../core/doc/commands.ts'
 import type { JsonObject, JsonValue } from '../../../core/doc/types.ts'
 import { isJsonObject } from '../../../core/doc/json.ts'
 import type { ClipSelectionState } from '../../../workbench/api/context.ts'
-import {
-  displayGroupFor,
-  hiddenRowsFor,
-  panelBannerFor,
-} from '../../../workbench/api/fieldSurface.ts'
+import { hiddenRowsFor, panelBannerFor } from '../../../workbench/api/fieldSurface.ts'
 import {
   clipTimingOf,
   findClipContext,
@@ -29,34 +14,31 @@ import {
   withAvailability,
 } from '../../../features/effects/clipContext.ts'
 import { buildDiagnosticIndex } from '../../../features/effects/diagnostics.ts'
-import { buildGroups, partitionGroups } from '../../../features/effects/membership.ts'
 import type { ClipTiming } from '../../../features/effects/rows.ts'
-import {
-  addKeyframeCommand,
-  disableAnimationCommand,
-  enableAnimationCommand,
-  removeKeyframeCommands,
-} from '../../../features/effects/keyframeOps.ts'
-import { sampleValue } from '../../../features/effects/easing.ts'
-import { seedForNewNode } from '../../../features/effects/valueControls.ts'
+import { addKeyframeCommand, removeKeyframeCommands } from '../../../features/effects/keyframeOps.ts'
+import { sampleValue, segmentIndexAt } from '../../../features/effects/easing.ts'
+import { easingKey, readEasingTable } from '../../../features/effects/easingStore.ts'
+import { animatable, seedForNewNode } from '../../../features/effects/valueControls.ts'
+import type { InspectorCommitOutcome, InspectorValueOptions } from '../../../features/effects/panels/inspectorValueOptions.ts'
 import type {
   DiagnosticIndex,
   EffectDiagnostic,
   EffectGroup,
   PropertyRow,
-  PropertiesPanelSession,
 } from '../../../features/effects/types.ts'
 import { CATALOG_SERVICE, DOCUMENT_SERVICE, SELECTION_SERVICE } from '../../../workbench/api/tokens.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
 import { usePanelRevision } from '../usePanelRevision.ts'
 import ClipPropertiesHeader from './ClipPropertiesHeader.vue'
-import ClipPropertiesToolbar from './ClipPropertiesToolbar.vue'
 import ClipPropertyGroup from './ClipPropertyGroup.vue'
+import ClipPropertyRow from './ClipPropertyRow.vue'
+import BreathInspectorCard from './BreathInspectorCard.vue'
+import { inspectorOptions, inspectorPages } from './inspectorLayout.ts'
 import MotionChannelRow from './MotionChannelRow.vue'
 import ModelEditorDrawer from './ModelEditorDrawer.vue'
-import { MOTION_CHANNELS, channelDomain, isChannelField } from '../../../features/paths/modelEditor.ts'
-import { decoratePositionRows } from '../../../features/authoring/ui/positionFields.ts'
-import { decorateOrientationRows } from '../../../features/authoring/ui/orientationFields.ts'
+import { channelDomain, isChannelField } from '../../../features/paths/modelEditor.ts'
+import { stepFieldApplies } from '../../../features/authoring/positionForm.ts'
+import { positionSwitchAlignment } from './inspectorPositionSwitch.ts'
 import type { ApplyItem } from '../../../features/authoring/ui/positionFields.ts'
 import {
   loadAuthoringGroups,
@@ -80,7 +62,6 @@ import {
   recordRefAt,
 } from '../../core.clip-effects/panels/eventRecordSummary.ts'
 import type { OpenEventEditorPayload } from '../../../features/effects/panels/effectRowEvents.ts'
-import { GROUP_HEADER_HEIGHT, propertyRowHeight } from './rowLayout.ts'
 
 const ctx = usePanelContext()
 
@@ -163,319 +144,136 @@ const rows = computed<PropertyRow[]>(() => {
     catalog,
     panel: 'properties',
   })
-  // 片段时间几何（`playControl`）由主时间轴编辑：属性面板不提供值控件，
-  // 只由片段头给一个"在时间轴编辑"的跳转（06-09 §4.4）。这里把它们从行集合里剔除，
-  // 避免出现"看起来能改时长、实际该去主轴"的误导控件。
-  const withoutGeometry = built.filter((row) => !CLIP_GEOMETRY_PATHS.has(row.path))
-  // 07-09：motion_* 六个模型通道由面板底部「模型」区专用行渲染，不再进通用行，
-  // 避免同一个字段既出现 JSON 只读控件又出现模型编辑器入口。
-  const separated = separateUnknownGroup(withoutGeometry.filter((row) => !isChannelField(row.path)))
-  const available = withAvailability(separated, catalog, found.trackType, currentObjects)
-  // 07-02 / 07-04：位置与朝向按 core 的可见性矩阵装饰行——轴标签换 fwd/up/right、
-  // 「不读取」分支设 unavailableReason（行组件已会把值控件/时钟禁用并给原因）、
-  // 该隐藏的分支叶子从行集合里过滤（不改 path，不改值）。
-  const positionDecored = decoratePositionRows(available, {
-    trackType: found.trackType,
-    objects: currentObjects,
-    catalog,
-  })
-  const orientationDecored = decorateOrientationRows(positionDecored.rows, {
-    trackType: found.trackType,
-    objects: currentObjects,
-    catalog,
-    flags: {},
-  })
-  // 10 轮：合并行（矩阵 / 六段 / 曲线定义）只在承载行显示；贡献自行判断是否静态。
   const hidden = hiddenRowsFor(found.trackType, currentObjects)
-  const hiddenSet = new Set([...hidden, ...positionDecored.hidden])
-  return orientationDecored.rows.filter((row) => !hiddenSet.has(row.path))
+  const visible = built.filter((row) => !CLIP_GEOMETRY_PATHS.has(row.path) && !hidden.has(row.path))
+  return withAvailability(separateUnknownGroup(visible), catalog, found.trackType, currentObjects)
 })
 
-/**
- * 10 轮显示分组：把字段面的组键/标签套到行上，再由 `buildGroups` 真正合并。
- * 只改显示归属，不改行里的值、帧与命令；没有贡献时原样返回。
- */
-const rowsForDisplayGroups = computed<PropertyRow[]>(() => {
+const pages = computed(() => {
   const found = clipContext.value
-  if (found === null) return rows.value
-  return rows.value.map((row) => {
-    const group = displayGroupFor(found.trackType, row.path)
-    if (group === null || (row.groupKey === group.key && row.groupLabel === group.label)) {
-      return row
-    }
-    return { ...row, groupKey: group.key, groupLabel: group.label }
-  })
+  return found === null || objects.value === null
+    ? [] : inspectorPages(found.trackType, rows.value, objects.value, timing.value)
 })
-
-const allGroups = computed<EffectGroup[]>(() => buildGroups(rowsForDisplayGroups.value, timing.value))
-/** 10 轮显示分组顺序（缺省保持首次出现顺序）。 */
-const displayGroupOrder = computed<Map<string, number>>(() => {
-  const order = new Map<string, number>()
-  const found = clipContext.value
-  if (found === null) return order
-  for (const row of rows.value) {
-    const group = displayGroupFor(found.trackType, row.path)
-    if (group !== null && !order.has(group.key)) order.set(group.key, group.order)
-  }
-  return order
-})
-const orderedGroups = computed<EffectGroup[]>(() => {
-  const order = displayGroupOrder.value
-  if (order.size === 0) return allGroups.value
-  return [...allGroups.value].sort((left, right) => {
-    const leftOrder = order.get(left.key)
-    const rightOrder = order.get(right.key)
-    if (leftOrder === undefined && rightOrder === undefined) return left.order - right.order
-    if (leftOrder === undefined) return 1
-    if (rightOrder === undefined) return -1
-    if (leftOrder !== rightOrder) return leftOrder - rightOrder
-    return left.order - right.order
-  })
-})
-/**
- * 属性面板显示**全部适用行**（含已有关键帧的），不做 leaf 过滤。
- *
- * 与效果面板的分工（用户裁决）：属性面板是「对象的值 + 菱形建帧」，效果面板是
- * 「精细化的多属性对照与曲线」。同一个对象在两边都能看到，但操作粒度不同。
- * `partitionGroups` 只用来算「有多少项同时也在效果面板」，供组头提示，不用于过滤行。
- */
-const propertyGroups = computed<EffectGroup[]>(() => orderedGroups.value)
-/** 07 位置/朝向控制条只在确有位置组或朝向组的轨道显示；AUDIO/ADJUST 不显示。 */
-const hasPositionBars = computed(() => propertyGroups.value.some(
-  (group) => group.key === 'position' || group.key === 'orientation',
-))
-/** 07-09：六个 `motion_*` 模型通道只属于 CAMERA；AUDIO/ADJUST 不显示模型区。 */
-const hasMotionModels = computed(() => {
-  const found = clipContext.value
-  if (found === null || catalog === undefined) return false
-  return catalog.objectDef(found.trackType, 'motion_position') !== undefined
-})
-const partition = computed(() => partitionGroups(allGroups.value, 'leaf', timing.value))
-const effectGroups = computed(() => partition.value.effectGroups)
-
-/** 组键 → 该组在效果面板的叶子数。 */
-const effectCountByGroup = computed<Map<string, number>>(() => {
-  const map = new Map<string, number>()
-  for (const group of effectGroups.value) {
-    map.set(group.key, group.rows.length)
-  }
-  return map
-})
-
-/** 组键 → 效果面板里该组的第一条路径（跳转定位用）。 */
-const effectPathByGroup = computed<Map<string, string>>(() => {
-  const map = new Map<string, string>()
-  for (const group of effectGroups.value) {
-    const first = group.rows[0]
-    if (first !== undefined) {
-      map.set(group.key, first.path)
-    }
-  }
-  return map
-})
-
-const playhead = computed(() => {
+const camera = computed(() => clipContext.value?.trackType === 'CAMERA')
+const activePageKey = ref('')
+const activePage = computed(() => pages.value.find((page) => page.key === activePageKey.value) ?? pages.value[0])
+const globalPlayhead = computed(() => {
   void revision.value
   return documentService?.sessionView().playhead ?? 0
 })
+const playhead = computed(() => Number((globalPlayhead.value - (clipContext.value?.clip.start ?? 0)).toFixed(9)))
 
-// ── 会话状态（不进文档、不进序列化） ───────────────────────────
-
-const sessions = new Map<string, PropertiesPanelSession>()
-
-function sessionOf(key: string): PropertiesPanelSession {
-  const existing = sessions.get(key)
-  if (existing !== undefined) {
-    return existing
-  }
-  const created: PropertiesPanelSession = { collapsed: new Set(), search: '', onlyUnset: false, scrollTop: 0 }
-  sessions.set(key, created)
-  return created
+interface ClipInspectorSession {
+  page: string
+  expanded: Map<string, boolean>
+  scrollByPage: Map<string, number>
 }
 
-const sessionVersion = ref(0)
-const currentSession = computed<PropertiesPanelSession>(() => {
-  void sessionVersion.value
-  const key = clipKey.value
-  return sessionOf(key ?? '')
-})
-
-const search = ref('')
-const onlyUnset = ref(false)
-const collapsed = ref<Set<string>>(new Set())
-const scrollTop = ref(0)
-const viewportHeight = ref(480)
+const sessions = new Map<string, ClipInspectorSession>()
+const session = shallowRef<ClipInspectorSession | null>(null)
+const expanded = ref(new Map<string, boolean>())
 const scrollRef = ref<HTMLElement | null>(null)
+const tabsRef = ref<HTMLElement | null>(null)
 const focusedPath = ref<string | null>(null)
-/** 菱形/时钟操作的反馈（成功与失败都给真实结果，不静默）。 */
 const focusMessage = ref('')
 const focusMessageKind = ref<'info' | 'error'>('info')
-/** 07-05 §四：位置节点编辑打断路径时的待确认计划（非空时暂停提交）。 */
-// `shallowRef`：`command` 是深层联合类型（DocCommand），`ref` 的深解包会触发 TS2589；整体替换语义不变。
-const pendingGuard = shallowRef<{ affected: AffectedPath[]; command: DocCommand } | null>(null)
+const pendingGuard = shallowRef<{
+  affected: AffectedPath[]
+  command: DocCommand
+  fillAxes: boolean
+  successText: string
+} | null>(null)
 
-/** 片段切换时恢复该片段自己的折叠 / 过滤 / 滚动。 */
-watch(
-  () => clipKey.value,
-  (key) => {
-    if (key === null) {
-      search.value = ''
-      onlyUnset.value = false
-      collapsed.value = new Set()
-      scrollTop.value = 0
-      focusedPath.value = null
-      return
-    }
-    const saved = sessionOf(key)
-    search.value = saved.search
-    onlyUnset.value = saved.onlyUnset
-    collapsed.value = new Set(saved.collapsed)
-    focusedPath.value = null
-    void nextTick(() => {
-      // 10-05：CAMERA / ADJUST 首次选中时只展开“基础校色”，其余组折叠；
-      // 这是会话默认，不写文档，之后用户的展开/折叠选择覆盖它。
-      if (saved.initialized !== true) {
-        saved.initialized = true
-        const trackType = clipContext.value?.trackType
-        if ((trackType === 'CAMERA' || trackType === 'ADJUST') && collapsed.value.size === 0) {
-          const keys = orderedGroups.value.map((group) => group.key)
-          if (keys.length > 1) {
-            collapsed.value = new Set(keys.slice(1))
-          }
-        }
-      }
-      if (scrollRef.value !== null) {
-        scrollRef.value.scrollTop = saved.scrollTop
-        scrollTop.value = saved.scrollTop
-      }
-    })
-  },
-  { immediate: true },
-)
-
-function persist(): void {
-  const key = clipKey.value
-  if (key === null) {
-    return
+watch(() => summary.value?.path, () => { sessions.clear() })
+watch([clipKey, () => summary.value?.path], ([key]) => {
+  let saved = key === null ? undefined : sessions.get(key)
+  if (key !== null && saved === undefined) {
+    saved = { page: '', expanded: new Map(), scrollByPage: new Map() }
+    sessions.set(key, saved)
   }
-  const saved = sessionOf(key)
-  saved.search = search.value
-  saved.onlyUnset = onlyUnset.value
-  saved.collapsed = new Set(collapsed.value)
-  saved.scrollTop = scrollTop.value
-  sessionVersion.value += 1
-}
-
-watch([search, onlyUnset, collapsed], persist, { deep: true })
-
-// ── 过滤（只改显示） ─────────────────────────────────────────
-
-function rowMatches(row: PropertyRow): boolean {
-  if (onlyUnset.value && row.present && row.keyframes.length === 0 && row.mode !== 'unknown') {
-    return false
-  }
-  const query = search.value.trim().toLowerCase()
-  if (query === '') {
-    return true
-  }
-  return row.path.toLowerCase().includes(query)
-    || row.label.toLowerCase().includes(query)
-    || row.groupLabel.toLowerCase().includes(query)
-}
-
-const filteredGroups = computed<EffectGroup[]>(() => {
-  const query = search.value.trim().toLowerCase()
-  const result: EffectGroup[] = []
-  for (const group of propertyGroups.value) {
-    const matchedRows = group.rows.filter(rowMatches)
-    if (matchedRows.length === 0) {
-      // 搜索时按组名命中也能留下整组；"只看未设置"下空组不显示。
-      if (query !== '' && !onlyUnset.value && group.label.toLowerCase().includes(query)) {
-        result.push(group)
-      }
-      continue
-    }
-    result.push({ ...group, rows: matchedRows })
-  }
-  return result
+  session.value = saved ?? null
+  activePageKey.value = saved?.page ?? ''
+  expanded.value = new Map(saved?.expanded)
+  focusedPath.value = null
+  focusMessage.value = ''
+  pendingGuard.value = null
+  closeGroupPopover()
+  closeModelEditor()
+  restoreScroll()
 })
+watch([playhead, () => summary.value?.revision], () => { pendingGuard.value = null })
 
-/** 搜索命中时自动展开命中组（只改显示）。 */
-watch(
-  () => search.value,
-  (value) => {
-    if (value.trim() === '') {
-      return
-    }
-    const next = new Set(collapsed.value)
-    for (const group of filteredGroups.value) {
-      next.delete(group.key)
-    }
-    collapsed.value = next
-  },
-)
-
-function isCollapsed(groupKey: string): boolean {
-  return collapsed.value.has(groupKey)
-}
-
-function toggleCollapse(groupKey: string): void {
-  const next = new Set(collapsed.value)
-  if (next.has(groupKey)) {
-    next.delete(groupKey)
-  } else {
-    next.add(groupKey)
-  }
-  collapsed.value = next
-}
-
-function collapseAll(): void {
-  const next = new Set(collapsed.value)
-  for (const group of filteredGroups.value) {
-    next.add(group.key)
-  }
-  // 当前选中叶子所在组保持展开。
-  const focused = focusedPath.value
-  if (focused !== null) {
-    for (const group of filteredGroups.value) {
-      if (group.rows.some((row) => row.path === focused)) {
-        next.delete(group.key)
-      }
-    }
-  }
-  collapsed.value = next
-}
-
-function clearFilters(): void {
-  search.value = ''
-  onlyUnset.value = false
-  collapsed.value = new Set()
-}
-
-// ── 虚拟化：组内容区偏移 ─────────────────────────────────────
-
-const groupTops = computed<Map<string, number>>(() => {
-  const map = new Map<string, number>()
-  let cursor = 0
-  for (const group of filteredGroups.value) {
-    map.set(group.key, cursor + GROUP_HEADER_HEIGHT)
-    cursor += GROUP_HEADER_HEIGHT
-    if (!collapsed.value.has(group.key)) {
-      cursor += group.rows.reduce((sum, row) => sum + propertyRowHeight(row), 0)
-    }
-  }
-  return map
-})
-
-function localTopOf(groupKey: string): number {
-  return groupTops.value.get(groupKey) ?? 0
+function restoreScroll(): void {
+  void nextTick(() => {
+    if (scrollRef.value !== null) scrollRef.value.scrollTop = session.value?.scrollByPage.get(activePage.value?.key ?? '') ?? 0
+  })
 }
 
 function onScroll(event: Event): void {
-  const element = event.target as HTMLElement
-  scrollTop.value = element.scrollTop
-  viewportHeight.value = element.clientHeight
+  const key = activePage.value?.key
+  if (key !== undefined) session.value?.scrollByPage.set(key, (event.target as HTMLElement).scrollTop)
 }
+
+function activatePage(key: string): void {
+  if (activePage.value?.key === key) return
+  activePageKey.value = key
+  if (session.value !== null) session.value.page = key
+  closeGroupPopover()
+  closeModelEditor()
+  restoreScroll()
+}
+
+function navigateTabs(event: KeyboardEvent, index: number): void {
+  const count = pages.value.length
+  let next: number
+  if (event.key === 'ArrowLeft') next = (index - 1 + count) % count
+  else if (event.key === 'ArrowRight') next = (index + 1) % count
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = count - 1
+  else return
+  event.preventDefault()
+  activatePage(pages.value[next].key)
+  void nextTick(() => tabsRef.value?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus())
+}
+
+function isCollapsed(groupKey: string): boolean {
+  return !(expanded.value.get(groupKey) ?? activePage.value?.initiallyOpen.includes(groupKey) ?? false)
+}
+
+function setExpansion(groupKey: string, open: boolean): void {
+  expanded.value.set(groupKey, open)
+  session.value?.expanded.set(groupKey, open)
+}
+
+function toggleCollapse(groupKey: string): void {
+  setExpansion(groupKey, isCollapsed(groupKey))
+}
+
+function lensEditor(key: string): typeof PositionGroupEditor | typeof OrientationGroupEditor | null {
+  if (!camera.value) return null
+  if (key === 'position') return PositionGroupEditor
+  if (key === 'orientation') return OrientationGroupEditor
+  return null
+}
+
+function fieldOptions(row: PropertyRow, overrides?: InspectorValueOptions): InspectorValueOptions | undefined {
+  const options = overrides ?? inspectorOptions(row)
+  if (camera.value && row.interp === 'step' && stepFieldApplies(row.path, true)) {
+    return { ...options, commit: commitInspectorEdit }
+  }
+  return options
+}
+
+const optionsByPath = computed(() => {
+  const options = new Map<string, InspectorValueOptions>()
+  for (const group of activePage.value?.groups ?? []) {
+    for (const row of group.rows) {
+      const entry = fieldOptions(row)
+      if (entry !== undefined) options.set(row.path, entry)
+    }
+  }
+  return options
+})
 
 // ── 诊断 ─────────────────────────────────────────────────────
 
@@ -510,7 +308,7 @@ async function refreshDiagnostics(): Promise<void> {
 }
 
 watch(
-  () => `${revision.value}|${clipKey.value ?? ''}`,
+  [() => summary.value?.revision, clipKey, () => summary.value?.issueCount, () => summary.value?.stale],
   () => {
     if (diagnosticTimer !== undefined) {
       clearTimeout(diagnosticTimer)
@@ -522,69 +320,49 @@ watch(
   },
   { immediate: true },
 )
+onBeforeUnmount(() => clearTimeout(diagnosticTimer))
 
 const rowDiagnostics = computed<ReadonlyMap<string, readonly EffectDiagnostic[]>>(() => diagnostics.value.byRow)
 
 // ── 选择联动与定位 ───────────────────────────────────────────
 
-watch(
-  () => {
-    const selection = ctx.selection
-    return selection.domain === 'object' || selection.domain === 'keyframe'
-      ? `${selection.clipKey ?? ''}|${selection.objectPath ?? ''}`
-      : ''
-  },
-  (signature) => {
-    if (signature === '') {
-      return
-    }
-    const path = signature.split('|')[1]
-    if (path === undefined || path === '') {
-      return
-    }
-    focusRow(path)
-  },
-)
-
-function focusRow(path: string): void {
-  const inProperties = rows.value.some((row) => row.path === path && row.keyframes.length === 0)
-  if (!inProperties) {
-    return
-  }
+function markFocused({ path }: { path: string }): void {
   focusedPath.value = path
-  // 展开该行所在组并滚到可见位置。
-  for (const group of propertyGroups.value) {
-    if (!group.rows.some((row) => row.path === path)) {
-      continue
-    }
-    if (collapsed.value.has(group.key)) {
-      const next = new Set(collapsed.value)
-      next.delete(group.key)
-      collapsed.value = next
-    }
-    break
-  }
-  void nextTick(() => {
-    const container = scrollRef.value
-    if (container === null) {
-      return
-    }
-    const target = container.querySelector<HTMLElement>(`[data-path="${path}"]`)
-    if (target !== null) {
-      target.scrollIntoView({ block: 'nearest' })
-      target.focus({ preventScroll: true })
-    }
-  })
 }
 
-function jumpToEffects(groupKey: string): void {
-  const key = clipKey.value
-  const path = effectPathByGroup.value.get(groupKey)
-  if (key === null || path === undefined) {
+function revealRow(path: string): void {
+  for (const page of pages.value) {
+    const group = page.groups.find((entry) => entry.rows.some((row) => row.path === path))
+    if (group === undefined) continue
+    activatePage(page.key)
+    setExpansion(group.key, true)
+    focusedPath.value = path
+    void nextTick(() => {
+      const target = scrollRef.value?.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`)
+      if (target === undefined || target === null) return
+      for (let ancestor = target.parentElement; ancestor !== null && ancestor !== scrollRef.value; ancestor = ancestor.parentElement) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true
+      }
+      target.scrollIntoView({ block: 'nearest' })
+      // 不从效果面板抢键盘焦点。当前行的高亮用于定位。
+    })
     return
   }
-  ctx.requestRevealInEffectControls({ clipKey: key, objectPath: path })
 }
+
+const fieldSelection = computed(() => {
+  const selected = state.value
+  if (selected.kind !== 'clip') return null
+  const { selection } = selected
+  return selection.domain === 'object' || selection.domain === 'keyframe' ? selection : null
+})
+watch([clipKey, () => fieldSelection.value?.objectPath, () => fieldSelection.value?.keyframeTime], ([key, path]) => {
+  if (key !== null && path !== undefined) {
+    void nextTick(() => {
+      if (clipKey.value === key && fieldSelection.value?.objectPath === path) revealRow(path)
+    })
+  }
+}, { immediate: true })
 
 function revealEffects(payload: { clipKey: string; path: string }): void {
   ctx.requestRevealInEffectControls({ clipKey: payload.clipKey, objectPath: payload.path })
@@ -643,19 +421,6 @@ function openInBehavior(payload: OpenEventEditorPayload): void {
   requestFocus({ target: ref, surface: 'behavior-drawer', origin: ctx.panelId })
 }
 
-function onEnabled(payload: { clipKey: string; path: string; time: number }): void {
-  ctx.requestRevealInEffectControls({
-    clipKey: payload.clipKey,
-    objectPath: payload.path,
-    time: payload.time,
-  })
-  focusedPath.value = null
-}
-
-function onFailed(payload: { clipKey: string; path: string; message: string }): void {
-  focusedPath.value = payload.path
-}
-
 /**
  * 菱形：播放头有帧 → 删该帧；无帧 → 建帧。
  *
@@ -676,12 +441,7 @@ function onToggleKeyframe(payload: { clipKey: string; path: string; time: number
     frameCommand = removeKeyframeCommands(payload.clipKey, [{ path: payload.path, time: payload.time }])
     text = `已删除 ${payload.path} 在 ${payload.time.toFixed(2)}s 的关键帧。`
   } else {
-    const sampled = sampleValue({
-      frames: row.keyframes,
-      interp: row.interp,
-      time: payload.time,
-      timing: timing.value,
-    })
+    const sampled = sampleInspectorRow(row, payload.time)
     const seed = seedForNewNode(row, sampled.ok ? sampled.value : undefined, payload.time)
     if (!seed.ok || seed.value === undefined) {
       focusedPath.value = payload.path
@@ -693,36 +453,96 @@ function onToggleKeyframe(payload: { clipKey: string; path: string; time: number
   if (frameCommand === null) {
     return
   }
-  const guard = nodeEditGuard(payload.path, payload.time, payload.create, frameCommand)
-  if (guard !== null) {
-    pendingGuard.value = guard
+  const switchGuard = stagePositionStepGuard([frameCommand])
+  if (switchGuard !== null) {
+    if (!switchGuard.pending) {
+      focusMessage.value = switchGuard.error
+      focusMessageKind.value = 'error'
+    }
     return
+  }
+  if (POSITION_NODE_PATHS.includes(payload.path)) {
+    const affected = affectedPositionPaths(payload.time, payload.create)
+    if (affected.length > 0) {
+      pendingGuard.value = {
+        affected,
+        command: withPathRemoval(frameCommand, affected),
+        fillAxes: false,
+        successText: `已删除 ${affected.length} 条受影响路径。${text}`,
+      }
+      return
+    }
   }
   commitKeyframeCommand(frameCommand, text)
 }
 
-/** 位置节点编辑的引用完整性扫描；没有受影响路径时返回 `null`（直接提交）。 */
-function nodeEditGuard(
-  path: string,
-  time: number,
-  create: boolean,
-  frameCommand: DocCommand,
-): { affected: AffectedPath[]; command: DocCommand } | null {
-  if (!POSITION_NODE_PATHS.includes(path) || documentService === undefined || catalog === undefined) {
-    return null
+/** 使用值控件同一条作者态曲线，避免补帧时的值与面板当前采样不同。 */
+function sampleInspectorRow(row: PropertyRow, time: number): ReturnType<typeof sampleValue> {
+  const index = segmentIndexAt(row.keyframes, time)
+  const fromTime = index < 0 ? undefined : row.keyframes[index]?.time
+  const toTime = row.keyframes[index + 1]?.time
+  const entry = fromTime === undefined || toTime === undefined ? undefined
+    : readEasingTable(ctx.commands.clipAuthoringOf(row.clipKey))[easingKey(row.path, fromTime, toTime)]
+  return sampleValue({
+    frames: row.keyframes, interp: row.interp, time, timing: timing.value,
+    ...(entry !== undefined && fromTime !== undefined && toTime !== undefined
+      ? { easing: { ...entry, clipKey: row.clipKey, path: row.path, fromTime, toTime } }
+      : {}),
+  })
+}
+
+function commitInspectorEdit(commands: DocCommand[], coalesceKey: string): InspectorCommitOutcome {
+  const guard = stagePositionStepGuard(commands)
+  if (guard === null) return ctx.commands.commitBatch(commands, coalesceKey)
+  return guard.pending ? { ok: false, pending: true } : { ok: false, warnings: [], error: guard.error }
+}
+
+function stagePositionStepGuard(commands: readonly DocCommand[]): { pending: true } | { pending: false; error: string } | null {
+  const key = clipKey.value
+  const current = objects.value
+  const write = commands[commands.length - 1]
+  if (!camera.value || key === null || current === null || write === undefined) return null
+  const alignment = positionSwitchAlignment(rows.value, current, timing.value, write)
+  if (alignment.size === 0) return null
+
+  const ops: Array<{ op: 'add'; path: string; time: number; value: JsonValue }> = []
+  const affectedById = new Map<string, AffectedPath>()
+  for (const [time, missing] of alignment) {
+    for (const path of missing) {
+      const row = rows.value.find((item) => item.path === path)
+      const sampled = row === undefined ? undefined : sampleInspectorRow(row, time)
+      const seed = row === undefined ? undefined : seedForNewNode(row, sampled?.ok ? sampled.value : undefined, time)
+      if (seed?.ok !== true || seed.value === undefined) {
+        return { pending: false, error: path + ' 在 ' + time + 's 没有可用值，请先设置该位置轴。' }
+      }
+      ops.push({ op: 'add', path, time, value: seed.value })
+    }
+    for (const affected of affectedPositionPaths(time, true)) affectedById.set(affected.id, affected)
   }
+
+  const affected = [...affectedById.values()]
+  const command: DocCommand = {
+    kind: 'compound',
+    commands: [{ kind: 'object.editKeyframes', clipKey: key, ops }, ...commands],
+  }
+  pendingGuard.value = {
+    affected,
+    command: withPathRemoval(command, affected),
+    fillAxes: true,
+    successText: affected.length > 0
+      ? '已移除 ' + affected.length + ' 条受影响路径，并补齐 ' + ops.length + ' 个位置帧。'
+      : '已补齐 ' + ops.length + ' 个位置帧并应用参考系设置。',
+  }
+  return { pending: true }
+}
+
+/** 扫描移动路径所引用的位置节点，供删除节点和插入节点时确认。 */
+function affectedPositionPaths(time: number, create: boolean): AffectedPath[] {
+  const clipId = clipContext.value?.clip.clipId
+  if (!clipId || documentService === undefined || catalog === undefined) return []
   const doc = documentSnapshot(documentService, catalog)
-  const clipId = clipContext.value?.clip.clipId ?? ''
-  if (doc === null || clipId === '') {
-    return null
-  }
-  const affected = create
-    ? pathsBreakingOnInsert(doc, clipId, time)
-    : pathsUsingEndpoint(doc, clipId, time)
-  if (affected.length === 0) {
-    return null
-  }
-  return { affected, command: withPathRemoval(frameCommand, affected) }
+  if (doc === null) return []
+  return create ? pathsBreakingOnInsert(doc, clipId, time) : pathsUsingEndpoint(doc, clipId, time)
 }
 
 function confirmGuard(): void {
@@ -731,24 +551,13 @@ function confirmGuard(): void {
     return
   }
   pendingGuard.value = null
-  commitKeyframeCommand(pending.command, `已删除 ${pending.affected.length} 条受影响路径并继续。`)
+  commitKeyframeCommand(pending.command, pending.successText)
 }
 
 function cancelGuard(): void {
   pendingGuard.value = null
-  focusMessage.value = '已取消（路径与关键帧都没有改动）。'
+  focusMessage.value = '已取消，没有更改文档。'
   focusMessageKind.value = 'info'
-}
-
-/** 时钟：开/关动画。关闭时命令层保留最后值。 */
-function onToggleAnimation(payload: { clipKey: string; path: string; time: number; enable: boolean }): void {
-  if (payload.enable) {
-    commitKeyframeCommand(enableAnimationCommand(payload.clipKey, payload.path, payload.time),
-      `已开启 ${payload.path} 的动画。`)
-    return
-  }
-  commitKeyframeCommand(disableAnimationCommand(payload.clipKey, payload.path),
-    `已关闭 ${payload.path} 的动画。`)
 }
 
 /** 前后帧跳转：只移播放头（会话写入，不进文档）。 */
@@ -789,9 +598,8 @@ const authoringGroupRegistry = computed<GroupRegistry>(() => {
 })
 
 /** 组头按钮要显示的组合名：按组内行路径与注册表组的最长交集匹配。 */
-function groupMatchFor(group: EffectGroup): { id: string | null; name: string | null } {
-  const match = matchAuthoringGroup(rowPaths(group.rows), authoringGroupRegistry.value, group.key)
-  return { id: match.group?.id ?? null, name: match.group?.name ?? null }
+function authoringGroupName(group: EffectGroup): string | null {
+  return matchAuthoringGroup(rowPaths(group.rows), authoringGroupRegistry.value, group.key).group?.name ?? null
 }
 
 const popoverGroupKey = ref<string | null>(null)
@@ -800,7 +608,7 @@ const popoverGroup = computed<EffectGroup | null>(() => {
   if (key === null) {
     return null
   }
-  return filteredGroups.value.find((group) => group.key === key) ?? null
+  return activePage.value?.groups.find((group) => group.key === key) ?? null
 })
 
 function openGroupPopover(groupKey: string): void {
@@ -890,7 +698,6 @@ function commitModel(value: JsonValue | undefined): void {
   }
 }
 
-const motionChannels = MOTION_CHANNELS
 
 const modelTargetModel = computed<JsonValue | undefined>(() => {
   const target = modelEditor.value
@@ -899,11 +706,21 @@ const modelTargetModel = computed<JsonValue | undefined>(() => {
 
 // ── 状态辅助 ─────────────────────────────────────────────────
 
-const multiLabel = computed(() => (state.value.kind === 'multi' ? state.value.clipKeys.length : 0))
+const multiClips = computed(() => {
+  const selected = state.value
+  if (selected.kind !== 'multi') return []
+  return selected.clipKeys.flatMap((key) => {
+    const found = findClipContext(view.value, key)
+    return found === null ? [] : [{ key, clip: found.clip }]
+  })
+})
 
 const invalidReason = computed(() => (state.value.kind === 'invalid' ? state.value.reason : ''))
 
-const foreignDomain = computed(() => (state.value.kind === 'foreign' ? state.value.domain : null))
+const foreignLabel = computed(() => {
+  const selected = state.value
+  return selected.kind === 'foreign' ? { path: '路径', rule: '规则', binding: '规则绑定' }[selected.domain] : ''
+})
 
 const canUndo = computed(() => {
   void revision.value
@@ -914,16 +731,13 @@ function runUndo(): void {
   ctx.commands.undo()
 }
 
-const hasGroups = computed(() => filteredGroups.value.length > 0)
-const totalRows = computed(() => propertyGroups.value.reduce((sum, group) => sum + group.rows.length, 0))
-
 /** 10 轮面板横幅（音频约束 / 调色层覆盖提示）；没有贡献就是 null。 */
+const bannerTrackType = computed(() => clipContext.value?.trackType)
 const bannerComponent = computed<Component | null>(() => {
-  const found = clipContext.value
-  if (found === null) return null
-  const banner = panelBannerFor(found.trackType)
-  if (banner === null) return null
-  return defineAsyncComponent(banner.component as () => Promise<Component>)
+  const type = bannerTrackType.value
+  if (type === undefined) return null
+  const banner = panelBannerFor(type)
+  return banner === null ? null : defineAsyncComponent(banner.component as () => Promise<Component>)
 })
 </script>
 
@@ -937,119 +751,141 @@ const bannerComponent = computed<Component | null>(() => {
       <!-- 片段态 -->
       <template v-if="state.kind === 'clip' && clipKey !== null">
         <template v-if="clipContext !== null && objects !== null">
-          <ClipPropertiesHeader :clip="clipContext.clip" :track-type="clipContext.trackType" :summary="summary" />
-          <ClipPropertiesToolbar
-            :search="search"
-            :only-unset="onlyUnset"
-            :collapsed-count="collapsed.size"
-            @update:search="search = $event"
-            @toggle-only-unset="onlyUnset = !onlyUnset"
-            @collapse-all="collapseAll"
-            @clear="clearFilters"
-          />
+          <ClipPropertiesHeader :clip="clipContext.clip" :track-type="clipContext.trackType" :summary="summary" :playhead="globalPlayhead" />
+          <div v-if="pages.length > 1" ref="tabsRef" class="props-panel__tabs" role="tablist" aria-label="片段功能">
+            <button
+              v-for="(page, index) in pages"
+              :id="`inspector-tab-${page.key}`"
+              :key="page.key"
+              type="button"
+              role="tab"
+              :aria-selected="page.key === activePage?.key"
+              :tabindex="page.key === activePage?.key ? 0 : -1"
+              aria-controls="inspector-fields"
+              @click="activatePage(page.key)"
+              @keydown="navigateTabs($event, index)"
+            >{{ page.label }}</button>
+          </div>
 
           <component
             :is="bannerComponent"
-            v-if="bannerComponent !== null"
+            v-if="bannerComponent !== null && (!camera || activePage?.key === 'color')"
             :clip-key="clipKey"
           />
 
-          <!-- 07-05 §四：节点编辑打断路径时的「阻止 + 处理选项」 -->
           <div v-if="pendingGuard !== null" class="props-panel__guard" role="alert">
-            <p class="props-panel__guard-text">
-              这个位置节点是 {{ pendingGuard.affected.length }} 条路径的端点或区间节点，直接改动会让它们失效：
+            <p v-if="pendingGuard.fillAxes" class="props-panel__guard-text">
+              参考系切换需要同一时刻的三轴位置帧。可以用该时刻的采样值补齐。
             </p>
-            <ul class="props-panel__guard-list">
-              <li v-for="item in pendingGuard.affected" :key="item.id" class="props-panel__mono">
-                {{ item.id }} · {{ item.reason }}
-              </li>
+            <p v-if="pendingGuard.affected.length" class="props-panel__guard-text">
+              这次编辑会使以下路径失效。确认后将同时移除这些路径。
+            </p>
+            <ul v-if="pendingGuard.affected.length" class="props-panel__guard-list">
+              <li v-for="item in pendingGuard.affected" :key="item.id">{{ item.id }} · {{ item.reason }}</li>
             </ul>
             <div class="props-panel__guard-actions">
-              <button type="button" class="props-panel__button" @click="confirmGuard">删除这些路径并继续</button>
+              <button type="button" class="props-panel__button" @click="confirmGuard">
+                {{ pendingGuard.affected.length ? (pendingGuard.fillAxes ? '删除路径并补齐三轴' : '删除路径并继续') : '补齐三轴并继续' }}
+              </button>
               <button type="button" class="props-panel__button" @click="cancelGuard">取消</button>
             </div>
           </div>
 
-          <!-- 07-02 / 07-04：位置组与朝向组的组头控制条（分支、轴标签、警告、清除）。
-               行值仍在下方组内，这里不重复值控件。 -->
-          <section
-            v-if="catalog !== undefined && hasPositionBars"
-            class="props-panel__bars"
-            aria-label="位置与朝向控制条"
+          <div
+            id="inspector-fields"
+            :key="clipKey"
+            ref="scrollRef"
+            class="props-panel__scroll"
+            :role="pages.length > 1 ? 'tabpanel' : undefined"
+            :aria-labelledby="pages.length > 1 ? `inspector-tab-${activePage?.key}` : undefined"
+            @scroll="onScroll"
           >
-            <PositionGroupEditor
-              :clip-key="clipKey"
-              :objects="objects ?? {}"
-              :track-type="clipContext.trackType"
-              :catalog="catalog"
-              :time="playhead"
-              :effect-count="effectCountByGroup.get('position') ?? 0"
-              @apply="applyItems"
-            />
-            <OrientationGroupEditor
-              :clip-key="clipKey"
-              :objects="objects ?? {}"
-              :track-type="clipContext.trackType"
-              :catalog="catalog"
-              :time="playhead"
-              :effect-count="effectCountByGroup.get('orientation') ?? 0"
-              @apply="applyItems"
-            />
-          </section>
-          <div ref="scrollRef" class="props-panel__scroll" @scroll="onScroll">
-            <p v-if="totalRows === 0" class="props-panel__empty">
-              该轨道没有可编辑字段（schema 未声明任何适用对象）。这里不提供添加入口。
-            </p>
-            <p v-else-if="!hasGroups" class="props-panel__empty">
-              没有匹配的属性。清除搜索或"只看未设置"后重新查看。
-            </p>
-            <ClipPropertyGroup
-              v-for="group in filteredGroups"
-              :key="group.key"
-              :group="group"
-              :timing="timing"
-              :objects="objects ?? {}"
-              :panel="'properties'"
-              :playhead="playhead"
-              :collapsed="isCollapsed(group.key)"
-              :effect-count="effectCountByGroup.get(group.key) ?? 0"
-              :diagnostics="rowDiagnostics"
-              :focused-path="focusedPath"
-              :local-top="localTopOf(group.key)"
-              :scroll-top="scrollTop"
-              :viewport-height="viewportHeight"
-              :authoring-group-id="groupMatchFor(group).id"
-              :authoring-group-name="groupMatchFor(group).name"
-              :event-summaries="eventSummaryMap"
-              @open-group-popover="openGroupPopover"
-              @toggle-collapse="toggleCollapse"
-              @jump-effects="jumpToEffects"
-              @open-event-editor="openInBehavior"
-              @reveal-effects="revealEffects"
-              @focus-row="focusRow($event.path)"
-              @enabled="onEnabled"
-              @failed="onFailed"
-              @toggle-keyframe="onToggleKeyframe"
-              @toggle-animation="onToggleAnimation"
-              @jump-keyframe="onJumpKeyframe"
-            />
-
-            <!-- 07-09：六个模型通道。没有时钟、没有「添加首帧」，只给模型编辑入口。 -->
-            <section v-if="clipKey !== null && hasMotionModels" class="props-panel__models" aria-label="模型">
-              <header class="props-panel__models-head">
-                <span class="props-panel__models-title">模型</span>
-                <span class="props-panel__models-hint">状态型模型不改位置，只改本片段内的运动响应。</span>
-              </header>
-              <MotionChannelRow
-                v-for="channel in motionChannels"
-                :key="channel.field"
+            <p v-if="activePage === undefined" class="props-panel__empty">此片段没有可编辑属性。</p>
+            <template v-for="group in activePage?.groups" :key="group.key">
+              <BreathInspectorCard
+                v-if="camera && group.key === 'breath'"
                 :clip-key="clipKey"
-                :path="channel.field"
-                :model="modelValueOf(channel.field)"
-                :domain="channel.domain"
-                @open-editor="openModelEditor"
-              />
-            </section>
+                :rows="group.rows"
+                :objects="objects"
+                :collapsed="isCollapsed(group.key)"
+                @set-expanded="setExpansion(group.key, $event)"
+              >
+                <template #row="{ row, options, axis }">
+                  <ClipPropertyRow
+                    :key="row.path"
+                    :row="row"
+                    :timing="timing"
+                    :playhead="playhead"
+                    :objects="objects"
+                    :diagnostics="rowDiagnostics.get(row.path) ?? []"
+                    :focused="focusedPath === row.path"
+                    :options="options"
+                    :axis="axis"
+                    @focus-row="markFocused"
+                  />
+                </template>
+              </BreathInspectorCard>
+
+              <ClipPropertyGroup
+                v-else
+                :group="group"
+                :timing="timing"
+                :objects="objects"
+                :playhead="playhead"
+                :collapsed="isCollapsed(group.key)"
+                :diagnostics="rowDiagnostics"
+                :focused-path="focusedPath"
+                :authoring-group-name="!group.unknown && group.key !== 'motion-models' ? authoringGroupName(group) : undefined"
+                :event-summaries="eventSummaryMap"
+                :options-by-path="optionsByPath"
+                @open-group-popover="openGroupPopover"
+                @toggle-collapse="toggleCollapse"
+                @open-event-editor="openInBehavior"
+                @reveal-effects="revealEffects"
+                @focus-row="markFocused"
+                @toggle-keyframe="onToggleKeyframe"
+                @jump-keyframe="onJumpKeyframe"
+              >
+                <template v-if="lensEditor(group.key) !== null || group.key === 'motion-models'" #default>
+                  <component
+                    :is="lensEditor(group.key)"
+                    v-if="lensEditor(group.key) !== null"
+                    :rows="group.rows"
+                    :objects="objects"
+                    :timing="timing"
+                    :playhead="playhead"
+                  >
+                    <template #row="{ row, options, axis }">
+                      <ClipPropertyRow
+                        :key="row.path"
+                        :row="row"
+                        :timing="timing"
+                        :playhead="playhead"
+                        :objects="objects"
+                        :diagnostics="rowDiagnostics.get(row.path) ?? []"
+                        :focused="focusedPath === row.path"
+                        :options="fieldOptions(row, options)"
+                        :axis="axis"
+                        @focus-row="markFocused"
+                        @toggle-keyframe="onToggleKeyframe"
+                        @jump-keyframe="onJumpKeyframe"
+                      />
+                    </template>
+                  </component>
+                  <template v-else>
+                    <MotionChannelRow
+                      v-for="row in group.rows.filter(row => isChannelField(row.path))"
+                      :key="row.path"
+                      :clip-key="clipKey"
+                      :path="row.path"
+                      :model="modelValueOf(row.path)"
+                      :domain="channelDomain(row.path)"
+                      @open-editor="openModelEditor"
+                    />
+                  </template>
+                </template>
+              </ClipPropertyGroup>
+            </template>
           </div>
 
 
@@ -1090,37 +926,28 @@ const bannerComponent = computed<Component | null>(() => {
             />
           </aside>
 
+          <p v-if="focusMessage" class="props-panel__feedback" :data-kind="focusMessageKind" role="status">{{ focusMessage }}</p>
           <DiagnosticsBar scope="properties" :clip-key="clipKey" />
         </template>
 
         <p v-else class="props-panel__notice" role="alert">
-          片段 {{ clipKey }} 已不在当前文档里（可能已被删除）。撤销可以恢复它。
+          此片段已不在当前脚本中。可撤销删除操作以恢复片段。
         </p>
       </template>
 
       <!-- 多选 -->
       <div v-else-if="state.kind === 'multi'" class="props-panel__block" role="status">
-        <h2 class="props-panel__title">多选 · {{ multiLabel }} 个片段</h2>
-        <p class="props-panel__hint">
-          多选只显示数量与键；不合并属性，也不擅自展开第一个片段。在时间轴上点单个片段后再编辑。
-        </p>
+        <h2 class="props-panel__title">多选 · {{ multiClips.length }} 个片段</h2>
         <ul class="props-panel__list">
-          <li v-for="key in state.clipKeys" :key="key" class="props-panel__mono">{{ key }}</li>
+          <li v-for="{ key, clip } in multiClips" :key="key">{{ clip.label }} · {{ clip.start.toFixed(2) }} s</li>
         </ul>
+        <p class="props-panel__hint">选择单个片段可编辑属性。</p>
       </div>
 
       <!-- 失效 -->
       <div v-else-if="state.kind === 'invalid'" class="props-panel__block props-panel__block--error" role="alert">
         <h2 class="props-panel__title">选区失效</h2>
         <p class="props-panel__hint">{{ invalidReason }}</p>
-        <dl class="props-panel__facts">
-          <dt>之前域</dt>
-          <dd>{{ state.previous.domain }}</dd>
-          <template v-if="state.previous.clipKey !== undefined">
-            <dt>之前 clipKey</dt>
-            <dd class="props-panel__mono">{{ state.previous.clipKey }}</dd>
-          </template>
-        </dl>
         <button type="button" class="props-panel__button" :disabled="!canUndo" @click="runUndo">
           撤销恢复
         </button>
@@ -1128,13 +955,13 @@ const bannerComponent = computed<Component | null>(() => {
 
       <!-- 外部域 -->
       <div v-else-if="state.kind === 'foreign'" class="props-panel__block" role="status">
-        <h2 class="props-panel__title">当前选择属于 {{ foreignDomain }} 域</h2>
-        <p class="props-panel__hint">属性面板只处理片段 / 对象 / 关键帧选择；在时间轴上选一个片段后再查看属性。</p>
+        <h2 class="props-panel__title">已选择{{ foreignLabel }}</h2>
+        <p class="props-panel__hint">选择片段以查看其属性。</p>
       </div>
 
       <!-- 无选择 -->
       <p v-else class="props-panel__empty">
-        没有选中片段。空态不自动选择第一个片段；在时间轴上点击片段后这里显示它的全部属性。
+        在时间轴上选择一个片段以查看其属性。
       </p>
     </template>
   </section>
@@ -1149,7 +976,7 @@ const bannerComponent = computed<Component | null>(() => {
   min-height: 0;
   background: var(--bg-panel);
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .props-panel__scroll {
@@ -1158,11 +985,39 @@ const bannerComponent = computed<Component | null>(() => {
   overflow: auto;
 }
 
-.props-panel__editor {
+.props-panel__tabs {
+  display: flex;
   flex: 0 0 auto;
-  max-height: 45%;
-  overflow: auto;
-  border-top: 1px solid var(--border-strong);
+  gap: 2px;
+  padding: 0 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.props-panel__tabs button {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.props-panel__tabs button:hover {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.props-panel__tabs button[aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.props-panel__tabs button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .props-panel__empty,
@@ -1199,7 +1054,7 @@ const bannerComponent = computed<Component | null>(() => {
 .props-panel__title {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .props-panel__hint {
@@ -1218,21 +1073,16 @@ const bannerComponent = computed<Component | null>(() => {
   font-size: 11px;
 }
 
-.props-panel__facts {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 1px 8px;
+
+.props-panel__feedback {
+  flex: 0 0 auto;
   margin: 0;
+  padding: 6px 10px;
   color: var(--text-secondary);
-  font-size: 11px;
 }
 
-.props-panel__facts dt {
-  color: var(--text-muted);
-}
-
-.props-panel__facts dd {
-  margin: 0;
+.props-panel__feedback[data-kind='error'] {
+  color: var(--error);
 }
 
 .props-panel__button {
@@ -1285,15 +1135,6 @@ const bannerComponent = computed<Component | null>(() => {
   gap: 6px;
 }
 
-.props-panel__bars {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  max-height: 40%;
-  overflow: auto;
-  border-bottom: 1px solid var(--border-strong);
-  background: var(--bg-panel);
-}
 
 .props-panel__popover {
   flex: 0 0 auto;
@@ -1313,33 +1154,9 @@ const bannerComponent = computed<Component | null>(() => {
 
 .props-panel__popover-title {
   font-weight: 600;
-  font-size: 12px;
-}
-
-.props-panel__models {
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border-strong);
-}
-
-.props-panel__models-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 22px;
-  padding: 0 10px;
-  background: var(--bg-raised);
-  color: var(--text);
   font-size: 11px;
 }
 
-.props-panel__models-title {
-  font-weight: 600;
-}
-
-.props-panel__models-hint {
-  color: var(--text-muted);
-}
 
 .props-panel__drawer {
   flex: 0 0 auto;

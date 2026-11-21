@@ -1,170 +1,241 @@
 <script setup lang="ts">
 /**
- * 属性组（06-09 §三）：组头吸顶 + 组内全部适用叶子（纵向虚拟化）。
+ * 右侧 Inspector 属性组（设计稿「按任务组织片段字段」）。
  *
- * 组头显示"已设置数 / 总数"，并提示该组有几项已经去了效果面板；
- * 点这个计数跳到效果面板的对应组（只改可见性与滚动，不改文档）。
- * 组**只来自** schema 的 `section`/`group` 归类——本组件不创建组、不添加属性。
+ * 组头只保留标题与折叠；不再显示「已设置 / 总数」、效果面板计数或虚拟化占位。
+ * 组内行按自然高度排列，组与组之间留 16px；同一组的 X/Y/Z 三轴自动并排，
+ * 每轴标签与帧按钮在数值上方。
  *
- * 虚拟化：行高来自 `rowLayout.ts`（与行组件同一函数），只渲染可见窗口 + 缓冲，
- * 行用绝对定位放在自己的偏移上，因此滚动时不会错位。
+ * 小组只来自 schema 的 section/group 归类（或字段面显示分组）；本组件不创建组、
+ * 不添加属性。组合入口在展开后的底部，仅当父级显式给出 `authoringGroupName`
+ * （`null` 表示可新建）时出现。
  */
-import { computed } from 'vue'
+import { computed, useSlots } from 'vue'
 import type { ClipTiming } from '../../../features/effects/rows.ts'
 import type { EffectDiagnostic, EffectGroup, PropertyRow } from '../../../features/effects/types.ts'
-import type { RowPanel } from '../../../features/effects/rowFilters.ts'
 import type { JsonObject } from '../../../core/doc/types.ts'
+import type { InspectorValueOptions } from '../../../features/effects/panels/inspectorValueOptions.ts'
+import { customFieldFor, customFieldsRevision } from '../../../features/effects/customFields.ts'
+import { fieldSurfaceFor } from '../../../workbench/api/fieldSurface.ts'
 import ClipPropertyRow from './ClipPropertyRow.vue'
-import { propertyRowHeight, rowOffsets, visibleRowRange } from './rowLayout.ts'
 
 const props = defineProps<{
   group: EffectGroup
   timing: ClipTiming
   playhead: number
   objects: JsonObject
-  panel: RowPanel
-  /** 事件行摘要（路径 → 摘要列表）；由外壳按事件记录读取模型计算。 */
-  eventSummaries?: ReadonlyMap<string, readonly string[]>
   collapsed: boolean
-  /** 该组在效果面板里的叶子数（0 表示整组都在属性面板）。 */
-  effectCount: number
   /** 行诊断：`path → 诊断列表`（已按级别排序）。 */
   diagnostics: ReadonlyMap<string, readonly EffectDiagnostic[]>
   focusedPath: string | null
-  /** 组内容区顶部相对滚动容器的偏移（虚拟化用）。 */
-  localTop: number
-  scrollTop: number
-  viewportHeight: number
-  /** 07-01：该组命中的组合定义 id（null = 没有匹配，弹层会建议新建自定义组）。 */
-  authoringGroupId?: string | null
-  /** 07-01：组合定义显示名（组头按钮提示用）。 */
+  /** 事件行摘要（路径 → 摘要列表）。 */
+  eventSummaries?: ReadonlyMap<string, readonly string[]>
+  /** 该组命中的组合定义显示名；`null` = 没有匹配（弹层可新建）。未提供则不显示入口。 */
   authoringGroupName?: string | null
+  /** 路径 → 右栏值控件选项。 */
+  optionsByPath?: ReadonlyMap<string, InspectorValueOptions>
 }>()
 
 const emit = defineEmits<{
-  /** 07-01：组头「组合」入口（弹层由外壳挂载）。 */
   'open-group-popover': [groupKey: string]
   'toggle-collapse': [groupKey: string]
-  'jump-effects': [groupKey: string]
   'open-event-editor': [{ clipKey: string; path: string; time: number }]
   'reveal-effects': [{ clipKey: string; path: string }]
   'focus-row': [{ path: string }]
-  'enabled': [{ clipKey: string; path: string; time: number }]
-  'failed': [{ clipKey: string; path: string; message: string }]
   'toggle-keyframe': [{ clipKey: string; path: string; time: number; create: boolean }]
-  'toggle-animation': [{ clipKey: string; path: string; time: number; enable: boolean }]
   'jump-keyframe': [{ clipKey: string; path: string; time: number }]
 }>()
 
-const total = computed(() => props.group.rows.length)
-const setCount = computed(() => props.group.rows.filter((row) => row.present).length)
-const rowsOfGroup = computed<PropertyRow[]>(() => props.group.rows)
+type AxisName = 'x' | 'y' | 'z'
 
-const offsets = computed(() => rowOffsets(rowsOfGroup.value))
-const contentHeight = computed(() => {
-  const rows = rowsOfGroup.value
-  if (rows.length === 0) {
-    return 0
+interface AxisSet {
+  kind: 'axis'
+  key: string
+  rows: [PropertyRow, PropertyRow, PropertyRow]
+}
+
+interface SingleRow {
+  kind: 'row'
+  key: string
+  row: PropertyRow
+}
+
+type RenderItem = AxisSet | SingleRow
+
+const slots = useSlots()
+const hasBodySlot = computed(() => slots.default !== undefined)
+
+const rows = computed<PropertyRow[]>(() => props.group.rows)
+
+/**
+ * 静态时由专用控件接管的路径：这些控件通常自带滑杆与数值框，塞进 1/3 窄格会溢出。
+ * 一旦有帧，专用控件让位给通用 Inspector，三轴并排重新安全。
+ */
+const customStaticPaths = computed<ReadonlySet<string>>(() => {
+  void customFieldsRevision.value
+  const paths = new Set<string>()
+  for (const row of rows.value) {
+    if (row.keyframes.length > 0) continue
+    const trackType = row.def?.scope[0]
+    if (trackType === undefined) continue
+    if (customFieldFor(trackType, row.path) !== undefined
+      || fieldSurfaceFor(trackType, row.path)?.component !== undefined) {
+      paths.add(row.path)
+    }
   }
-  return offsets.value[rows.length - 1] + propertyRowHeight(rows[rows.length - 1])
+  return paths
 })
 
-const range = computed(() => visibleRowRange({
-  rows: rowsOfGroup.value,
-  localTop: props.localTop,
-  scrollTop: props.scrollTop,
-  viewportHeight: props.viewportHeight,
-}))
-
-const visibleRows = computed(() => rowsOfGroup.value.slice(range.value.first, range.value.last))
-
-/** 行的像素偏移（绝对定位用；与行高同一来源，虚拟化不会错位）。 */
-function rowOffset(path: string): number {
-  const index = rowsOfGroup.value.findIndex((row) => row.path === path)
-  return index < 0 ? 0 : offsets.value[index]
+/** 三轴字段的公共前缀：支持 `x`、`position.x` 与 `position_origin_x` 三种命名。 */
+function axisBase(row: PropertyRow, customStatic: ReadonlySet<string>): string | null {
+  if (row.unknown) return null
+  if (customStatic.has(row.path)) return null
+  if (!['float', 'int', 'nullable_float', 'number'].includes(row.type)) return null
+  if (row.path === 'x' || row.path === 'y' || row.path === 'z') return ''
+  const match = /^(.*)[._]([xyz])$/.exec(row.path)
+  return match === null ? null : match[1]
 }
+
+function axisOf(row: PropertyRow): AxisName {
+  return row.path[row.path.length - 1] as AxisName
+}
+
+/**
+ * 把同组内成对的 X/Y/Z 收成三轴格；其余行保持原顺序。
+ * 只有三个轴都存在时才并排，避免把单独一轴误做成窄格。
+ */
+const renderItems = computed<RenderItem[]>(() => {
+  const customStatic = customStaticPaths.value
+  const triples = new Map<string, Partial<Record<AxisName, PropertyRow>>>()
+  for (const row of rows.value) {
+    const base = axisBase(row, customStatic)
+    if (base === null) continue
+    const entry = triples.get(base) ?? {}
+    entry[axisOf(row)] = row
+    triples.set(base, entry)
+  }
+
+  const items: RenderItem[] = []
+  const emitted = new Set<string>()
+  for (const row of rows.value) {
+    const base = axisBase(row, customStatic)
+    if (base !== null) {
+      const entry = triples.get(base)
+      if (entry !== undefined) {
+        const x = entry.x
+        const y = entry.y
+        const z = entry.z
+        if (x !== undefined && y !== undefined && z !== undefined) {
+          if (!emitted.has(base)) {
+            emitted.add(base)
+            items.push({ kind: 'axis', key: `axis:${base}`, rows: [x, y, z] })
+          }
+          continue
+        }
+      }
+    }
+    items.push({ kind: 'row', key: row.path, row })
+  }
+  return items
+})
 
 function rowDiagnostics(path: string): readonly EffectDiagnostic[] {
   return props.diagnostics.get(path) ?? []
 }
 
-function toggle(): void {
-  emit('toggle-collapse', props.group.key)
+function rowOptions(path: string): InspectorValueOptions | undefined {
+  return props.optionsByPath?.get(path)
 }
 
-function jumpToEffects(): void {
-  if (props.effectCount === 0) {
-    return
-  }
-  emit('jump-effects', props.group.key)
+function rowSummaries(path: string): readonly string[] | undefined {
+  return props.eventSummaries?.get(path)
+}
+
+function toggle(): void {
+  emit('toggle-collapse', props.group.key)
 }
 </script>
 
 <template>
   <section class="prop-group" :data-group="group.key">
-    <header class="prop-group__header">
+    <header class="prop-group__header" :class="{ 'prop-group__header--open': !collapsed }">
       <button
         type="button"
         class="prop-group__toggle"
         :aria-expanded="!collapsed"
-        :title="collapsed ? '展开组' : '折叠组'"
+        :title="collapsed ? `展开 ${group.label}` : `折叠 ${group.label}`"
         @click="toggle"
       >
         <span class="prop-group__chevron" aria-hidden="true">{{ collapsed ? '▸' : '▾' }}</span>
         <span class="prop-group__label">{{ group.label }}</span>
       </button>
-      <span class="prop-group__stats">{{ setCount }} / {{ total }} 已设置</span>
-      <button
-        v-if="effectCount > 0"
-        type="button"
-        class="prop-group__effect-link"
-        :title="`该组有 ${effectCount} 项已在效果面板`"
-        @click="jumpToEffects"
-      >
-        {{ effectCount }} 项在效果面板
-      </button>
       <span v-if="group.unknown" class="prop-group__unknown">未知 / 扩展 · 只读</span>
-      <button
-        type="button"
-        class="prop-group__authoring"
-        :title="authoringGroupName === null || authoringGroupName === undefined
-          ? '该组没有匹配的组合定义：可在弹层里新建自定义组'
-          : `组合定义：${authoringGroupName}`"
-        @click="emit('open-group-popover', props.group.key)"
-      >
-        {{ authoringGroupName === null || authoringGroupName === undefined ? '组合' : `组合 · ${authoringGroupName}` }}
-      </button>
     </header>
 
-    <div v-if="!collapsed" class="prop-group__rows" :style="{ height: `${contentHeight}px` }">
-      <p v-if="rowsOfGroup.length === 0" class="prop-group__empty">该组当前没有留在属性面板的叶子。</p>
+    <div v-if="!collapsed" class="prop-group__rows">
+      <slot v-if="hasBodySlot" />
+
       <template v-else>
-        <div
-          v-for="row in visibleRows"
-          :key="row.path"
-          class="prop-group__slot"
-          :style="{ top: `${rowOffset(row.path)}px`, height: `${propertyRowHeight(row)}px` }"
-        >
+        <p v-if="rows.length === 0" class="prop-group__empty">该组当前没有留在属性面板的叶子。</p>
+
+        <template v-for="item in renderItems" :key="item.key">
+          <div
+            v-if="item.kind === 'axis'"
+            class="prop-group__axis"
+            role="group"
+            :aria-label="`${group.label} 三轴`"
+          >
+            <ClipPropertyRow
+              v-for="row in item.rows"
+              :key="row.path"
+              :row="row"
+              :timing="timing"
+              :playhead="playhead"
+              :objects="objects"
+              :diagnostics="rowDiagnostics(row.path)"
+              :focused="focusedPath === row.path"
+              :event-summaries="rowSummaries(row.path)"
+              :options="rowOptions(row.path)"
+              :axis="true"
+              @open-event-editor="emit('open-event-editor', $event)"
+              @reveal-effects="emit('reveal-effects', $event)"
+              @focus-row="emit('focus-row', $event)"
+              @toggle-keyframe="emit('toggle-keyframe', $event)"
+              @jump-keyframe="emit('jump-keyframe', $event)"
+            />
+          </div>
+
           <ClipPropertyRow
-            :row="row"
+            v-else
+            :row="item.row"
             :timing="timing"
-            :objects="objects"
-            :panel="panel"
             :playhead="playhead"
-            :diagnostics="rowDiagnostics(row.path)"
-            :focused="focusedPath === row.path"
-            :event-summaries="eventSummaries?.get(row.path)"
+            :objects="objects"
+            :diagnostics="rowDiagnostics(item.row.path)"
+            :focused="focusedPath === item.row.path"
+            :event-summaries="rowSummaries(item.row.path)"
+            :options="rowOptions(item.row.path)"
             @open-event-editor="emit('open-event-editor', $event)"
             @reveal-effects="emit('reveal-effects', $event)"
             @focus-row="emit('focus-row', $event)"
-            @enabled="emit('enabled', $event)"
-            @failed="emit('failed', $event)"
             @toggle-keyframe="emit('toggle-keyframe', $event)"
-            @toggle-animation="emit('toggle-animation', $event)"
             @jump-keyframe="emit('jump-keyframe', $event)"
           />
-        </div>
+        </template>
       </template>
+
+      <footer v-if="authoringGroupName !== undefined" class="prop-group__footer">
+        <button
+          type="button"
+          class="prop-group__authoring"
+          :title="authoringGroupName === null
+            ? '该组没有匹配的组合定义：可在弹层里新建自定义组'
+            : `组合定义：${authoringGroupName}`"
+          @click="emit('open-group-popover', group.key)"
+        >
+          {{ authoringGroupName === null ? '建立组合…' : `组合定义 · ${authoringGroupName}` }}
+        </button>
+      </footer>
     </div>
   </section>
 </template>
@@ -174,90 +245,107 @@ function jumpToEffects(): void {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  margin: 6px 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+.prop-group + .prop-group {
+  margin-block-start: 10px;
 }
 
 .prop-group__header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 22px;
-  padding: 0 10px;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 9px;
+  border-radius: 6px;
+}
+
+.prop-group__header--open {
   border-bottom: 1px solid var(--border);
-  background: var(--bg-raised);
-  color: var(--text);
-  font-size: 11px;
+  background: var(--bg-panel);
+  border-radius: 6px 6px 0 0;
 }
 
 .prop-group__toggle {
   display: inline-flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 4px;
   min-width: 0;
+  min-height: 20px;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
   cursor: pointer;
 }
 
-.prop-group__toggle:focus-visible,
-.prop-group__effect-link:focus-visible {
+.prop-group__toggle:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: -1px;
+  outline-offset: 2px;
 }
 
 .prop-group__chevron {
+  flex: 0 0 auto;
   width: 10px;
-  color: var(--text-muted);
+  color: var(--accent);
+  font-size: 10px;
 }
 
 .prop-group__label {
   overflow: hidden;
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.prop-group__stats {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-
-.prop-group__effect-link {
-  margin-left: auto;
-  padding: 0 5px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--accent);
-  font-size: 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.prop-group__effect-link:hover {
-  background: var(--bg-hover);
-}
-
 .prop-group__unknown {
+  flex: 0 0 auto;
   margin-left: auto;
   color: var(--warning);
+  font-size: 10px;
   white-space: nowrap;
+}
+
+.prop-group__rows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 1px 9px 4px;
+}
+
+.prop-group__axis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.prop-group__empty {
+  margin: 0;
+  padding: 6px 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.prop-group__footer {
+  padding-top: 5px;
 }
 
 .prop-group__authoring {
-  margin-left: auto;
-  padding: 0 6px;
+  padding: 1px 7px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 10px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -270,28 +358,5 @@ function jumpToEffects(): void {
 .prop-group__authoring:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -1px;
-}
-
-.prop-group__rows {
-  position: relative;
-  overflow: hidden;
-}
-
-.prop-group__slot {
-  position: absolute;
-  left: 0;
-  right: 0;
-  overflow: hidden;
-}
-
-.prop-group__empty {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  margin: 0;
-  padding: 4px 10px;
-  color: var(--text-muted);
-  font-size: 11px;
 }
 </style>
