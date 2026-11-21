@@ -155,6 +155,8 @@ src/workbench/shared/     工作台共享交互（机制，不含业务）
 | R6-11 属性面板全行 | 属性面板同时出现 `position.x`（有帧）与 `yaw`（静态）；面板内也有菱形控件 |
 | R6-12 选择域切换 | 清空选择后右栏 `activePanelId` 变 `p:core.meta:meta.properties` 且面板渲染出 23 个 meta 字段；选回片段变 `p:core.selection-properties:selection.properties` |
 
+上表记录第 06 轮交付时的验收。改版后的右栏将脚本、轨道和片段属性统一为 `p:core.selection-properties:selection.properties`，以[当前检查器说明](./inspector-editing-inventory.md)为准。
+
 ## 八、实现过程中修掉的真实缺陷
 
 这两个缺陷是"命令成功但面板不刷新"的根因，只在真实渲染里暴露：

@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>属性面板原型 · ImmersiveCinematics</title>
+<style>
+:root {
+  color-scheme: dark;
+  font: 14px/1.55 system-ui, "Microsoft YaHei UI", sans-serif;
+  --bg: #11151c;
+  --panel: #1a202a;
+  --group: #202833;
+  --control: #151b24;
+  --edge: #394554;
+  --line: #2b3542;
+  --text: #edf2f8;
+  --muted: #aeb9c8;
+  --accent: #a7c8ff;
+  --active: #253c5c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .45; }
+button, input, select, textarea, summary { outline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); }
+button, input, select, textarea { accent-color: var(--accent); }
+[hidden] { display: none !important; }
+h1, h2, p { margin: 0; }
+small { font-size: 12px; }
+.muted { color: var(--muted); }
+.mono { font-variant-numeric: tabular-nums; }
+.topbar {
+  min-height: 56px; display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 10px 20px; border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { width: 15px; height: 15px; border: 2px solid var(--accent); border-radius: 4px; transform: rotate(45deg); }
+.topbar h1 { font-size: 15px; font-weight: 660; }
+.workspace {
+  display: grid; grid-template-columns: minmax(0, 1fr) clamp(370px, 37vw, 510px);
+  gap: 12px; padding: 12px; height: calc(100dvh - 56px); min-height: 596px;
+}
+.left { display: grid; grid-template-rows: minmax(110px, 1fr) auto; gap: 12px; min-width: 0; min-height: 0; }
+.surface { border: 1px solid var(--line); border-radius: 10px; min-width: 0; overflow: hidden; background: var(--panel); }
+.preview { display: flex; flex-direction: column; }
+.preview header, .timeline header {
+  min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 14px; border-bottom: 1px solid var(--line); font-weight: 600;
+}
+.preview-stage {
+  display: grid; place-items: center; flex: 1; min-height: 0; padding: 18px;
+  background: #111822;
+}
+.preview-guide {
+  width: min(82%, 560px); height: min(80%, 272px); display: grid; align-content: center;
+  justify-items: center; gap: 8px; text-align: center; border: 1px solid #344255;
+  background: radial-gradient(ellipse at 50% 48%, #22354d, #111925 75%);
+  border-radius: 4px;
+}
+.preview-guide::before { content: ''; width: 28px; height: 18px; border: 1px solid #778fab; border-radius: 3px; }
+.preview-time { font-weight: 600; color: var(--accent); }
+.timeline { --lane-head: 100px; --playhead: 0%; }
+.timeline header { flex-wrap: wrap; }
+.button {
+  padding: 5px 10px; min-height: 32px; background: var(--control); border: 1px solid var(--edge);
+  border-radius: 5px; white-space: nowrap;
+}
+.button:hover:not(:disabled), .icon:hover:not(:disabled) { background: #2e3c50; }
+.scrub { display: flex; align-items: center; gap: 10px; margin: 10px 14px 6px; }
+.scrub input { flex: 1; min-width: 0; }
+.scrub output { min-width: 66px; text-align: right; color: var(--accent); }
+.ruler, .lane { display: grid; grid-template-columns: var(--lane-head) minmax(0, 1fr); }
+.ruler { padding: 4px 10px 6px 0; }
+.ticks { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.lanes { padding: 0 10px 10px 0; }
+.lane { min-height: 39px; border-top: 1px solid var(--line); }
+.track {
+  min-width: 0; min-height: 39px; padding: 0 8px 0 12px; border: 0; border-right: 1px solid var(--line);
+  display: flex; align-items: center; gap: 7px; background: transparent; text-align: left;
+}
+.track span { min-width: 0; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.track::before { content: ''; background: var(--track-accent); width: 3px; height: 16px; border-radius: 2px; flex: none; }
+.track:hover, .track[aria-pressed="true"] { background: var(--active); }
+.lane-body {
+  position: relative; background-image: linear-gradient(to right, var(--line) 1px, transparent 1px);
+  background-size: 25% 100%;
+}
+.lane-body::after {
+  position: absolute; inset: 0 auto 0 var(--playhead); width: 1px;
+  background: #adc9f48c; content: ''; pointer-events: none;
+}
+.lane[data-muted="true"] .clip, .lane[data-visible="false"] .clip { opacity: .48; }
+.clip {
+  position: absolute; top: 5px; bottom: 5px; border: 1px solid color-mix(in srgb, var(--track-accent) 52%, transparent);
+  border-radius: 5px; text-align: left; padding: 0 7px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--track-accent) 18%, var(--control));
+}
+.clip:hover { background: color-mix(in srgb, var(--track-accent) 30%, var(--control)); }
+.clip[aria-pressed="true"] { border-color: var(--track-accent); box-shadow: 0 0 0 1px var(--track-accent) inset; }
+.inspector { display: flex; flex-direction: column; min-height: 0; }
+.inspector-head { padding: 14px 16px 13px; border-bottom: 1px solid var(--line); }
+.selection-kind { color: var(--accent); font-size: 13px; font-weight: 650; }
+.inspector h2 { font-size: 19px; line-height: 1.35; margin-top: 3px; overflow-wrap: anywhere; }
+.subtitle { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; color: var(--muted); }
+.subtitle .button { min-height: 28px; padding: 2px 8px; font-size: 12px; }
+.tabs { display: flex; flex-wrap: wrap; padding: 0 12px; gap: 2px; border-bottom: 1px solid var(--edge); }
+.tab {
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  padding: 7px 9px 6px; min-height: 43px; color: var(--muted);
+}
+.tab:hover { background: var(--group); color: var(--text); }
+.tab[aria-selected="true"] { color: var(--accent); background: var(--active); border-bottom-color: var(--accent); font-weight: 660; }
+.inspector-body { overflow-y: auto; flex: 1; min-height: 0; padding: 16px; scrollbar-gutter: stable; }
+.group { background: var(--group); border: 1px solid var(--line); border-radius: 7px; }
+.group + .group { margin-block-start: 16px; }
+.group > summary { padding: 10px 12px; min-height: 44px; cursor: pointer; font-size: 15px; font-weight: 660; }
+.group > summary::marker { color: var(--accent); }
+.group[open] > summary { background: #27313e; border-radius: 6px 6px 0 0; border-bottom: 1px solid var(--line); }
+.position-basis { margin: 7px 0; padding: 3px 10px; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; background: #19212c; }
+.base-frame { min-inline-size: 0; margin: 7px 0 0; padding: 0 0 3px; border: 0; border-block-start: 1px solid var(--edge); }
+.base-frame > legend { padding: 0 8px 0 0; color: var(--muted); font-weight: 650; }
+.property-row--segmented > .segmented { grid-column: 2 / -1; }
+.property-row--segmented.with-actions > .segmented { grid-column: 2; }
+.reference-control { display: grid; gap: 5px; width: 100%; min-width: 0; }
+.inline-details > summary { padding: 7px 0; cursor: pointer; color: var(--accent); font-weight: 600; }
+.inline-details-content { padding: 0 7px; border-left: 1px solid var(--edge); }
+.basis-message { padding: 5px 0 7px; color: var(--muted); font-size: 12px; }
+.basis-message[data-error="true"] { color: #f4c2b9; }
+.vector-label { margin-top: 10px; font-weight: 650; }
+.segmented { display: grid; grid-auto-columns: 1fr; grid-auto-flow: column; gap: 2px; min-width: 0; padding: 2px; border: 1px solid var(--edge); border-radius: 6px; background: var(--control); }
+.segment { min-width: 0; min-height: 34px; padding: 4px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); white-space: normal; line-height: 1.35; }
+.segment:hover:not(:disabled) { color: var(--text); background: var(--group); }
+.segment:disabled { cursor: default; opacity: .55; }
+.segment[aria-pressed="true"] { color: var(--text); background: var(--active); box-shadow: 0 0 0 1px var(--accent) inset; font-weight: 650; }
+.group-content { padding: 3px 12px 6px; }
+.property-row { display: grid; grid-template-columns: minmax(72px,.9fr) minmax(0,2fr) auto; align-items: center; gap: 8px; min-block-size: 44px; padding-block: 5px; border-bottom: 1px solid var(--line); }
+.property-row:last-child { border-bottom: 0; }
+.property-row > label { font-weight: 540; }
+.value-control { display: flex; align-items: center; gap: 7px; min-width: 0; grid-column: 2 / -1; }
+.with-actions .value-control { grid-column: 2; }
+.field, .number { min-height: 32px; min-width: 0; width: 100%; padding: 3px 7px; border: 1px solid var(--edge); border-radius: 5px; background: var(--control); }
+.field:disabled { opacity: .65; }
+textarea.field { display: block; resize: vertical; }
+.value-control input[type="range"] { flex: 1 1 45px; min-width: 30px; margin: 0; }
+.number { display: flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.number input { background: transparent; border: 0; width: 100%; min-width: 0; padding: 0; }
+.number span { color: var(--muted); }
+.with-slider .number { width: 78px; flex: none; }
+.frame-controls { display: flex; align-items: center; }
+.icon { border: 0; border-radius: 4px; background: transparent; font-size: 17px; min-width: 24px; min-height: 31px; padding: 0 3px; }
+.icon.reset { margin-right: 3px; color: var(--muted); }
+.icon[aria-pressed="true"] { color: var(--accent); background: var(--active); }
+.field-hint { grid-column: 2 / -1; color: var(--muted); font-size: 12px; }
+.toggle { appearance: none; margin: 0; width: 34px; height: 20px; padding: 2px; border: 1px solid var(--edge); border-radius: 12px; background: var(--control); cursor: pointer; }
+.toggle::after { display: block; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); content: ''; }
+.toggle:checked { background: #375d8d; border-color: var(--accent); }
+.toggle:checked::after { background: var(--text); transform: translateX(14px); }
+.group-note { padding: 8px 0; color: var(--muted); }
+.group-note .button { margin-top: 7px; }
+.record + .record { border-top: 1px solid var(--edge); }
+.record > summary { cursor: pointer; padding: 9px 0; color: var(--accent); }
+.inspector-foot { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); min-height: 37px; }
+.axis-set { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; padding: 7px 0; }
+.axis-set .property-row { grid-template-columns: minmax(0, 1fr) auto; align-content: start; gap: 3px; border: 0; }
+.axis-set label { font-size: 12px; white-space: nowrap; }
+.axis-set .value-control { grid-area: 2 / 1 / auto / -1; }
+.axis-set .frame-controls { grid-area: 1 / 2; }
+.axis-set .icon { min-width: 16px; min-height: 26px; padding: 0 1px; font-size: 15px; }
+.axis-set .icon.reset { margin-right: 0; }
+.axis-set .field-hint { grid-column: 1 / -1; }
+.effect-card { border-left: 2px solid var(--edge); }
+.effect-card[data-enabled="true"] { border-left-color: #83bea7; }
+.effect-card__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; }
+.effect-card__title { font-size: 15px; font-weight: 660; }
+button.effect-card__title { flex: 1; min-height: 32px; padding: 0; border: 0; background: transparent; text-align: left; }
+.effect-card__toggle[aria-pressed="true"] { color: #a1d7bf; border-color: currentColor; }
+.effect-card__content { border-top: 1px solid var(--line); }
+@media (max-width: 1030px) { .with-slider input[type="range"] { display: none; } .with-slider .number { width: 100%; } }
+@media (max-width: 760px) { .workspace { height: auto; grid-template-columns: 1fr; } .left { grid-template-rows: 110px auto; } .inspector { min-height: 560px; } .inspector-body { overflow: visible; } .topbar { padding-inline: 12px; } }
+@media (max-width: 425px) {
+  .workspace { padding: 6px; }
+  .timeline { --lane-head: 72px; }
+  .timeline header { font-size: 13px; }
+  .inspector-body { padding: 10px; }
+  .group-content { padding-inline: 8px; }
+  .property-row { grid-template-columns: minmax(58px, .8fr) minmax(0, 2fr) auto; gap: 5px; }
+  .axis-set { gap: 4px; }
+  .axis-set .icon { min-width: 14px; }
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>属性面板原型</h1></div>
+  <small class="muted">内存演示 · 刷新恢复样例</small>
+</header>
+<main class="workspace">
+  <div class="left">
+    <section class="surface preview" aria-label="预览">
+      <header><span id="project-title">林间镜头练习</span><span id="preview-time" class="preview-time mono">0.00 s</span></header>
+      <div class="preview-stage">
+        <div class="preview-guide"><span class="muted">离线预览</span></div>
+      </div>
+    </section>
+    <section class="surface timeline" aria-label="示例时间轴">
+      <header><span>时间轴</span><button class="button" type="button" id="clear-selection">清空选区</button></header>
+      <label class="scrub"><span>播放头</span><input id="scrubber" aria-label="播放头时间" type="range" min="0" max="24" step="0.05" value="0"><output for="scrubber" id="time-value" class="mono">0.00 s</output></label>
+      <div class="ruler" aria-hidden="true"><span></span><div class="ticks"><span>0 s</span><span>6 s</span><span>12 s</span><span>18 s</span><span>24 s</span></div></div>
+      <div class="lanes" id="lanes"></div>
+    </section>
+  </div>
+  <aside class="surface inspector" aria-label="检查器">
+    <header class="inspector-head">
+      <p class="selection-kind" id="selection-kind"></p>
+      <h2 id="selection-name"></h2>
+      <div class="subtitle mono" id="clip-time" hidden>
+        <span id="selection-summary"></span>
+        <button class="button" type="button" id="clip-start" aria-label="定位到片段开头">到开头</button>
+      </div>
+    </header>
+    <div class="tabs" role="tablist" aria-label="片段功能" id="tabs" hidden></div>
+    <div class="inspector-body" id="properties"></div>
+    <footer class="inspector-foot" id="status" role="status"></footer>
+  </aside>
+</main>
+<script>
+// 独立 HTML 走查稿。数值、记录和选区只存在本页，不接 Editor 服务。
+const $ = id => document.getElementById(id)
+const lanes = $('lanes')
+const properties = $('properties')
+const tracks = [
+  { type: 'CAMERA', label: '相机', color: '#8fb8f7', clips: [['林间推进', 0, 12, { 'position.x': 4, 'position.y': 2, 'position.z': -3, cam_breath_enabled: false }], ['远景收尾', 12, 12]] },
+  { type: 'LETTERBOX', label: '遮幅', color: '#b6a4e8', clips: [['宽银幕', 0, 24]] },
+  { type: 'AUDIO', label: '音频', color: '#77c9ad', clips: [['林间环境声', 1, 21]] },
+  { type: 'EVENT', label: '事件', color: '#edbf86', clips: [['章节标记', 2, 9]] },
+  { type: 'MOD_EVENT', label: '模组事件', color: '#e7a8cb', clips: [['场景事件', 8, 9]] },
+  { type: 'OVERLAY', label: '叠加', color: '#83c6d5', clips: [['片头图层', 2, 10]] },
+  { type: 'ADJUST', label: '调整层', color: '#d3b3f1', clips: [['暖色定调', 0, 24]] },
+].map(track => ({ ...track, values: {}, clips: track.clips.map(([label, start, duration, values = {}]) => ({
+  label, start, duration, type: track.type, values, frames: new Map(),
+})) }))
+const meta = {}
+const selected = new Set()
+const expandedGroups = new Map()
+let trackSelection = null
+let groupScope = ''
+let activeTab = ''
+let frameUpdates = []
+let time = 0
+
+function elt(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag)
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === true) node.setAttribute(key, '')
+    else if (value !== false && value !== undefined) node.setAttribute(key, value)
+  }
+  node.append(...children)
+  return node
+}
+function button(text, action, attrs = {}) {
+  const node = elt('button', { type: 'button', class: 'button', ...attrs }, text)
+  node.addEventListener('click', action)
+  return node
+}
+function status(text) { $('status').textContent = text }
+const seconds = value => `${value.toFixed(2)} s`
+const localTime = clip => Math.round((time - clip.start) * 100) / 100
+const inClip = clip => time >= clip.start && time <= clip.start + clip.duration
+const read = (owner, path, fallback) => owner[path] ?? fallback
+const singleClip = () => selected.size === 1 ? selected.values().next().value : null
+const lensDefaults = {
+  position_mode: 'relative', position_space: 'world', position_origin: '',
+  facing_source: 'auto', facing_target: '', facing_entity: '', look_at: 'none',
+}
+const lensSample = (clip, key) => sample(clip, key, lensDefaults[key], 'step')
+
+function sample(clip, key, initial, interp = 'linear') {
+  const frames = clip.frames.get(key)
+  if (!frames?.size) return read(clip.values, key, initial)
+  const at = localTime(clip)
+  if (frames.has(at)) return frames.get(at)
+  const times = [...frames.keys()].sort((a, b) => a - b)
+  const previous = times.findLast(frame => frame < at)
+  const next = times.find(frame => frame > at)
+  if (interp === 'step' || previous === undefined || next === undefined) return frames.get(previous ?? next)
+  const start = frames.get(previous)
+  const end = frames.get(next)
+  const t = (at - previous) / (next - previous)
+  return Math.round((interp === 'geometric' && start > 0 && end > 0
+    ? start * (end / start) ** t
+    : start + (end - start) * t) * 1000) / 1000
+}
+
+function setTime(next) {
+  const clip = singleClip()
+  const lensPage = clip?.type === 'CAMERA' && activeTab === '镜头'
+  const keys = Object.keys(lensDefaults)
+  const before = lensPage ? keys.map(key => lensSample(clip, key)) : null
+  time = Math.max(0, Math.min(24, next))
+  $('scrubber').value = time
+  $('time-value').textContent = seconds(time)
+  $('preview-time').textContent = seconds(time)
+  lanes.closest('.timeline').style.setProperty('--playhead', `${time / 24 * 100}%`)
+  showClipTime(clip)
+  if (before && keys.some((key, index) => lensSample(clip, key) !== before[index])) refresh()
+  else frameUpdates.forEach(update => update())
+}
+$('scrubber').addEventListener('input', e => setTime(e.target.valueAsNumber))
+$('clip-start').addEventListener('click', () => {
+  const clip = singleClip()
+  if (clip) setTime(clip.start)
+})
+
+function showClipTime(clip) {
+  $('clip-time').hidden = !clip
+  if (!clip) return
+  const current = inClip(clip) ? `片段内 ${seconds(localTime(clip))}` : '播放头在片段外'
+  $('selection-summary').textContent = `${seconds(clip.start)} – ${seconds(clip.start + clip.duration)} · ${current}`
+}
+
+function selectClip(clip, multiple) {
+  if (!multiple) selected.clear()
+  if (selected.has(clip)) selected.delete(clip)
+  else selected.add(clip)
+  trackSelection = null
+  activeTab = ''
+  render()
+}
+function clearSelection() {
+  selected.clear()
+  trackSelection = null
+  activeTab = ''
+  render()
+}
+$('clear-selection').addEventListener('click', clearSelection)
+
+function renderTimeline() {
+  lanes.replaceChildren(...tracks.map(track => {
+    const name = read(track.values, 'name', track.label)
+    const trackName = button('', () => {
+      selected.clear()
+      trackSelection = track
+      activeTab = ''
+      render()
+    }, { class: 'track', 'aria-label': `轨道头：${name}`, 'aria-pressed': trackSelection === track ? 'true' : 'false' })
+    const indicators = `${track.values.locked ? ' · 锁定' : ''}${track.values.muted ? ' · 静音' : ''}`
+    trackName.replaceChildren(elt('span', {}, name + indicators))
+    const row = elt('div', { class: 'lane-body' }, ...track.clips.map(clip => {
+      const item = button(clip.label, e => selectClip(clip, e.ctrlKey || e.metaKey), {
+        class: 'clip', title: clip.label, 'aria-pressed': selected.has(clip) ? 'true' : 'false',
+      })
+      item.style.left = `${clip.start / 24 * 100}%`
+      item.style.width = `${clip.duration / 24 * 100}%`
+      return item
+    }))
+    row.addEventListener('click', e => { if (e.target === row) clearSelection() })
+    const lane = elt('div', { class: 'lane', 'data-visible': String(track.values.visible !== false), 'data-muted': String(track.values.muted === true) }, trackName, row)
+    lane.style.setProperty('--track-accent', track.color)
+    return lane
+  }))
+}
+
+function group(title, rows, defaultOpen = false, className = 'group') {
+  const key = `${groupScope}/${title}`
+  const section = elt('details', { class: className }, elt('summary', {}, title), elt('div', { class: `${className}-content` }, ...rows))
+  section.open = expandedGroups.get(key) ?? defaultOpen
+  section.addEventListener('toggle', () => { if (section.isConnected) expandedGroups.set(key, section.open) })
+  return section
+}
+const note = text => elt('p', { class: 'group-note' }, text)
+const fact = (label, value) => elt('div', { class: 'property-row' }, elt('span', {}, label), elt('span', { class: 'value-control muted' }, String(value)))
+const extra = (title, rows) => group(title, rows, false, 'inline-details')
+const axes = ['x', 'y', 'z']
+const xyz = ['X', 'Y', 'Z']
+
+function vectorSet(clip, prefix, label, labels = xyz) {
+  return elt('div', { class: 'axis-set', role: 'group', 'aria-label': label }, ...axes.map((axis, index) =>
+    field(clip.values, `${prefix}${axis}`, labels[index], 0, { clip, animate: true })))
+}
+
+const isEntityRef = value => value.startsWith('@') || value.startsWith('uuid:')
+const pointReference = {
+  preset(value) {
+    if (!value || value === 'player' || value === 'coordinate') return value
+    if (isEntityRef(value)) return '@p'
+    if (value.startsWith('block:')) return 'block:minecraft:stone'
+    return 'minecraft:village_plains'
+  },
+  payloads: {
+    '@p': { label: '实体选择器', placeholder: '@p' },
+    'block:minecraft:stone': { label: '方块 ID 和可选半径', placeholder: 'minecraft:stone', prefix: 'block:' },
+    'minecraft:village_plains': { label: '结构 ID', placeholder: 'minecraft:village_plains' },
+  },
+}
+
+function pointRows(clip, key, label, defaultLabel) {
+  const choices = [pick(defaultLabel, ''), pick('玩家激活位置', 'player'), pick('指定坐标', 'coordinate'),
+    pick('实体', '@p'), pick('附近方块中心', 'block:minecraft:stone'), pick('结构中心', 'minecraft:village_plains')]
+  const rows = [field(clip.values, key, label, '', { clip, animate: true, choices, reference: pointReference, after: refresh })]
+  if (lensSample(clip, key) === 'coordinate') rows.push(vectorSet(clip, `${key}_`, `${label}坐标`))
+  return rows
+}
+
+function basisMessage(text, error = false) {
+  return elt('p', { class: 'basis-message', 'data-error': String(error) }, text)
+}
+
+function facingRows(clip, hasEntityOrigin) {
+  const v = clip.values
+  const source = lensSample(clip, 'facing_source')
+  const target = lensSample(clip, 'facing_target')
+  const entity = lensSample(clip, 'facing_entity')
+  const rawOrigin = lensSample(clip, 'position_origin')
+  const rows = [field(v, 'facing_source', '基准轴朝向', 'auto', {
+    clip, animate: true, after: refresh,
+    choices: [pick('自动', 'auto'), pick('固定世界方向', 'world'), pick('实体身体朝向', 'entity'), pick('原点指向目标', 'line')],
+  })]
+  const targetRows = () => pointRows(clip, 'facing_target', '方向目标', '未指定')
+  const entityRow = () => field(v, 'facing_entity', '方向实体', '', {
+    clip, animate: true, after: refresh, placeholder: hasEntityOrigin ? '留空沿用原点实体' : '例如 @p',
+  })
+  const worldDirection = '前为 +Z，上为 +Y，右为 −X。'
+  if (source === 'world') return [...rows, basisMessage(worldDirection)]
+  if (source === 'line') {
+    rows.push(...targetRows())
+    if (!target) rows.push(basisMessage('请选择一个方向目标。', true))
+  } else if (source === 'entity') {
+    rows.push(entityRow())
+    if (!entity && !hasEntityOrigin) rows.push(basisMessage('当前原点无法提供实体朝向，请指定方向实体。', true))
+  } else {
+    if (target && entity) rows.push(basisMessage('方向目标和方向实体只能指定一个。', true))
+    else if (!target && !entity && rawOrigin === 'player') {
+      rows.push(basisMessage('玩家激活位置没有实体朝向。请指定方向实体，或选择固定世界方向。', true))
+    } else {
+      const direction = target ? '前向沿原点到目标的水平连线。'
+        : entity || hasEntityOrigin ? '前向跟随实体身体的水平朝向。' : worldDirection
+      rows.push(basisMessage(direction))
+    }
+    rows.push(extra('自动方向设置', [...targetRows(), entityRow()]))
+  }
+  return rows
+}
+
+function positionGroup(clip) {
+  const v = clip.values
+  const relative = lensSample(clip, 'position_mode') === 'relative'
+  const base = relative && lensSample(clip, 'position_space') === 'base'
+  const origin = lensSample(clip, 'position_origin')
+  const changedBasis = () => {
+    refresh()
+    status('已按新的坐标基准解释原有分量。')
+  }
+  const basis = [field(v, 'position_mode', '位置模式', lensDefaults.position_mode, {
+    clip, animate: true, segmented: true, choices: [pick('相对位置', 'relative'), pick('绝对位置', 'absolute')], after: changedBasis,
+  })]
+  if (relative) {
+    basis.push(field(v, 'position_space', '坐标轴', lensDefaults.position_space, {
+      clip, animate: true, segmented: true, choices: options('world', 'base'), after: changedBasis,
+    }))
+  }
+  if (base) {
+    const hasEntityOrigin = !origin || isEntityRef(origin)
+    const frameInputs = pointRows(clip, 'position_origin', '基准原点', '默认 · 跟随玩家脚底')
+    frameInputs.push(...facingRows(clip, hasEntityOrigin))
+    if (hasEntityOrigin) frameInputs.push(extra('原点选项', [
+      field(v, 'position_origin_freeze', '固定首次相机位置', false, { clip, animate: true }),
+    ]))
+    basis.push(elt('fieldset', { class: 'base-frame' }, elt('legend', {}, '建立基准轴'), ...frameInputs))
+  }
+  const [label, labels] = !relative ? ['世界坐标', xyz]
+    : base ? ['沿基准轴的偏移', ['前后', '上下', '左右']] : ['沿世界轴的偏移', ['dX', 'dY', 'dZ']]
+  return group('位置', [
+    elt('div', { class: 'position-basis' }, ...basis),
+    elt('p', { class: 'vector-label' }, label),
+    vectorSet(clip, 'position.', label, labels),
+    ...(relative && !base ? [basisMessage(!origin || origin === 'player'
+      ? '偏移从玩家激活脚本时的位置算起。'
+      : '沿世界轴偏移时，游戏沿用已指定的起点。')] : []),
+  ], true)
+}
+
+function orientationGroup(clip, numeric) {
+  const v = clip.values
+  const target = lensSample(clip, 'look_at')
+  const tangent = v.orient === 'tangent'
+  const rows = [field(v, 'look_at', '注视目标', lensDefaults.look_at, {
+    clip, animate: true, after: refresh,
+    choices: [pick('关闭', 'none'), pick('玩家激活位置', 'player'), pick('指定坐标', 'coordinate'), pick('实体', 'entity'), pick('附近方块中心', 'block')],
+  })]
+  if (target === 'coordinate') rows.push(vectorSet(clip, 'look_at_target_', '目标坐标'))
+  if (target === 'entity') rows.push(field(v, 'look_at_selector', '注视实体', '@p', { clip, animate: true }))
+  if (target === 'block') rows.push(field(v, 'look_at_target_block', '方块 ID 和可选半径', '', {
+    clip, animate: true, placeholder: 'minecraft:stone',
+  }))
+  const angleRows = [field(v, 'orient', '朝向模式', 'manual', { choices: options('manual', 'tangent'), after: refresh }),
+    numeric(tangent ? 'yaw_offset' : 'yaw', tangent ? '偏航偏移' : '偏航', 0, [-180, 180, 0.1], '°'),
+    numeric(tangent ? 'pitch_offset' : 'pitch', tangent ? '俯仰偏移' : '俯仰', 0, [-90, 90, 0.1], '°'),
+  ]
+  if (target === 'none') rows.push(...angleRows)
+  else rows.push(extra('目标不可用时的朝向', angleRows))
+  rows.push(numeric('roll', '横滚', 0, [-180, 180, 0.1], '°'))
+  return group('朝向', rows)
+}
+
+const breathDefaults = {
+  cam_breath_enabled: false, cam_breath_type: 'perlin', cam_breath_intensity: 0.05,
+  cam_breath_speed: 1, cam_breath_seed: 0, cam_breath_trauma: 1, cam_breath_decay: 0.5,
+}
+
+function breathCard(clip) {
+  const v = clip.values
+  const keys = Object.keys(breathDefaults)
+  const present = keys.some(key => Object.hasOwn(v, key))
+  const enabled = read(v, 'cam_breath_enabled', breathDefaults.cam_breath_enabled)
+  const scope = `${groupScope}/镜头呼吸`
+  const open = present && (expandedGroups.get(scope) ?? false)
+  const title = '镜头呼吸'
+  const card = elt('section', { class: 'group effect-card', 'aria-label': title, 'data-enabled': String(enabled) })
+  const header = elt('header', { class: 'effect-card__header' })
+  card.append(header)
+  if (!present) {
+    header.append(elt('span', { class: 'effect-card__title' }, title), button('添加', () => {
+      v.cam_breath_enabled = false
+      expandedGroups.set(scope, true)
+      refresh('breath-title')
+    }, { id: 'breath-add', 'aria-label': '添加镜头呼吸' }))
+    return card
+  }
+  const disclosure = button('', () => {
+    expandedGroups.set(scope, !open)
+    refresh()
+  }, { id: 'breath-title', class: 'effect-card__title', 'aria-expanded': String(open), 'aria-controls': 'breath-parameters' })
+  disclosure.append(elt('span', { 'aria-hidden': 'true' }, open ? '▾ ' : '▸ '), title)
+  header.append(disclosure, button(enabled ? '已启用' : '已停用', () => {
+    v.cam_breath_enabled = !enabled
+    refresh()
+  }, { id: 'breath-toggle', class: 'button effect-card__toggle', 'aria-label': '启用镜头呼吸', 'aria-pressed': String(enabled) }))
+
+  const content = elt('div', { id: 'breath-parameters', class: 'group-content effect-card__content', hidden: !open })
+  if (open) {
+    const types = [pick('平滑噪声', 'perlin'), pick('分轴噪声', 'perlin_axis'), pick('正弦', 'sine'), pick('冲击衰减', 'trauma')]
+    const param = (key, label, options = {}) => field(v, key, label, breathDefaults[key], options)
+    content.append(
+      param('cam_breath_type', '运动形态', { choices: types, after: refresh }),
+      param('cam_breath_intensity', '强度', { range: [0, 3, 0.01] }),
+      param('cam_breath_speed', '速度', { range: [0, 4, 0.01] }),
+      param('cam_breath_seed', '种子', { integer: true }),
+    )
+    if (read(v, 'cam_breath_type', breathDefaults.cam_breath_type) === 'trauma') content.append(
+      param('cam_breath_trauma', '初始冲击', { range: [0, 1, 0.01] }),
+      param('cam_breath_decay', '衰减速度'),
+    )
+    content.append(elt('div', { class: 'group-note' }, button('移除镜头呼吸', () => {
+      keys.forEach(key => delete v[key])
+      expandedGroups.delete(scope)
+      refresh('breath-add')
+    })))
+  }
+  card.append(content)
+  return card
+}
+
+function field(owner, key, label, initial, options = {}) {
+  const { clip, choices, reference, segmented, range, unit, multiline, integer, placeholder, after, animate = false } = options
+  const id = options.id ?? `field-${key}`
+  const number = typeof initial === 'number'
+  const bool = typeof initial === 'boolean'
+  const segments = segmented ? choices.map(([choiceValue, text], index) => button(text, () => {
+    if (choiceValue !== value()) write(choiceValue)
+  }, { id: `${id}-${index}`, class: 'segment', 'data-value': choiceValue })) : null
+  const control = segments ? elt('div', { class: 'segmented', role: 'group', 'aria-label': label }, ...segments)
+    : choices ? elt('select', { class: 'field', id }, ...choices.map(([value, text]) => elt('option', { value }, text)))
+    : multiline ? elt('textarea', { class: 'field', id, rows: 2 })
+    : elt('input', { id, class: number ? '' : bool ? 'toggle' : 'field', type: number ? 'number' : bool ? 'checkbox' : 'text', step: number ? integer ? '1' : 'any' : undefined, placeholder })
+  const refInput = reference ? elt('input', { id: `${id}-reference`, type: 'text', class: 'field' }) : null
+  const slider = range ? elt('input', { type: 'range', 'aria-label': `${label}滑杆`, min: range[0], max: range[1], step: range[2] }) : null
+  const controlWrap = number ? elt('div', { class: 'number' }, control, ...(unit ? [elt('span', { 'aria-hidden': 'true' }, unit)] : []))
+    : refInput ? elt('div', { class: 'reference-control' }, control, refInput) : control
+  const valueCell = segments ? control : elt('div', { class: `value-control${slider ? ' with-slider' : ''}` }, ...(slider ? [slider] : []), controlWrap)
+  const caption = segments ? elt('span', {}, label) : elt('label', { for: id, title: key }, label)
+  const row = elt('div', { class: `property-row${segments ? ' property-row--segmented' : ''}`, 'data-field': key }, caption, valueCell)
+  if (number && unit) control.setAttribute('aria-label', `${label}（${unit}）`)
+  if (bool) control.setAttribute('role', 'switch')
+
+  const frames = animate ? clip.frames.get(key) ?? new Map() : null
+  if (frames) clip.frames.set(key, frames)
+  const frameTimes = () => frames ? [...frames.keys()].sort((a, b) => a - b) : []
+  const previous = () => frameTimes().findLast(frame => frame < localTime(clip))
+  const next = () => frameTimes().find(frame => frame > localTime(clip))
+  const hasFrame = () => frames?.has(localTime(clip)) ?? false
+  const interp = !number ? 'step' : key === 'zoom' ? 'geometric' : 'linear'
+  const value = () => animate ? sample(clip, key, initial, interp) : read(owner, key, initial)
+  const hint = animate ? elt('small', { class: 'field-hint', hidden: true }) : null
+
+  let reset = null, back = null, diamond = null, forward = null
+  if (number || animate) {
+    row.classList.add('with-actions')
+    const actions = elt('div', { class: 'frame-controls' })
+    if (number) {
+      reset = button('↺', () => write(initial), { class: 'icon reset', title: '恢复样例默认值', 'aria-label': `恢复${label}默认值` })
+      actions.append(reset)
+    }
+    if (animate) {
+      back = button('‹', () => setTime(clip.start + previous()), { id: `${id}-back`, class: 'icon', 'aria-label': `${label}上一帧`, title: '上一关键帧' })
+      diamond = button('◇', () => {
+        const at = localTime(clip)
+        const current = value()
+        if (frames.delete(at)) {
+          if (!frames.size) owner[key] = current
+        } else {
+          frames.set(at, current)
+        }
+        update()
+        status(`${label} · ${frames.size} 个关键帧`)
+        if (after && !Object.is(value(), current)) after()
+      }, { id: `${id}-frame`, class: 'icon diamond' })
+      forward = button('›', () => setTime(clip.start + next()), { id: `${id}-next`, class: 'icon', 'aria-label': `${label}下一帧`, title: '下一关键帧' })
+      actions.append(back, diamond, forward)
+    }
+    row.append(actions)
+    if (hint) row.append(hint)
+  }
+
+  function update() {
+    const current = value()
+    const betweenFrames = Boolean(frames?.size) && !hasFrame()
+    if (segments) {
+      segments.forEach((item, index) => {
+        item.setAttribute('aria-pressed', String(current === choices[index][0]))
+        item.disabled = betweenFrames
+      })
+    } else if (bool) control.checked = current
+    else control.value = reference ? reference.preset(current) : current
+    if (refInput) {
+      const payload = reference.payloads[control.value]
+      refInput.hidden = !payload
+      refInput.disabled = betweenFrames
+      if (payload) {
+        refInput.value = current.slice(payload.prefix?.length ?? 0)
+        refInput.placeholder = payload.placeholder
+        refInput.setAttribute('aria-label', `${label} · ${payload.label}`)
+      }
+    }
+    if (slider) slider.value = current
+    if (!segments) control.disabled = betweenFrames
+    control.title = betweenFrames ? '采样值。在当前时间添加关键帧后可编辑。' : ''
+    if (slider) slider.disabled = betweenFrames
+    if (reset) reset.disabled = betweenFrames || Object.is(current, initial)
+    if (animate) {
+      const onFrame = hasFrame()
+      const labelText = `${onFrame ? '删除' : '添加'}${label}关键帧`
+      diamond.textContent = onFrame ? '◆' : '◇'
+      diamond.setAttribute('aria-pressed', String(onFrame))
+      diamond.setAttribute('aria-label', labelText)
+      diamond.title = inClip(clip) ? labelText : '播放头不在此片段内'
+      diamond.disabled = !inClip(clip)
+      back.disabled = previous() === undefined
+      forward.disabled = next() === undefined
+      hint.hidden = !betweenFrames || !inClip(clip)
+      hint.textContent = '采样值 · 添加当前帧后可编辑'
+    }
+  }
+  function write(nextValue) {
+    if (frames?.size) {
+      if (!hasFrame()) return
+      frames.set(localTime(clip), nextValue)
+    } else {
+      owner[key] = nextValue
+    }
+    update()
+    status(`${label}已更新${frames?.size ? ` · 片段内 ${seconds(localTime(clip))}` : ''}`)
+    after?.()
+  }
+  if (!segments) control.addEventListener('change', () => {
+    const nextValue = number ? control.valueAsNumber : bool ? control.checked : control.value
+    if (number && (!Number.isFinite(nextValue) || (integer && !Number.isInteger(nextValue)))) {
+      update()
+      status(`${label}需要${integer ? '整数' : '数字'}`)
+      return
+    }
+    write(nextValue)
+  })
+  refInput?.addEventListener('change', () => {
+    const { label: payloadLabel, prefix = '' } = reference.payloads[control.value]
+    const input = refInput.value.trim()
+    if (!input || reference.preset(prefix + input) !== control.value) {
+      update()
+      status(`${label}需要有效的${payloadLabel}`)
+      return
+    }
+    write(prefix + input)
+  })
+  slider?.addEventListener('input', () => write(slider.valueAsNumber))
+  if (animate) frameUpdates.push(update)
+  update()
+  return row
+}
+
+const pick = (label, value) => [value, label]
+const enable = (owner, key, label, initial = false, after) => field(owner, key, label, initial, { after })
+const choice = (owner, key, label, items, initial = items[0][0], after) => field(owner, key, label, initial, { choices: items, after })
+const translated = {
+  relative: '相对位置', absolute: '世界坐标', world: '世界轴', base: '基准轴',
+  none: '关闭', player: '玩家', coordinate: '指定坐标', entity: '实体', block: '方块',
+  manual: '手动', tangent: '沿路径切线', blend: '继续混合', snap: '立即切换',
+  cut: '直接切换', morph: '平滑过渡', normal: '正常', multiply: '正片叠底',
+  screen: '滤色', soft_light: '柔光', overlay: '叠加', repeat: '重复', pingpong: '往返',
+}
+const options = (...values) => values.map(key => [key, translated[key] ?? key])
+function refresh(focused = document.activeElement?.id) {
+  renderInspector(true)
+  if (focused) $(focused)?.focus({ preventScroll: true })
+}
+
+function scriptGroups() {
+  const name = () => {
+    $('project-title').textContent = $('selection-name').textContent = read(meta, 'name', '林间镜头练习')
+  }
+  const loop = read(meta, 'macro_loop', false)
+  return [
+    group('基本信息', [
+      field(meta, 'name', '脚本名称', '林间镜头练习', { after: name }),
+      fact('脚本 ID', 'forest_walk'),
+      field(meta, 'author', '作者', 'ImmersiveCinematics'),
+      field(meta, 'description', '说明', '七类轨道的属性编辑示例', { multiline: true }),
+    ], true),
+    group('播放行为', [
+      choice(meta, 'play_mode', '播放模式', [pick('并行', 'parallel'), pick('独占', 'exclusive'), pick('可打断', 'interruptible')]),
+      field(meta, 'priority', '优先级', 0, { integer: true }),
+      enable(meta, 'skippable', '允许跳过', true), enable(meta, 'interruptible', '可被打断', true),
+      enable(meta, 'hold_at_end', '保持结尾'), enable(meta, 'macro_loop', '整段循环', false, refresh),
+      ...(loop ? [field(meta, 'macro_loop_count', '循环次数', -1, { integer: true }), choice(meta, 'macro_loop_mode', '循环方式', options('repeat', 'pingpong'))] : []),
+    ]),
+    group('输入与监听', [
+      choice(meta, 'listener', '音频监听点', [pick('玩家', 'player'), pick('相机', 'camera')]),
+      enable(meta, 'block_keyboard', '屏蔽键盘', true), enable(meta, 'block_mouse', '屏蔽鼠标', true),
+      enable(meta, 'block_mob_ai', '冻结生物 AI'), enable(meta, 'pause_when_game_paused', '随游戏暂停', true),
+    ]),
+    group('画布与游戏界面', [
+      field(meta, 'dimension', '播放维度', ''), fact('基准分辨率', '1920 × 1080（缺省）'),
+      note('脚本格式支持按层控制游戏界面。屏幕层是结构化配置。'),
+    ]),
+  ]
+}
+function trackGroups(track) {
+  const state = track.values
+  const rename = () => { $('selection-name').textContent = read(state, 'name', track.label); renderTimeline() }
+  return [group('轨道信息', [field(state, 'name', '轨道名称', track.label, { after: rename }), fact('类型', track.label), fact('片段', `${track.clips.length} 个`)], true),
+    group('编辑会话', [
+      enable(state, 'visible', '可见', true, renderTimeline), enable(state, 'locked', '锁定', false, renderTimeline),
+      enable(state, 'muted', '静音', false, renderTimeline), note('可见、锁定和静音是编辑器的会话状态。'),
+    ], true)]
+}
+function colorGroups(numeric) {
+  const six = (prefix, label) => numeric(prefix, label, 0, [-1, 1, 0.01])
+  return [group('明暗', [numeric('exposure', '曝光', 0, [-5, 5, 0.01]), six('contrast', '对比度'), six('highlights', '高光'), six('shadows', '阴影'), six('whites', '白场'), six('blacks', '黑场')], true),
+    group('色彩与白平衡', [six('saturation', '饱和度'), six('vibrance', '鲜艳度'), six('hue', '色相'), six('lightness', '明度'), six('temperature', '色温'), six('tint', '色调')]),
+    group('通道与颜色曲线', [six('red', '红通道'), six('green', '绿通道'), six('blue', '蓝通道'), numeric('curve_strength', '曲线强度', 1, [0, 1, 0.01]), note('曲线形状在曲线编辑器调整。')]),
+    group('风格', [numeric('grayscale', '灰度', 0, [0, 1, 0.01]), numeric('invert', '反相', 0, [0, 1, 0.01])]),
+  ]
+}
+
+function clipPages(clip) {
+  const v = clip.values
+  const numeric = (key, label, initial, range, unit, animate = true) => field(v, key, label, initial, { clip, range, unit, animate })
+  const flag = (key, label) => enable(v, key, label, false, refresh)
+  const choose = (key, label, choices, animate = false) => field(v, key, label, choices[0][0], { clip, choices, animate, after: refresh })
+  switch (clip.type) {
+    case 'CAMERA': {
+      return [
+      ['镜头', () => [
+        positionGroup(clip),
+        orientationGroup(clip, numeric),
+        group('镜头参数', [numeric('fov', '视野角', 70, [20, 120, 0.1], '°'), numeric('zoom', '变焦倍率', 1, [0.2, 4, 0.01], '×')]),
+      ]],
+      ['运动', () => [
+        breathCard(clip),
+        group('运动模型', [fact('位置模型', '按原始位置轨迹'), note('位置、角度、视野和变焦各有模型入口。')]),
+        group('修饰和实体选择策略', [flag('suppress_modifiers', '忽略修饰器'), choose('selector_pick', '目标选择', [pick('首个', 'first'), pick('最近', 'nearest'), pick('存活', 'alive')], true)]),
+      ]],
+      ['构图', () => [
+        group('画面', [numeric('opacity', '不透明度', 1, [0, 1, 0.01]), field(v, 'dimension', '镜头维度', '')], true),
+        group('目标区域', ['x', 'y', 'w', 'h'].map((a, i) => numeric(`dest.${a}`, ['横向', '纵向', '宽度', '高度'][i], i < 2 ? 0 : 1))),
+        group('源画面裁切', ['x', 'y', 'w', 'h'].map((a, i) => numeric(`source.${a}`, ['横向', '纵向', '宽度', '高度'][i], i < 2 ? 0 : 1))),
+        group('遮罩', [choose('mask_shape', '形状', [pick('整幅', 'full'), pick('矩形', 'rect'), pick('圆形', 'circle')]), ...(v.mask_shape === 'rect' ? [numeric('mask_width', '宽度', 1), numeric('mask_height', '高度', 1)] : v.mask_shape === 'circle' ? [numeric('mask_radius', '半径', 0.5)] : [])]),
+      ]],
+      ['调色', () => colorGroups(numeric)],
+      ['转场', () => [group('相邻镜头切换', [
+        choose('transition', '过渡方式', options('cut', 'morph')),
+        ...(v.transition === 'morph' ? [numeric('transition_duration', '混合时长', 0.5, [0, 3, 0.01], 's', false), choose('transition_interrupt', '中断时', options('blend', 'snap'))] : []),
+        note('成对镜头的交界与参数曲线在转场详情查看。'),
+      ], true)]],
+    ]
+    }
+    case 'LETTERBOX': return [['', () => [group('画幅', [numeric('aspect_ratio', '画幅比例', 2.35, [1, 4, 0.01], ':1'), numeric('opacity', '不透明度', 1, [0, 1, 0.01])], true)]]]
+    case 'AUDIO': return [
+      ['声音', () => [
+        group('音源', [
+          choose('source', '来源', [pick('本地文件', 'file'), pick('游戏声音', 'minecraft')]),
+          field(v, 'sound', v.source === 'minecraft' ? '声音 ID' : '素材路径', v.source === 'minecraft' ? 'minecraft:ambient.cave' : 'audio/forest.ogg'),
+          ...(v.source === 'minecraft' ? [] : [flag('file_loop', '文件循环')]),
+        ], true),
+        group('音量与音高', [numeric('volume', '音量', 1, [0, 1, 0.01]), numeric('pitch', '音高倍率', 1, [0.5, 2, 0.01], '×', false)], true),
+        group('淡入淡出', [numeric('fade_in', '淡入', 0, [0, 4, 0.01], 's', false), numeric('fade_out', '淡出', 0, [0, 4, 0.01], 's', false)]),
+      ]],
+      ['空间', () => [group('空间定位', [
+        field(v, 'category', '声音类别', 'ambient', { choices: [pick('环境声', 'ambient'), pick('音乐', 'music')], after: refresh }),
+        ...(v.category !== 'music' ? [
+          choose('position_mode', '定位方式', options('relative', 'absolute')),
+          choose('attenuation', '衰减方式', [pick('线性', 'linear'), pick('关闭', 'none')]),
+          ...axes.map((key, index) => numeric(key, `位置 ${xyz[index]}`, 0)),
+        ] : [note('音乐固定跟随玩家，不参与空间定位与衰减。')]),
+      ], true)]],
+    ]
+    case 'OVERLAY': {
+      const layer = read(v, 'layer_type', 'fade')
+      const isFade = layer === 'fade'
+      const isImage = layer === 'image'
+      return [
+        ['图层', () => [
+          group('图层内容', [choose('layer_type', '图层类型', [pick('色块', 'fade'), pick('图片', 'image'), pick('字幕', 'subtitle')]),
+            ...(isFade ? [field(v, 'color', '填充颜色', '#172539'), choose('blend_mode', '混合方式', options('normal', 'multiply', 'screen', 'soft_light', 'overlay'))]
+              : isImage ? [field(v, 'path', '图片路径', 'images/title.png')]
+              : [field(v, 'text', '字幕文本', '林间序章', { multiline: true }), numeric('font_scale', '字号倍率', 1, [0.5, 3, 0.01], '×')]),
+          ], true),
+          group('叠加顺序与透明度', [numeric('opacity', '不透明度', 1, [0, 1, 0.01]), field(v, 'z_index', '层级', 10, { integer: true })], true),
+        ]],
+        [isFade ? '遮罩' : '布局', () => isFade ? [group('遮罩形状', [
+          choose('mask_shape', '形状', [pick('整幅', 'full'), pick('矩形', 'rect'), pick('圆形', 'circle')]),
+          ...(v.mask_shape && v.mask_shape !== 'full' ? [numeric('mask_x', '中心 X', 0.5), numeric('mask_y', '中心 Y', 0.5)] : []),
+          ...(v.mask_shape === 'rect' ? [numeric('mask_width', '宽度', 1), numeric('mask_height', '高度', 1)] : v.mask_shape === 'circle' ? [numeric('mask_radius', '半径', 0.5)] : []),
+        ], true)] : [group('位置与尺寸', [numeric('x', '位置 X', 0.5), numeric('y', '位置 Y', 0.5), numeric('scale_x', '缩放 X', 1), numeric('scale_y', '缩放 Y', 1)], true),
+          group('锚点', [numeric('anchor_x', '锚点 X', 0.5), numeric('anchor_y', '锚点 Y', 0.5)]),
+          ...(isImage ? [group('素材裁切', ['x', 'y', 'w', 'h'].map((a, i) => numeric(`source.${a}`, ['横向', '纵向', '宽度', '高度'][i], i < 2 ? 0 : 1)))] : []),
+        ]],
+      ]
+    }
+    case 'ADJUST': return [
+      ['调色', () => colorGroups(numeric)],
+      ['LUT 与混合', () => [group('查色表', [field(v, 'lut', 'LUT 资源', ''), numeric('lut_input_gamma', '输入伽马', 1, [0.1, 4, 0.01], '', false), numeric('lut_strength', 'LUT 强度', 1, [0, 1, 0.01])], true),
+        group('混合', [choose('blend_mode', '混合模式', options('normal', 'multiply', 'screen', 'soft_light', 'overlay')), numeric('blend_amount', '混合强度', 1, [0, 1, 0.01])], true)]],
+    ]
+    case 'EVENT': case 'MOD_EVENT': return [['', () => [recordGroup(clip)]]]
+  }
+}
+
+function recordGroup(clip) {
+  const mod = clip.type === 'MOD_EVENT'
+  const record = clip.record ??= { time: 2 }
+  const focusRecord = () => setTime(clip.start + read(record, 'time', 2))
+  return group('事件记录', [
+    fact('记录类型', mod ? '模组事件' : '命令事件'),
+    ...(mod ? [field(clip.values, 'event_type', '默认事件名', 'demo:chapter_start')] : []),
+    elt('details', { class: 'record', open: true }, elt('summary', {}, mod ? '场景开始' : '章节标记'),
+      field(record, 'time', '片段内时间', 2, { unit: 's' }),
+      ...(mod ? [field(record, 'event_type', '事件名', '', { id: 'field-record-event-type' }), field(record, 'data', '记录数据', '{"chapter":1}', { multiline: true })]
+        : [field(record, 'command', '命令', 'say 章节开始', { multiline: true }), field(record, 'id', '记录 ID', 'chapter_start')]),
+      elt('div', { class: 'group-note' }, button('定位到记录', focusRecord)),
+    ),
+    note('在正式编辑器中通过行为记录编辑器维护事件。'),
+  ], true)
+}
+
+function labels(kind, name) {
+  $('selection-kind').textContent = kind
+  $('selection-name').textContent = name
+}
+function renderInspector(keepScroll = false) {
+  const scroll = keepScroll ? properties.scrollTop : 0
+  frameUpdates = []
+  const tabBar = $('tabs')
+  tabBar.replaceChildren()
+  tabBar.hidden = true
+  properties.removeAttribute('role')
+  properties.removeAttribute('aria-labelledby')
+  const clip = singleClip()
+  showClipTime(clip)
+  let groups
+  if (clip) {
+    const track = tracks.find(item => item.type === clip.type)
+    const pages = clipPages(clip)
+    if (!pages.some(([title]) => title === activeTab)) activeTab = pages[0][0]
+    labels(`${track.label}片段`, clip.label)
+    groupScope = `${clip.label}/${activeTab}`
+    if (pages.length > 1) {
+      tabBar.hidden = false
+      const activateTab = title => {
+        activeTab = title
+        renderInspector()
+        tabBar.querySelector('[aria-selected="true"]').focus()
+      }
+      tabBar.append(...pages.map(([title], index) => {
+        const tab = button(title, () => activateTab(title), { class: 'tab', role: 'tab', id: `tab-${index}`, 'aria-selected': String(title === activeTab), 'aria-controls': 'properties', tabindex: title === activeTab ? 0 : -1 })
+        tab.addEventListener('keydown', event => {
+          const offset = { ArrowLeft: -1, ArrowRight: 1 }[event.key]
+          if (offset === undefined) return
+          event.preventDefault()
+          activateTab(pages[(index + offset + pages.length) % pages.length][0])
+        })
+        return tab
+      }))
+      properties.setAttribute('role', 'tabpanel')
+      properties.setAttribute('aria-labelledby', tabBar.querySelector('[aria-selected="true"]').id)
+    }
+    groups = pages.find(([title]) => title === activeTab)[1]()
+  } else if (selected.size) {
+    labels('多选', `${selected.size} 个片段`)
+    groupScope = 'multiple'
+    groups = [group('选中片段', [...selected].map(item => fact(item.label, seconds(item.start))), true), note('选择单个片段可编辑属性。')]
+  } else if (trackSelection) {
+    labels('轨道参数', read(trackSelection.values, 'name', trackSelection.label))
+    groupScope = trackSelection.type
+    groups = trackGroups(trackSelection)
+  } else {
+    labels('脚本参数', read(meta, 'name', '林间镜头练习'))
+    groupScope = 'meta'
+    groups = scriptGroups()
+  }
+  properties.replaceChildren(...groups)
+  properties.scrollTop = scroll
+}
+function render() {
+  renderTimeline()
+  renderInspector()
+  status(selected.size ? 'Ctrl 或 ⌘ 点击其他片段可多选。' : '点轨道头或片段查看对应参数。')
+}
+render()
+</script>
+</body>
+</html>
