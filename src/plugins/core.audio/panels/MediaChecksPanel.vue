@@ -181,7 +181,9 @@ const SEVERITY_LABEL: Record<MediaCheckSeverity, string> = {
 
 function locate(item: MediaCheckItem): void {
   if (item.objectPath === 'meta.listener') {
-    ctx.requestFocus('meta.properties')
+    // 脚本参数已并入右栏检查器：先回到空选区（脚本页），再聚焦同一面板。
+    ctx.requestSelect({ domain: 'none' })
+    ctx.requestFocus('selection.properties')
     return
   }
   if (item.clipKey === undefined) {

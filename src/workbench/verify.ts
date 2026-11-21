@@ -1112,7 +1112,6 @@ async function main(): Promise<void> {
       './core.clip-effects/manifest',
       './core.selection-properties/manifest',
       './core.behavior/manifest',
-      './core.meta/manifest',
       './core.paths/manifest',
       './core.transition-panel/manifest',
       './core.camera-inspect/manifest',

@@ -926,7 +926,8 @@ async function main(): Promise<void> {
     const opened = await io.open('a.json')
     check('03-07 打开成功', opened.ok, opened)
     check('03-07 打开后 dirty=false', !store.dirty)
-    check('03-07 打开后选中第一个 CAMERA 片段', store.session.selection.domain === 'clip' && store.registry.handle(store.session.selection.clipKey ?? '')?.trackType === 'CAMERA')
+    // 检查器改版：打开脚本先显示脚本参数，不再自动选中第一个 CAMERA 片段。
+    check('03-07 打开后选择为空（脚本参数）', store.session.selection.domain === 'none', store.session.selection)
     check('03-07 打开后推送一次 + seek(0)', transport.pushes.length === 1 && transport.seeks[0] === 0)
     const saved = await io.save()
     check('03-07 无修改保存成功', saved.ok, saved)

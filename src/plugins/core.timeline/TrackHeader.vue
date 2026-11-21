@@ -117,6 +117,12 @@ function onKeydown(event: KeyboardEvent): void {
   if (target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'BUTTON')) {
     return
   }
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    emit('activate')
+    return
+  }
   if (event.key === ' ' || event.key === 'Spacebar') {
     event.preventDefault()
     event.stopPropagation()

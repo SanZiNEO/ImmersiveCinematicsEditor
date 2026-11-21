@@ -11,7 +11,6 @@ import timelinePlugin from './core.timeline/manifest.ts'
 import coreClipEffects from './core.clip-effects/manifest.ts'
 import coreSelectionProperties from './core.selection-properties/manifest.ts'
 import coreBehavior from './core.behavior/manifest.ts'
-import coreMeta from './core.meta/manifest.ts'
 import coreTransitionPanel from './core.transition-panel/manifest.ts'
 import coreCameraInspect from './core.camera-inspect/manifest.ts'
 import corePaths from './core.paths/manifest.ts'
@@ -32,7 +31,6 @@ export const BUILTIN_PLUGINS: PluginManifest[] = [
   coreClipEffects,
   coreSelectionProperties,
   coreBehavior,
-  coreMeta,
   coreTransitionPanel,
   coreCameraInspect,
   corePaths,

@@ -1,21 +1,53 @@
 <script setup lang="ts">
 /**
- * `selection.properties`（06-09）：编辑器页右栏的**属性面板**。
+ * `selection.properties`（检查器改版）：同一个右栏面板按选择域分流。
  *
- * 只保留片段属性：触发器已迁到独立插件 `core.behavior`（`behavior.triggers`）。
- * 面板标题是"属性"；内容全部委托 `ClipPropertiesPanel`（四态、全部适用叶子、时钟、
- * 诊断条、事件记录入口都在那里）。这里不引入任何关键帧轴、节点几何或局部标尺。
+ * | 选区 | 内容 |
+ * |---|---|
+ * | 空 / 打开脚本 / 关档 | 脚本参数（`ScriptPropertiesPanel`） |
+ * | `domain: 'track'` | 轨道参数（`TrackPropertiesPanel`） |
+ * | 片段 / 对象 / 关键帧 / 多选 / 失效 / 外部域 | `ClipPropertiesPanel`（四态由它负责） |
+ *
+ * 不做内部页签；脚本 / 轨道 / 片段各自有明确标题。选择驱动的标签切换仍由
+ * `SelectionPanelSync` 负责，这里只对同一个面板内的内容分流。
  */
+import { computed } from 'vue'
+import { SELECTION_SERVICE } from '../../../workbench/api/tokens.ts'
+import { usePanelContext } from '../../../workbench/host/panelContext.ts'
+import { usePanelRevision } from '../usePanelRevision.ts'
 import ClipPropertiesPanel from './ClipPropertiesPanel.vue'
+import ScriptPropertiesPanel from './ScriptPropertiesPanel.vue'
+import TrackPropertiesPanel from './TrackPropertiesPanel.vue'
+
+type InspectorRoute = 'script' | 'track' | 'clip'
+
+const ctx = usePanelContext()
+const revision = usePanelRevision(ctx)
+const selectionService = ctx.services.get(SELECTION_SERVICE)
+
+/**
+ * 按**选择域**分流，不依赖片段面板的内部 `kind`：
+ * 空选区默认脚本参数；只有失效 / 多选 / 外部域等片段相关状态才交给 `ClipPropertiesPanel`。
+ */
+const route = computed<InspectorRoute>(() => {
+  void revision.value
+  const selection = ctx.selection
+  if (selection.domain === 'track') {
+    return 'track'
+  }
+  if (selection.domain === 'none') {
+    const state = selectionService?.state()
+    return state !== undefined && state.kind !== 'none' ? 'clip' : 'script'
+  }
+  return 'clip'
+})
 </script>
 
 <template>
-  <section class="selection-panel" aria-label="属性">
-    <header class="selection-panel__header">
-      <h1 class="selection-panel__title">属性</h1>
-      <span class="selection-panel__hint">片段全部适用属性 · 静态值与时钟</span>
-    </header>
-    <ClipPropertiesPanel />
+  <section class="selection-panel" aria-label="检查器">
+    <ScriptPropertiesPanel v-if="route === 'script'" />
+    <TrackPropertiesPanel v-else-if="route === 'track'" />
+    <ClipPropertiesPanel v-else />
   </section>
 </template>
 
@@ -28,31 +60,5 @@ import ClipPropertiesPanel from './ClipPropertiesPanel.vue'
   min-height: 0;
   background: var(--bg-panel);
   color: var(--text);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.selection-panel__header {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: baseline;
-  gap: 8px;
-  padding: 6px 10px 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.selection-panel__title {
-  margin: 0;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.selection-panel__hint {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 </style>

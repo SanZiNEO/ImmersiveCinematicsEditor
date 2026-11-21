@@ -1,8 +1,10 @@
 /**
- * `core.selection-properties` 插件清单（06-09）。
+ * `core.selection-properties` 插件清单（06-09，检查器改版）。
  *
- * 编辑器页右栏的**属性面板**：当前片段全部适用属性（含未设置）、静态值、时钟、
- * 事件记录入口与诊断条。触发器已迁到独立插件 `core.behavior`（`behavior.triggers`）。
+ * 编辑器页右栏唯一的**检查器**面板：同一 `selection.properties` 按选区显示
+ * 脚本参数（空选区）/ 轨道参数（`domain: 'track'`）/ 片段属性（片段、对象、关键帧、
+ * 多选、失效、外部域）。没有内部页签；`core.meta` 的脚本字段 UI 已并入本插件。
+ * 触发器仍由独立插件 `core.behavior`（`behavior.triggers`）编辑。
  */
 import type { PluginManifest } from '../../workbench/api/contributions.ts'
 import activate from './index.ts'

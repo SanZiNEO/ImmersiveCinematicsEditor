@@ -265,10 +265,36 @@ export class ClipRegistry {
   }
 }
 
+/** 轨道选择是否仍指向文档里存在的轨道（`type#index` 口径）。 */
+export function trackExists(doc: ScriptDoc, trackId: string): boolean {
+  const separator = trackId.lastIndexOf('#')
+  if (separator <= 0) {
+    return false
+  }
+  const type = trackId.slice(0, separator)
+  const indexText = trackId.slice(separator + 1)
+  if (!/^\d+$/.test(indexText)) {
+    return false
+  }
+  const index = Number(indexText)
+  const tracks = doc.timeline.tracks
+  if (!Array.isArray(tracks)) {
+    return false
+  }
+  const track = tracks[index]
+  return isJsonObject(track) && track.type === type
+}
+
 /** 选择修复（撤销 / 重做 / 结构变更后）：只修选择，不改引用。 */
 export function repairSelection(doc: ScriptDoc, registry: ClipRegistry, selection: Selection): Selection {
   if (selection.domain === 'none') {
     return selection
+  }
+  if (selection.domain === 'track') {
+    if (selection.trackId === undefined) {
+      return { domain: 'none' }
+    }
+    return trackExists(doc, selection.trackId) ? selection : { domain: 'none' }
   }
   if (selection.domain === 'path' || selection.domain === 'rule' || selection.domain === 'binding') {
     const id = selection.domain === 'path' ? selection.pathId
@@ -318,12 +344,6 @@ export function repairSelection(doc: ScriptDoc, registry: ClipRegistry, selectio
     return { domain: 'object', clipKey: selection.clipKey, objectPath }
   }
   return selection
-}
-
-/** 打开文档后选中第一个 CAMERA 片段（03-07）；没有则 `none`。 */
-export function selectFirstCameraClip(registry: ClipRegistry): Selection {
-  const camera = registry.handles().find((handle) => handle.inline && handle.trackType === 'CAMERA')
-  return camera === undefined ? { domain: 'none' } : { domain: 'clip', clipKey: camera.key }
 }
 
 /** 收集全部片段引用（paths / rule_bindings / exit / schedule / 规则条件与动作）。 */

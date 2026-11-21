@@ -833,7 +833,9 @@ function onContentPointerDown(event: PointerEvent): void {
       beginMarquee(event, event.ctrlKey || event.metaKey)
       return
     }
-    beginScrub(event, time)
+    // 检查器改版：点轨道空白回到脚本参数（清空选区）；标尺 / 框选 / 拖拽手势不变。
+    event.preventDefault()
+    controller.clearSelection()
   }
 }
 
@@ -1136,6 +1138,11 @@ function onKeydown(event: KeyboardEvent): void {
       controller.setTool('select')
       return
     }
+    if (ctx.selection.domain === 'track') {
+      event.preventDefault()
+      controller.clearSelection()
+      return
+    }
     if (controller.tool.value === 'blade') {
       event.preventDefault()
       controller.setTool('select')
@@ -1263,6 +1270,12 @@ function onRootPointerDown(event: PointerEvent): void {
 
 function onClipSelect(clipKey: string): void {
   controller.selectClip(clipKey, 'replace')
+}
+
+/** 轨道头激活：活动轨道（编辑焦点）与检查器轨道选择一起明确落位；清空片段批选。 */
+function onTrackActivate(trackId: string): void {
+  controller.setActiveTrack(trackId)
+  ctx.commands.select({ domain: 'track', trackId })
 }
 
 function onToolbarAddClip(): void {
@@ -1568,7 +1581,7 @@ function trackColorOf(type: string): string {
               :known="controller.trackKnown(track.type)"
               :dragging="draggingTrackId === track.trackId"
               :rename-track="(name) => controller.renameTrack(track.trackId, name)"
-              @activate="controller.setActiveTrack(track.trackId)"
+              @activate="onTrackActivate(track.trackId)"
               @toggle-visible="controller.toggleTrackVisible(track.trackId)"
               @toggle-locked="controller.toggleTrackLocked(track.trackId)"
               @toggle-muted="controller.toggleTrackMuted(track.trackId)"

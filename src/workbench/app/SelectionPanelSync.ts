@@ -1,15 +1,17 @@
 /**
  * 选择域驱动右栏标签切换（06-12 补充，对齐剪辑软件的"点什么给什么面板"）。
  *
- * 规则（用户裁决）：
+ * 规则（用户裁决，2026-11 检查器改版）：
  * | 选择域 | 显示面板 |
  * |---|---|
- * | `none`（点时间轴空白 / 清空） | `meta.properties`（脚本属性） |
+ * | `none`（打开 / 点时间轴空白 / 清空） | `selection.properties`（脚本参数） |
+ * | `track`（点轨道头） | `selection.properties`（轨道参数） |
  * | `clip` / `object` / `keyframe` | `selection.properties`（片段属性） |
- * | `path` / `rule` / `binding` | 停在当前面板（不属于片段属性，也不属于脚本 meta） |
+ * | `path` / `rule` / `binding` | 停在当前面板（不属于片段属性，也不属于脚本参数） |
  *
  * 只切**活动标签**，不改面板集合、不改尺寸、不写文档。用户手动点标签后，
- * 直到选择域再次变化才会被切回去——不做"强制锁定"，避免抢用户的操作。
+ * 直到选择域再次变化（或再点空白 / 轨道头）才会被切回去——不做"强制锁定"，
+ * 避免抢用户的操作。脚本 / 轨道 / 片段的分流由 `selection.properties` 内部按同一选区决定。
  */
 import type { Selection } from '../../core/doc/types.ts'
 import type { WorkspaceLayoutService } from '../api/layout.ts'
@@ -19,21 +21,20 @@ import type { SelectionServicePort } from '../api/selection.ts'
 /** 右栏所在 group（默认布局的 `document.right` 槽位即 group id）。 */
 const RIGHT_GROUP_ID = 'document.right'
 
-/** 参与自动切换的面板。 */
-const META_PANEL: PanelRef = { pluginId: 'core.meta', panelId: 'meta.properties' }
+/** 唯一的右栏检查器面板。 */
 const PROPERTIES_PANEL: PanelRef = { pluginId: 'core.selection-properties', panelId: 'selection.properties' }
 
 /** 选择域 → 目标面板；返回 `null` 表示"这次不切"。 */
 export function targetPanelFor(selection: Selection): PanelRef | null {
   switch (selection.domain) {
     case 'none':
-      return META_PANEL
+    case 'track':
     case 'clip':
     case 'object':
     case 'keyframe':
       return PROPERTIES_PANEL
     default:
-      // path / rule / binding：不属于片段属性，也不属于脚本 meta，保持用户当前标签。
+      // path / rule / binding：不属于片段属性，也不属于脚本参数，保持用户当前标签。
       return null
   }
 }
@@ -56,7 +57,7 @@ export interface SelectionPanelSyncDeps {
  * 启动选择驱动切换；返回释放函数。
  *
  * 切换条件：选择域**变化**，或目标面板当前不是右栏的活动标签。
- * 后者保证"用户手动切走后再点空白仍能切回来"，同时不打扰同域内的正常操作。
+ * 后者保证"用户手动切走后再点空白 / 轨道头仍能切回来"，同时不打扰同域内的正常操作。
  */
 export function startSelectionPanelSync(deps: SelectionPanelSyncDeps): () => void {
   let lastDomain: string | null = null

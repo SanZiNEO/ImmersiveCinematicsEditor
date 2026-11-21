@@ -943,22 +943,26 @@ function main(): void {
       !eventStore.store.commit({ kind: 'object.removeKeyframe', clipKey: eventKey, path: 'event', time: 1 }).ok)
   }
 
-  // ── 13. 选择域驱动面板切换（06-12 补充） ─────────────────────────
+  // ── 13. 选择域驱动面板切换（06-12 补充；检查器改版） ─────────────
   {
-    check('06-12 切换：none → 脚本属性面板',
-      targetPanelFor({ domain: 'none' })?.panelId === 'meta.properties', targetPanelFor({ domain: 'none' }))
-    check('06-12 切换：clip → 片段属性面板',
+    check('06-12 切换：none → 右栏检查器（脚本参数）',
+      targetPanelFor({ domain: 'none' })?.panelId === 'selection.properties', targetPanelFor({ domain: 'none' }))
+    check('06-12 切换：track → 右栏检查器（轨道参数）',
+      targetPanelFor({ domain: 'track', trackId: 'CAMERA#0' })?.panelId === 'selection.properties',
+      targetPanelFor({ domain: 'track', trackId: 'CAMERA#0' }))
+    check('06-12 切换：clip → 右栏检查器（片段属性）',
       targetPanelFor({ domain: 'clip', clipKey: 'c1' })?.panelId === 'selection.properties')
-    check('06-12 切换：object → 片段属性面板',
+    check('06-12 切换：object → 右栏检查器（片段属性）',
       targetPanelFor({ domain: 'object', clipKey: 'c1', objectPath: 'yaw' })?.panelId === 'selection.properties')
-    check('06-12 切换：keyframe → 片段属性面板',
+    check('06-12 切换：keyframe → 右栏检查器（片段属性）',
       targetPanelFor({ domain: 'keyframe', clipKey: 'c1', objectPath: 'yaw', keyframeTime: 1 })?.panelId === 'selection.properties')
     check('06-12 切换：path / rule / binding 不切',
       targetPanelFor({ domain: 'path', pathId: 'p1' }) === null
       && targetPanelFor({ domain: 'rule', ruleId: 'r1' }) === null
       && targetPanelFor({ domain: 'binding', bindingId: 'b1' }) === null)
-    check('06-12 切换：目标面板属于右栏槽位的两个已知面板',
-      targetPanelFor({ domain: 'none' })?.pluginId === 'core.meta'
+    check('06-12 切换：目标面板统一属于 core.selection-properties',
+      targetPanelFor({ domain: 'none' })?.pluginId === 'core.selection-properties'
+      && targetPanelFor({ domain: 'track', trackId: 'CAMERA#0' })?.pluginId === 'core.selection-properties'
       && targetPanelFor({ domain: 'clip', clipKey: 'c1' })?.pluginId === 'core.selection-properties')
   }
 

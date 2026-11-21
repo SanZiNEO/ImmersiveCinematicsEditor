@@ -84,13 +84,14 @@ export interface ScriptDoc {
 }
 
 /** 选择域（同一时刻最多一个主域，03-03）。 */
-export type SelectionDomain = 'none' | 'clip' | 'object' | 'keyframe' | 'path' | 'rule' | 'binding'
+export type SelectionDomain = 'none' | 'clip' | 'object' | 'keyframe' | 'track' | 'path' | 'rule' | 'binding'
 
 /**
  * 选择：绝不用数组下标。
  *
  * 不变式：`object` / `keyframe` 域必须带 `clipKey`；`keyframe` 域再加 `keyframeTime`；
- * `path` / `rule` / `binding` 域各自独立。
+ * `track` 域带 `trackId`（`type#index`，与会话轨道视图同一口径）；`path` / `rule` /
+ * `binding` 域各自独立。轨道选择是检查对象，不是「活动轨道」的派生 fallback。
  */
 export interface Selection {
   domain: SelectionDomain
@@ -98,6 +99,8 @@ export interface Selection {
   objectPath?: string
   /** 关键帧定位值（片段局部秒），不是下标。 */
   keyframeTime?: number
+  /** 轨道选择：`type#index`（与会话轨道视图 / 时间轴同一口径）。 */
+  trackId?: string
   pathId?: string
   ruleId?: string
   bindingId?: string

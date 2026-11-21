@@ -21,7 +21,7 @@ import {
   liveClipKeys,
   locationKey,
   repairSelection,
-  selectFirstCameraClip,
+  trackExists,
 } from './identity.ts'
 import { isJsonObject } from './json.ts'
 import { parseDoc } from './parse.ts'
@@ -158,7 +158,8 @@ export class DocStore {
     this.registry.sync(doc)
     this.session.currentPath = path
     this.session.playhead = 0
-    this.session.selection = selectFirstCameraClip(this.registry)
+    // 设计：打开脚本先显示脚本参数；不自动选中第一个 CAMERA 片段，空选区由右栏脚本页承载。
+    this.session.selection = { domain: 'none' }
     this.session.clipKeys = []
     this.session.selectionInvalid = null
     this.session.markers = []
@@ -179,7 +180,7 @@ export class DocStore {
   /**
    * 关闭文档（04 `file.closeDoc`）：清空当前文档与会话状态，保留订阅与目录。
    *
-   * 关闭不是销毁：再次 `open` 走完整打开流水线，历史清空、选择重新落到第一个 CAMERA 片段。
+   * 关闭不是销毁：再次 `open` 走完整打开流水线，历史清空、选择回到空（脚本参数）。
    */
   close(): void {
     this.current = null
@@ -481,8 +482,16 @@ export class DocStore {
       this.session.selectionInvalid = null
       return
     }
-    const live = new Set(liveClipKeys(this.current, this.registry))
     const repaired = repairSelection(this.current, this.registry, selection)
+    if (selection.domain === 'track') {
+      // 轨道选择是检查对象：不产生片段批选，也不进入片段失效态；
+      // 轨道不存在时由 repair 落回安全空态（脚本参数）。
+      this.session.selection = repaired.domain === 'track' ? repaired : { domain: 'none' }
+      this.session.clipKeys = []
+      this.session.selectionInvalid = null
+      return
+    }
+    const live = new Set(liveClipKeys(this.current, this.registry))
     const previousKey = selection.clipKey
     const repairedKey = repaired.clipKey
     const deadTarget = previousKey !== undefined && !live.has(previousKey)
@@ -542,6 +551,13 @@ export class DocStore {
       return
     }
     const live = new Set(liveClipKeys(doc, this.registry))
+    const currentSelection = this.session.selection
+    if (currentSelection.domain === 'track'
+      && (currentSelection.trackId === undefined || !trackExists(doc, currentSelection.trackId))) {
+      this.session.selection = { domain: 'none' }
+      this.session.selectionInvalid = null
+      this.session.clipKeys = []
+    }
     const previousKey = previous.clipKey
     if (this.session.selection.clipKey !== undefined && !live.has(this.session.selection.clipKey)) {
       this.session.selection = { domain: 'none' }
