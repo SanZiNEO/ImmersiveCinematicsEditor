@@ -13,10 +13,21 @@ import type { JsonObject, ObjectKeyframe } from '../../core/doc/types.ts'
 import type { PropertyRow, RowMode, RowValueKind } from './types.ts'
 
 /** 行派生的输入。 */
+export interface ClipPlayControl {
+  startTime?: number
+  duration?: number
+  loop?: boolean
+  loopCount?: number
+  loopMode?: string
+}
+
+export interface ClipRowSource extends ClipPlayControl {
+  objects: JsonObject
+}
+
 export interface RowSource {
   clipKey: string
-  /** 片段原始 JSON（`objects` 的宿主）。 */
-  clip: JsonObject
+  clip: ClipRowSource
   /** 轨道类型（目录查询用）。 */
   trackType: string
   catalog: CatalogIndex
@@ -35,6 +46,23 @@ export function readClipTiming(clip: JsonObject): ClipTiming {
   const loopCount = isFiniteNumber(clip.loop_count) ? clip.loop_count : -1
   const infinite = duration < 0 || (loop && loopCount < 0)
   return { duration, infinite }
+}
+
+/** 从原始片段 JSON 读行派生形状；未设置的片段级字段保持 `undefined`。 */
+export function clipRowSourceOf(clip: JsonObject): ClipRowSource {
+  const startTime = isFiniteNumber(clip.start_time) ? clip.start_time : undefined
+  const duration = isFiniteNumber(clip.duration) ? clip.duration : 0
+  const loop = typeof clip.loop === 'boolean' ? clip.loop : undefined
+  const loopCount = isFiniteNumber(clip.loop_count) ? clip.loop_count : undefined
+  const loopMode = typeof clip.loop_mode === 'string' ? clip.loop_mode : undefined
+  return {
+    objects: isJsonObject(clip.objects) ? clip.objects : {},
+    ...(startTime === undefined ? {} : { startTime }),
+    duration,
+    ...(loop === undefined ? {} : { loop }),
+    ...(loopCount === undefined ? {} : { loopCount }),
+    ...(loopMode === undefined ? {} : { loopMode }),
+  }
 }
 
 /** 读一个属性对象的 `value` / `keyframes`（不解释语义，只搬值）。 */
@@ -62,6 +90,47 @@ function readProperty(raw: unknown): {
     ...(hasValue ? { value: raw.value } : {}),
     keyframes,
     hasKeyframes: Array.isArray(framesRaw),
+  }
+}
+
+/** 读片段级 `playControl` 字段；返回与 `readProperty` 同形（无关键帧）。 */
+function readClipPlayControl(clip: ClipRowSource, path: string): {
+  hasValue: boolean
+  value?: unknown
+  keyframes: ObjectKeyframe[]
+  hasKeyframes: boolean
+} {
+  let present = false
+  let value: unknown
+  switch (path) {
+    case 'start_time':
+      present = clip.startTime !== undefined
+      value = clip.startTime
+      break
+    case 'duration':
+      present = clip.duration !== undefined
+      value = clip.duration
+      break
+    case 'loop':
+      present = clip.loop !== undefined
+      value = clip.loop
+      break
+    case 'loop_count':
+      present = clip.loopCount !== undefined
+      value = clip.loopCount
+      break
+    case 'loop_mode':
+      present = clip.loopMode !== undefined
+      value = clip.loopMode
+      break
+    default:
+      return { hasValue: false, keyframes: [], hasKeyframes: false }
+  }
+  return {
+    hasValue: present,
+    ...(present ? { value } : {}),
+    keyframes: [],
+    hasKeyframes: false,
   }
 }
 
@@ -184,12 +253,12 @@ function valueKindOf(
  * 未登记路径只读，但**不隐藏**——它们必须能被看见并被关闭动画（06-02 §三）。
  */
 export function buildPropertyRows(source: RowSource): PropertyRow[] {
-  const objectsRaw = source.clip.objects
-  const objects: JsonObject = isJsonObject(objectsRaw) ? objectsRaw : {}
+  const objects: JsonObject = isJsonObject(source.clip.objects) ? source.clip.objects : {}
   const rows: PropertyRow[] = []
   const seen = new Set<string>()
 
   const track = source.catalog.track(source.trackType)
+  const playControlKeys = new Set((track?.playControl ?? []).map((entry) => entry.key))
   const declarations: FieldEntry[] = track === undefined
     ? []
     : [...track.playControl, ...track.objects]
@@ -200,8 +269,12 @@ export function buildPropertyRows(source: RowSource): PropertyRow[] {
       continue
     }
     seen.add(path)
-    const present = Object.prototype.hasOwnProperty.call(objects, path)
-    const property = present ? readProperty(objects[path]) : { hasValue: false, keyframes: [], hasKeyframes: false }
+    const clipScoped = playControlKeys.has(path)
+    const objectPresent = !clipScoped && Object.prototype.hasOwnProperty.call(objects, path)
+    const property = clipScoped
+      ? readClipPlayControl(source.clip, path)
+      : objectPresent ? readProperty(objects[path]) : { hasValue: false, keyframes: [], hasKeyframes: false }
+    const present = clipScoped ? property.hasValue : objectPresent
     const mode = modeOf(def)
     rows.push({
       clipKey: source.clipKey,
@@ -216,6 +289,7 @@ export function buildPropertyRows(source: RowSource): PropertyRow[] {
       hasValue: property.hasValue,
       keyframes: property.keyframes,
       unknown: false,
+      ...(clipScoped ? { clipScoped: true } : {}),
       ...(def.section === undefined ? {} : { section: def.section }),
       ...(def.group === undefined ? {} : { group: def.group }),
       required: def.required,
@@ -266,6 +340,9 @@ export function buildPropertyRows(source: RowSource): PropertyRow[] {
 
 /** 行是否必填缺失（必填、无显式值、无范围内帧、目录无默认值）。 */
 export function isRequiredMissing(row: PropertyRow, timing: ClipTiming): boolean {
+  if (row.clipScoped === true) {
+    return false
+  }
   if (!row.required || row.hasDefault) {
     return false
   }

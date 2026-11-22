@@ -45,6 +45,8 @@ export interface PropertyRow {
   hasValue: boolean
   /** 关键帧（按文档顺序；空数组表示显式空帧）。 */
   keyframes: ObjectKeyframe[]
+  /** 片段级 playControl 行：值来自片段本身，不在 `clip.objects` 里。 */
+  clipScoped?: boolean
   /** 是否为未登记路径（只读）。 */
   unknown: boolean
   /** 目录 section（组键首选）。 */

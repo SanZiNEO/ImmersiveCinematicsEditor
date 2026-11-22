@@ -23,7 +23,7 @@ import { HoverIntent } from './shared/hoverIntent.ts'
 import type { HoverTimerHandle } from './shared/hoverIntent.ts'
 import { createGestureSession } from './shared/gesture.ts'
 import { targetPanelFor } from './app/SelectionPanelSync.ts'
-import { buildPropertyRows, readClipTiming, isRequiredMissing, outOfRangeCount, effectiveStaticValue, groupLabelOf, UNGROUPED_KEY } from '../features/effects/rows.ts'
+import { buildPropertyRows, clipRowSourceOf, readClipTiming, isRequiredMissing, outOfRangeCount, effectiveStaticValue, groupLabelOf, UNGROUPED_KEY } from '../features/effects/rows.ts'
 import { buildGroups, partitionGroups, summarizeRows, hasKeyframeContent } from '../features/effects/membership.ts'
 import {
   DEFAULT_VIEWPORT,
@@ -339,7 +339,7 @@ function main(): void {
     const handle = store.registry.handles()[0]
     const rows = buildPropertyRows({
       clipKey,
-      clip: handle.clip,
+      clip: clipRowSourceOf(handle.clip),
       trackType: 'CAMERA',
       catalog,
     })
@@ -400,9 +400,11 @@ function main(): void {
     check('06-02 有效值：首帧优先于 value', outRow !== undefined && effectiveStaticValue(outRow) === 1, effectiveStaticValue(outRow!))
     check('06-02 必填：无默认无值无帧时缺失', byPath.get('audio') === undefined)
     const requiredMissing = rows.filter((row) => isRequiredMissing(row, timing))
-    // `playControl` 的 `start_time` / `duration` 必填且无默认值，属于片段时间几何（主轴负责），
-    // 因此这里断言它们确实被标为必填缺失（属性面板据此显示「必填未设置」），而不是断言零缺失。
-    check('06-02 必填：playControl 必填字段被标缺失', requiredMissing.map((row) => row.path).sort().join(',') === 'duration,start_time', requiredMissing.map((row) => row.path))
+    // `playControl` 的 `start_time` / `duration` 属于片段时间几何，值来自片段本身而不是 `objects`。
+    // 这里断言它们**不会**被误报为必填缺失（曾经的误报让属性面板永远显示「必填未设置」）。
+    check('06-02 必填：片段级 playControl 不误报缺失', requiredMissing.length === 0, requiredMissing.map((row) => row.path))
+    check('06-02 行：片段级 start_time 有值', byPath.get('start_time')?.present === true, byPath.get('start_time')?.present)
+    check('06-02 行：片段级 duration 有值', byPath.get('duration')?.present === true, byPath.get('duration')?.present)
   }
 
   // ── 5. 轴外与无限片段 ───────────────────────────────────────────
@@ -412,7 +414,7 @@ function main(): void {
     })
     const { store, clipKey } = openStore(catalog, raw)
     const handle = store.registry.handles()[0]
-    const rows = buildPropertyRows({ clipKey, clip: handle.clip, trackType: 'CAMERA', catalog })
+    const rows = buildPropertyRows({ clipKey, clip: clipRowSourceOf(handle.clip), trackType: 'CAMERA', catalog })
     const yaw = rows.find((row) => row.path === 'yaw')
     const timing = readClipTiming(handle.clip)
     check('06-02 轴外：超出时长的帧计入轴外数', yaw !== undefined && outOfRangeCount(yaw, timing) === 1, outOfRangeCount(yaw!, timing))
