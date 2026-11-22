@@ -64,6 +64,9 @@ const durationX = computed(() =>
   props.timing.infinite ? null : timeToX(Math.max(0, props.timing.duration), props.viewport))
 
 const zeroX = computed(() => timeToX(0, props.viewport))
+const zeroVisible = computed(() => zeroX.value >= 0 && zeroX.value <= props.viewport.width)
+const durationVisible = computed(() =>
+  durationX.value !== null && durationX.value >= 0 && durationX.value <= props.viewport.width + 1e-6)
 
 /** 超出时长的区域（左边界 = 时长；右侧延伸到可见末端）。 */
 const outOfRangeStart = computed(() => (durationX.value === null ? null : Math.max(0, durationX.value)))
@@ -73,6 +76,13 @@ function formatTick(time: number, step: number): string {
     return `${Math.round(time)}s`
   }
   return `${time.toFixed(step < 0.5 ? 2 : 1)}s`
+}
+
+function isBoundaryTick(time: number): boolean {
+  if (Math.abs(time) <= 1e-6) {
+    return true
+  }
+  return !props.timing.infinite && Math.abs(time - props.timing.duration) <= 1e-6
 }
 
 function onWheel(event: WheelEvent): void {
@@ -102,24 +112,33 @@ function onWheel(event: WheelEvent): void {
       :key="tick.time"
       class="fx-ruler__tick"
       :class="{ 'fx-ruler__tick--major': tick.major }"
-      :style="{ left: `${tick.x}px` }"
+      :style="{ left: tick.x + 'px' }"
     >
-      <span v-if="tick.major" class="fx-ruler__label">{{ formatTick(tick.time, tickStep) }}</span>
+      <span v-if="tick.major && !isBoundaryTick(tick.time)" class="fx-ruler__label">{{ formatTick(tick.time, tickStep) }}</span>
     </div>
 
     <!-- 有限片段的左右边界 -->
     <div
-      v-if="zeroX >= 0 && zeroX <= props.viewport.width"
+      v-if="zeroVisible"
       class="fx-ruler__edge"
-      :style="{ left: `${zeroX}px` }"
+      :style="{ left: zeroX + 'px' }"
       aria-hidden="true"
     />
     <div
-      v-if="durationX !== null && durationX >= 0 && durationX <= props.viewport.width"
+      v-if="durationVisible && durationX !== null"
       class="fx-ruler__edge fx-ruler__edge--end"
-      :style="{ left: `${durationX}px` }"
+      :style="{ left: durationX + 'px' }"
       aria-hidden="true"
     />
+
+    <span v-if="zeroVisible" class="fx-ruler__bound-label" :style="{ left: (zeroX + 3) + 'px' }">0s</span>
+    <span
+      v-if="durationVisible && durationX !== null && timing.duration > 0"
+      class="fx-ruler__bound-label fx-ruler__bound-label--end"
+      :style="{ left: (durationX - 3) + 'px' }"
+    >
+      {{ timing.duration }}s
+    </span>
 
     <div
       v-if="playheadX >= 0 && playheadX <= props.viewport.width"
@@ -134,9 +153,9 @@ function onWheel(event: WheelEvent): void {
 .fx-ruler {
   position: relative;
   flex: 0 0 auto;
+  min-width: 0;
   height: 22px;
   overflow: hidden;
-  border-bottom: 1px solid var(--border);
   background: var(--bg-raised);
   cursor: ew-resize;
 }
@@ -189,6 +208,23 @@ function onWheel(event: WheelEvent): void {
   color: var(--text-muted);
   font-size: 9px;
   white-space: nowrap;
+}
+
+.fx-ruler__bound-label {
+  position: absolute;
+  top: 4px;
+  z-index: 2;
+  padding: 0 2px;
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 10px;
+  pointer-events: none;
+}
+
+.fx-ruler__bound-label--end {
+  transform: translateX(-100%);
 }
 
 .fx-ruler__edge {

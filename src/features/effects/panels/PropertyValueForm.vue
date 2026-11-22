@@ -1129,11 +1129,11 @@ function onRefPayloadChange(event: Event): void {
     </p>
 
     <!-- 效果面板播放头没有节点：草稿 + 显式加帧 -->
-    <div v-if="pendingNewNode && canEdit" class="value-form__add">
-      <button type="button" class="value-form__button value-form__button--primary" @click="addKeyframe">
+    <div v-if="pendingNewNode && canEdit && (!compact || dirty)" class="value-form__add">
+      <button type="button" class="value-form__button value-form__button--primary" @pointerdown.prevent @click="addKeyframe">
         添加帧
       </button>
-      <span class="value-form__muted">播放头 t={{ playhead }} 没有节点</span>
+      <span v-if="!compact" class="value-form__muted">播放头 t={{ playhead }} 没有节点</span>
     </div>
 
     <p v-if="applied !== '' && error === '' && !inspectorMode" class="value-form__hint" role="status">{{ applied }}</p>
@@ -1372,6 +1372,17 @@ function onRefPayloadChange(event: Event): void {
   background: var(--bg-raised);
   box-shadow: 0 2px 6px rgb(0 0 0 / 30%);
   white-space: nowrap;
+}
+
+/* 效果行：数值输入让位给帧导航与动画开关，避免窄左栏挤进关键帧画布。 */
+.value-form--compact .value-form__input--number {
+  flex: 0 1 64px;
+  min-width: 36px;
+  text-align: right;
+}
+
+.value-form--compact[data-panel='effects'] .value-form__suffix {
+  display: none;
 }
 
 .value-form__line {

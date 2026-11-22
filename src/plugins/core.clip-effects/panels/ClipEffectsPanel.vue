@@ -8,27 +8,24 @@
  * - 所有写入走 `ctx.commands.commit`，失败由命令层回滚，这里只显示结果；
  * - 折叠 / 搜索 / 只看轴外 / 视口 / 选中节点属于会话，不进文档、不进序列化。
  *
- * 四段结构：片段头 / 工具栏 / 局部标尺 / 组列表。纵向只滚组列表，片段头与标尺固定。
+ * 结构：局部标尺 / 组列表。标尺固定，组列表纵向滚动；左侧控制列与右侧画布共用同一分割线。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { ClipSelectionState } from '../../../workbench/api/context.ts'
 import type { ClipViewEntry } from '../../../workbench/api/documents.ts'
 import { CATALOG_SERVICE, DOCUMENT_SERVICE, SELECTION_SERVICE } from '../../../workbench/api/tokens.ts'
 import { usePanelContext } from '../../../workbench/host/panelContext.ts'
 import { isJsonObject } from '../../../core/doc/json.ts'
 import type { JsonObject } from '../../../core/doc/types.ts'
-import { buildPropertyRows, readClipTiming } from '../../../features/effects/rows.ts'
 import type { ClipTiming } from '../../../features/effects/rows.ts'
-import { buildGroups, partitionGroups, summarizeRows } from '../../../features/effects/membership.ts'
+import { buildGroups, partitionGroups } from '../../../features/effects/membership.ts'
 import {
   DEFAULT_VIEWPORT,
-  fitViewport,
   panBy,
-  visibleTimeWindow,
   zoomAt,
 } from '../../../features/effects/viewport.ts'
 import { PLAYHEAD_EPSILON, layoutRows } from '../../../features/effects/geometry.ts'
-import { findClipContext, propertyRowsFor } from '../../../features/effects/clipContext.ts'
+import { propertyRowsFor } from '../../../features/effects/clipContext.ts'
 import {
   addKeyframeCommand,
   disableAnimationCommand,
@@ -55,12 +52,10 @@ import type {
 } from '../../../features/effects/types.ts'
 import type { DocCommand } from '../../../core/doc/commands.ts'
 import EffectControlGroup from './EffectControlGroup.vue'
-import EffectControlsHeader from './EffectControlsHeader.vue'
-import EffectControlsToolbar from './EffectControlsToolbar.vue'
 import EffectControlsRuler from './EffectControlsRuler.vue'
 import DiagnosticsBar from '../../../features/effects/panels/DiagnosticsBar.vue'
 import EasingEditor from './EasingEditor.vue'
-import type { NodeMovePayload, NodeSelectPayload, OpenEventEditorPayload } from '../../../features/effects/panels/effectRowEvents.ts'
+import type { AddKeyframePayload, NodeMovePayload, NodeSelectPayload, OpenEventEditorPayload } from '../../../features/effects/panels/effectRowEvents.ts'
 import { requestFocus } from '../../../features/behavior/focus.ts'
 import type { ClipEventContext } from '../../../features/behavior/events.ts'
 import { summariesForClip, recordRefAt } from './eventRecordSummary.ts'
@@ -74,11 +69,12 @@ const catalog = ctx.services.get(CATALOG_SERVICE)
 
 /** 会话状态（以片段键为键；不进文档）。 */
 const sessions = reactive(new Map<string, EffectPanelSession>())
-const columnRatio = ref(0.42)
 const message = ref('')
 const messageKind = ref<'info' | 'error'>('info')
 /** 07-05 §四：位置节点编辑打断路径时的待确认计划（非空时暂停提交）。 */
 const pendingGuard = ref<{ affected: AffectedPath[]; command: unknown } | null>(null)
+const groupList = ref<HTMLElement | null>(null)
+const timelineWidth = ref(0)
 
 const state = computed<ClipSelectionState>(() => {
   void revision.value
@@ -157,7 +153,7 @@ const timing = computed<ClipTiming>(() => {
 
 const playhead = computed<number>(() => {
   void revision.value
-  return documentService?.sessionView().playhead ?? 0
+  return (documentService?.sessionView().playhead ?? 0) - (clipEntry.value?.start ?? 0)
 })
 
 /**
@@ -229,8 +225,6 @@ const visibleGroups = computed<EffectGroup[]>(() => {
     .filter((group): group is EffectGroup => group !== null)
 })
 
-const stats = computed(() => summarizeRows(allRows.value))
-
 /** 行中心（供跨行框选与节点纵向对齐）。 */
 const rowCenters = computed(() =>
   layoutRows(
@@ -239,11 +233,34 @@ const rowCenters = computed(() =>
     session.value.expanded,
   ))
 
-const viewport = computed<EffectViewport>(() => session.value.viewport)
+const MIN_CONTROL_WIDTH = 156
+const MAX_CONTROL_WIDTH = 280
+const MIN_CANVAS_WIDTH = 120
 
-const contentWidth = computed(() => {
-  const window = visibleTimeWindow(viewport.value)
-  return Math.max(1, (window.to - window.from) * viewport.value.pxPerSecond)
+const availableWidth = computed(() => timelineWidth.value || 500)
+const maxControlWidth = computed(() => Math.min(MAX_CONTROL_WIDTH, Math.max(0, availableWidth.value - MIN_CANVAS_WIDTH)))
+const minControlWidth = computed(() => Math.min(MIN_CONTROL_WIDTH, maxControlWidth.value))
+const controlWidth = computed(() => Math.round(Math.max(
+  minControlWidth.value,
+  Math.min(maxControlWidth.value, availableWidth.value * session.value.columnRatio),
+)))
+const canvasWidth = computed(() => availableWidth.value - controlWidth.value)
+
+const timelineStyle = computed(() => ({
+  '--effects-control-width': controlWidth.value + 'px',
+  '--effects-canvas-width': canvasWidth.value + 'px',
+}))
+
+const viewport = computed<EffectViewport>(() => {
+  const saved = session.value.viewport
+  const width = canvasWidth.value
+  if (saved.width > 0) {
+    // 调整分栏时保留当前显示的时间范围。
+    const ratio = width / saved.width
+    return { ...saved, width, pxPerSecond: saved.pxPerSecond * ratio, scrollLeft: saved.scrollLeft * ratio }
+  }
+  const duration = timing.value.duration
+  return { ...saved, width, pxPerSecond: duration > 0 ? width / duration : saved.pxPerSecond }
 })
 
 const empty = computed(() => effectGroups.value.length === 0)
@@ -414,26 +431,6 @@ function cancelGuard(): void {
   report('已取消（路径与关键帧都没有改动）。', 'info')
 }
 
-function setSearch(value: string): void {
-  session.value.search = value
-}
-
-function toggleOnlyOutOfRange(): void {
-  session.value.onlyOutOfRange = !session.value.onlyOutOfRange
-}
-
-function collapseAll(): void {
-  const collapsed = session.value.collapsed
-  const allCollapsed = visibleGroups.value.every((group) => collapsed.has(group.key))
-  if (allCollapsed) {
-    collapsed.clear()
-    return
-  }
-  for (const group of visibleGroups.value) {
-    collapsed.add(group.key)
-  }
-}
-
 function toggleCollapse(groupKey: string): void {
   const collapsed = session.value.collapsed
   if (collapsed.has(groupKey)) {
@@ -441,43 +438,6 @@ function toggleCollapse(groupKey: string): void {
     return
   }
   collapsed.add(groupKey)
-}
-
-function refresh(): void {
-  // 修订号由文档服务推送；这里只是让作者有显式的重新读取入口。
-  revision.value += 1
-}
-
-function fitClip(): void {
-  const clipKey = selectedClipKey.value
-  if (clipKey === null) {
-    return
-  }
-  const next = fitViewport('clip', viewport.value, {
-    span: { clipKey, duration: timing.value.duration, infinite: timing.value.infinite },
-    rows: allRows.value,
-  })
-  if (next === null) {
-    report('当前片段无法适配（时长为零或负）。', 'error')
-    return
-  }
-  session.value.viewport = next
-}
-
-function fitAllNodes(): void {
-  const clipKey = selectedClipKey.value
-  if (clipKey === null) {
-    return
-  }
-  const next = fitViewport('all-nodes', viewport.value, {
-    span: { clipKey, duration: timing.value.duration, infinite: timing.value.infinite },
-    rows: allRows.value,
-  })
-  if (next === null) {
-    report('没有可适配的节点。', 'error')
-    return
-  }
-  session.value.viewport = next
 }
 
 function onWheel(event: WheelEvent): void {
@@ -492,6 +452,55 @@ function onWheel(event: WheelEvent): void {
     event.preventDefault()
     session.value.viewport = panBy(viewport.value, event.deltaY === 0 ? event.deltaX : event.deltaY)
   }
+}
+
+/** 左右分栏拖动：窄面板仍可双向调整，右侧画布同步适配。 */
+let columnDrag: { pointerId: number; startX: number; startWidth: number } | null = null
+
+function onColumnPointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || timelineWidth.value <= 0) {
+    return
+  }
+  event.preventDefault()
+  columnDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startWidth: controlWidth.value,
+  }
+  const target = event.currentTarget
+  if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId) === false) {
+    try {
+      target.setPointerCapture(event.pointerId)
+    } catch {
+      // Synthetic pointer events may not have an active pointer; window listeners still handle the drag.
+    }
+  }
+  window.addEventListener('pointermove', onColumnPointerMove)
+  window.addEventListener('pointerup', onColumnPointerUp)
+  window.addEventListener('pointercancel', onColumnPointerUp)
+}
+
+function onColumnPointerMove(event: PointerEvent): void {
+  const active = columnDrag
+  if (active === null || event.pointerId !== active.pointerId) {
+    return
+  }
+  setControlWidth(active.startWidth + event.clientX - active.startX)
+}
+
+function setControlWidth(width: number): void {
+  const next = Math.max(minControlWidth.value, Math.min(maxControlWidth.value, width))
+  session.value.columnRatio = next / availableWidth.value
+}
+
+function onColumnPointerUp(event: PointerEvent): void {
+  if (columnDrag === null || event.pointerId !== columnDrag.pointerId) {
+    return
+  }
+  columnDrag = null
+  window.removeEventListener('pointermove', onColumnPointerMove)
+  window.removeEventListener('pointerup', onColumnPointerUp)
+  window.removeEventListener('pointercancel', onColumnPointerUp)
 }
 
 function onSelectNode(payload: NodeSelectPayload): void {
@@ -604,7 +613,16 @@ function onToggleKeyframe(payload: { clipKey: string; path: string; time: number
     report(seed.message ?? '没有可用的初值，请先输入静态值。', 'error')
     return
   }
-  const command = addKeyframeCommand(payload.clipKey, row, payload.time, seed.value)
+  insertKeyframe(row, { clipKey: payload.clipKey, path: payload.path, time: payload.time, value: seed.value })
+}
+
+function onAddKeyframe(payload: AddKeyframePayload): void {
+  const row = allRows.value.find((item) => item.path === payload.path && item.clipKey === payload.clipKey)
+  if (row !== undefined) insertKeyframe(row, payload)
+}
+
+function insertKeyframe(row: PropertyRow, payload: AddKeyframePayload): void {
+  const command = addKeyframeCommand(payload.clipKey, row, payload.time, payload.value)
   if (command === null) {
     return
   }
@@ -678,37 +696,34 @@ const headerInfo = computed(() => {
     loopCount: entry.loopCount ?? null,
     references: entry.references,
     warn: entry.warn,
-    animatedCount: stats.value.animatedCount,
-    frameCount: stats.value.frameCount,
   }
 })
 
-/** 切换片段时清掉会话缓动选择与事件编辑器（各片段各自恢复其余状态）。 */
-let lastClipKey: string | null = null
-onMounted(() => {
-  lastClipKey = selectedClipKey.value
+watch(groupList, (list, _, onCleanup) => {
+  if (list === null) return
+  const observer = new ResizeObserver(([entry]) => {
+    if (entry !== undefined && entry.contentRect.width > 0) timelineWidth.value = entry.contentRect.width
+  })
+  observer.observe(list)
+  onCleanup(() => observer.disconnect())
 })
-const stopWatch = setInterval(() => {
-  const current = selectedClipKey.value
-  if (current === lastClipKey) {
-    return
-  }
-  lastClipKey = current
-  if (current === null) {
-    return
-  }
-  const entry = sessions.get(current)
-  if (entry !== undefined) {
-    entry.selectedSegment = null
-  }
-}, 120)
+
+watch(selectedClipKey, (key) => {
+  pendingGuard.value = null
+  message.value = ''
+  if (key === null) return
+  const entry = sessions.get(key)
+  if (entry !== undefined) entry.selectedSegment = null
+})
 
 onBeforeUnmount(() => {
-  clearInterval(stopWatch)
+  window.removeEventListener('pointermove', onColumnPointerMove)
+  window.removeEventListener('pointerup', onColumnPointerUp)
+  window.removeEventListener('pointercancel', onColumnPointerUp)
+  columnDrag = null
   sessions.clear()
 })
 
-const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
 </script>
 
 <template>
@@ -726,23 +741,6 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
     </p>
 
     <template v-else-if="state.kind === 'clip' && headerInfo !== null">
-      <EffectControlsHeader
-        :info="headerInfo"
-        @reveal-diagnostic="revealDiagnostic"
-      />
-
-      <EffectControlsToolbar
-        :search="session.search"
-        :only-out-of-range="session.onlyOutOfRange"
-        :can-fit-all-nodes="!empty"
-        @update:search="setSearch"
-        @toggle-only-out-of-range="toggleOnlyOutOfRange"
-        @fit-clip="fitClip"
-        @fit-all-nodes="fitAllNodes"
-        @collapse-all="collapseAll"
-        @refresh="refresh"
-      />
-
       <!-- 07-05 §四：节点编辑打断路径时的「阻止 + 处理选项」 -->
       <div v-if="pendingGuard !== null" class="effects-guard" role="alert">
         <p class="effects-guard-text">
@@ -765,15 +763,28 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
       </p>
 
       <template v-else>
-        <EffectControlsRuler
-          :viewport="viewport"
-          :timing="timing"
-          :playhead="playhead"
-          @wheel="onWheel"
-        />
+        <div class="effects-timeline" :style="timelineStyle">
+        <div class="effects-ruler-row">
+          <div class="effects-ruler-spacer" aria-hidden="true" />
+          <EffectControlsRuler
+            :viewport="viewport"
+            :timing="timing"
+            :playhead="playhead"
+            @wheel="onWheel"
+          />
+        </div>
 
         <div class="effects-body">
-          <div class="effects-groups" role="list">
+          <button
+            type="button"
+            class="effects-column-handle"
+            aria-label="调整属性列与关键帧画布宽度"
+            title="拖动调整左右宽度"
+            @pointerdown="onColumnPointerDown"
+            @keydown.left.prevent="setControlWidth(controlWidth - 12)"
+            @keydown.right.prevent="setControlWidth(controlWidth + 12)"
+          />
+          <div ref="groupList" class="effects-groups" role="list">
             <EffectControlGroup
               v-for="group in visibleGroups"
               :key="group.key"
@@ -789,6 +800,7 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
               @select-node="onSelectNode"
               @move-nodes="onMoveNodes"
               @remove-keyframes="onRemoveKeyframes"
+              @add-keyframe="onAddKeyframe"
               @disable-animation="onDisableAnimation"
               @select-segment="onSelectSegment"
               @open-event-editor="openInBehavior"
@@ -799,22 +811,19 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
             />
           </div>
 
-          <aside v-if="selectedSegment !== null" class="effects-detail">
-            <EasingEditor
-              :clip-key="selectedSegment.clipKey"
-              :path="selectedSegment.path"
-              :from-time="selectedSegment.fromTime"
-              :to-time="selectedSegment.toTime"
-              :px-per-second="viewport.pxPerSecond"
-              @close="closeSegment"
-            />
-          </aside>
+        </div>
+        <aside v-if="selectedSegment !== null" class="effects-detail effects-detail--inline">
+          <EasingEditor
+            :clip-key="selectedSegment.clipKey"
+            :path="selectedSegment.path"
+            :from-time="selectedSegment.fromTime"
+            :to-time="selectedSegment.toTime"
+            :px-per-second="viewport.pxPerSecond"
+            @close="closeSegment"
+          />
+        </aside>
         </div>
 
-        <p class="effects-footer">
-          {{ rulerWindow.from.toFixed(2) }}s – {{ rulerWindow.to.toFixed(2) }}s ·
-          每秒 {{ Math.round(viewport.pxPerSecond) }}px · 节点 {{ stats.frameCount }} 个
-        </p>
       </template>
 
       <DiagnosticsBar scope="effects" :clip-key="selectedClipKey ?? undefined" />
@@ -866,18 +875,111 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
   line-height: 1.5;
 }
 
-.effects-body {
+.effects-body,
+.effects-detail {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
 }
 
+.effects-body {
+  position: relative;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-position: left var(--effects-control-width, 240px) top;
+  background-repeat: no-repeat;
+  background-size: 1px 100%;
+}
+
+.effects-column-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--effects-control-width, 240px) - 6px);
+  z-index: 25;
+  width: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.effects-column-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 1px;
+  background: var(--border-strong);
+  content: '';
+  opacity: 0;
+  transition: opacity 80ms linear;
+}
+
+.effects-column-handle:hover::after,
+.effects-column-handle:focus-visible::after {
+  opacity: 1;
+}
+
+.effects-column-handle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.effects-timeline {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  --effects-control-width: 240px;
+}
+
+.effects-ruler-row {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: var(--effects-control-width, 240px) var(--effects-canvas-width, 1fr);
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.effects-ruler-spacer {
+  position: relative;
+  z-index: 2;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+}
+
+.effects-ruler-spacer::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--border);
+  content: '';
+}
+
 .effects-groups {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+
+.effects-groups::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  content: '';
+  pointer-events: none;
 }
 
 .effects-detail {
@@ -887,6 +989,16 @@ const rulerWindow = computed(() => visibleTimeWindow(viewport.value))
   max-width: 360px;
   overflow: auto;
   border-left: 1px solid var(--border);
+}
+
+.effects-detail--inline {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  height: min(45%, 280px);
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
 }
 
 .effects-empty,

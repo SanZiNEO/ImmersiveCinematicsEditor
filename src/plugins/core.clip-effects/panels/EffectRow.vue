@@ -97,6 +97,11 @@ const worstSeverity = computed<EffectDiagnostic['severity'] | null>(() => {
 })
 
 const rowStyle = computed(() => ({ height: `${ROW_LAYOUT.row}px` }))
+const rowClass = computed(() => ({
+  'effect-row--event': isEvent.value,
+  'effect-row--static': isStaticCompanion.value,
+  'effect-row--collapsed': props.collapsed,
+}))
 
 const valueKindLabel = computed(() => {
   switch (props.row.valueKind) {
@@ -235,11 +240,7 @@ const valueFormKey = computed(() => props.row.path)
 <template>
   <div
     class="effect-row"
-    :class="{
-      'effect-row--event': isEvent,
-      'effect-row--static': isStaticCompanion,
-      'effect-row--collapsed': collapsed,
-    }"
+    :class="rowClass"
     :style="rowStyle"
     :data-path="row.path"
     :data-mode="row.mode"
@@ -359,7 +360,7 @@ const valueFormKey = computed(() => props.row.path)
         @open-event="onOpenEvent"
         @select-segment="onSelectSegment"
       />
-      <span v-else-if="collapsed" class="effect-row__placeholder">组已折叠</span>
+      <span v-else-if="props.collapsed" class="effect-row__placeholder">组已折叠</span>
       <span v-else class="effect-row__placeholder">组内静态值 · 无节点组</span>
     </div>
   </div>
@@ -368,10 +369,9 @@ const valueFormKey = computed(() => props.row.path)
 <style scoped>
 .effect-row {
   display: grid;
-  grid-template-columns: var(--effect-row-left-width, 200px) minmax(0, 1fr);
+  grid-template-columns: var(--effects-control-width, 240px) minmax(0, 1fr);
   align-items: center;
   min-width: 0;
-  border-bottom: 1px solid var(--border);
   color: var(--text);
   font-size: 12px;
 }
@@ -388,11 +388,12 @@ const valueFormKey = computed(() => props.row.path)
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   min-width: 0;
   height: 100%;
-  padding: 0 6px;
+  padding: 0 7px 0 5px;
   border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .effect-row__dot {
@@ -418,14 +419,16 @@ const valueFormKey = computed(() => props.row.path)
 
 .effect-row__label {
   flex: 0 0 auto;
-  max-width: 84px;
+  max-width: 30px;
   overflow: hidden;
+  font-size: 11px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .effect-row__path {
+  display: none;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -437,9 +440,12 @@ const valueFormKey = computed(() => props.row.path)
 }
 
 .effect-row__control {
-  flex: 0 0 auto;
-  min-width: 72px;
-  max-width: 130px;
+  flex: 0 1 132px;
+  min-width: 0;
+}
+
+.effect-row__control :deep(.value-form__line) {
+  width: 100%;
 }
 
 .effect-row__record {
@@ -490,7 +496,7 @@ const valueFormKey = computed(() => props.row.path)
 }
 
 .effect-row__stats {
-  display: flex;
+  display: none;
   flex: 0 1 auto;
   gap: 6px;
   min-width: 0;
@@ -510,8 +516,9 @@ const valueFormKey = computed(() => props.row.path)
 }
 
 .effect-row__menu-button {
+  margin-left: auto;
   flex: 0 0 auto;
-  width: 20px;
+  width: 14px;
   height: 20px;
   padding: 0;
   border: 1px solid transparent;
@@ -536,8 +543,9 @@ const valueFormKey = computed(() => props.row.path)
 .effect-row__menu {
   position: absolute;
   top: 100%;
-  right: 4px;
+  right: 2px;
   z-index: 40;
+  max-width: min(180px, calc(100vw - 16px));
   display: flex;
   flex-direction: column;
   min-width: 132px;
@@ -574,6 +582,7 @@ const valueFormKey = computed(() => props.row.path)
   min-width: 0;
   height: 100%;
   overflow: hidden;
+  border-bottom: 1px solid var(--border);
 }
 
 .effect-row__placeholder {

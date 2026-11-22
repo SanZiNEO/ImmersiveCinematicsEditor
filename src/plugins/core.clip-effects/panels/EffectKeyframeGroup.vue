@@ -929,6 +929,7 @@ const currentValueText = computed(() => previewValueText(props.currentValue))
 .kf-group__canvas {
   display: block;
   width: 100%;
+  background: linear-gradient(var(--border), var(--border)) center / 100% 1px no-repeat;
   touch-action: none;
   cursor: crosshair;
 }

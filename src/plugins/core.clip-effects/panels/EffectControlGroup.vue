@@ -155,45 +155,48 @@ function onSelectSegment(payload: { clipKey: string; path: string; fromTime: num
     :data-group="group.key"
   >
     <header class="effect-group__header" :style="headerStyle">
-      <button
-        type="button"
-        class="effect-group__toggle"
-        :aria-expanded="!collapsed"
-        :title="collapsed ? '展开组' : '折叠组'"
-        @click="toggle"
-      >
-        <span class="effect-group__chevron" aria-hidden="true">{{ collapsed ? '▸' : '▾' }}</span>
-        <span class="effect-group__label" :title="group.key === '' ? '未分组' : group.key">{{ group.label }}</span>
-      </button>
+      <div class="effect-group__header-controls">
+        <button
+          type="button"
+          class="effect-group__toggle"
+          :aria-expanded="!collapsed"
+          :title="collapsed ? '展开组' : '折叠组'"
+          @click="toggle"
+        >
+          <span class="effect-group__chevron" aria-hidden="true">{{ collapsed ? '▸' : '▾' }}</span>
+          <span class="effect-group__label" :title="group.key === '' ? '未分组' : group.key">{{ group.label }}</span>
+        </button>
 
-      <span
-        v-if="groupDiagnostic !== null"
-        class="effect-group__dot"
-        :data-severity="groupDiagnostic.severity"
-        :title="`${severityLabel}：${groupDiagnostic.count} 条诊断`"
-        role="img"
-        :aria-label="`${severityLabel} ${groupDiagnostic.count} 条诊断`"
-      >
-        <span class="effect-group__dot-mark" aria-hidden="true" />
-        <span class="effect-group__dot-count">{{ groupDiagnostic.count }}</span>
-      </span>
-
-      <span v-if="group.unknown" class="effect-group__badge">未知</span>
-
-      <span class="effect-group__stats">
-        <span :title="`${group.animatedCount} 个属性有关键帧`">{{ group.animatedCount }} 属性</span>
-        <span :title="`${group.frameCount} 帧`">{{ group.frameCount }} 帧</span>
         <span
-          v-if="group.outOfRangeCount > 0"
-          class="effect-group__stats-warn"
-          :title="`${group.outOfRangeCount} 帧在片段时长之外`"
-        >{{ group.outOfRangeCount }} 轴外</span>
-        <span
-          v-if="showStaticCompanions === true && group.staticCompanionCount > 0"
-          class="effect-group__stats-muted"
-          :title="`${group.staticCompanionCount} 个静态伴随行（组级策略）`"
-        >{{ group.staticCompanionCount }} 静态伴随</span>
-      </span>
+          v-if="groupDiagnostic !== null"
+          class="effect-group__dot"
+          :data-severity="groupDiagnostic.severity"
+          :title="`${severityLabel}：${groupDiagnostic.count} 条诊断`"
+          role="img"
+          :aria-label="`${severityLabel} ${groupDiagnostic.count} 条诊断`"
+        >
+          <span class="effect-group__dot-mark" aria-hidden="true" />
+          <span class="effect-group__dot-count">{{ groupDiagnostic.count }}</span>
+        </span>
+
+        <span v-if="group.unknown" class="effect-group__badge">未知</span>
+
+        <span class="effect-group__stats">
+          <span :title="`${group.animatedCount} 个属性有关键帧`">{{ group.animatedCount }} 属性</span>
+          <span :title="`${group.frameCount} 帧`">{{ group.frameCount }} 帧</span>
+          <span
+            v-if="group.outOfRangeCount > 0"
+            class="effect-group__stats-warn"
+            :title="`${group.outOfRangeCount} 帧在片段时长之外`"
+          >{{ group.outOfRangeCount }} 轴外</span>
+          <span
+            v-if="showStaticCompanions === true && group.staticCompanionCount > 0"
+            class="effect-group__stats-muted"
+            :title="`${group.staticCompanionCount} 个静态伴随行（组级策略）`"
+          >{{ group.staticCompanionCount }} 静态伴随</span>
+        </span>
+      </div>
+      <div class="effect-group__header-canvas" aria-hidden="true" />
     </header>
 
     <div v-if="!collapsed" class="effect-group__rows">
@@ -237,22 +240,30 @@ function onSelectSegment(payload: { clipKey: string; path: string; fromTime: num
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-bottom: 1px solid var(--border-strong);
 }
 
 .effect-group__header {
+  display: grid;
+  grid-template-columns: var(--effects-control-width, 240px) minmax(0, 1fr);
+  min-width: 0;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.effect-group__header-controls {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
   padding: 0 6px;
-  background: var(--bg-raised);
-  color: var(--text-secondary);
-  font-size: 11px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
-.effect-group--unknown .effect-group__header {
-  background: var(--bg-panel);
+.effect-group__header-canvas {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .effect-group__toggle {
