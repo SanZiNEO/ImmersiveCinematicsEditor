@@ -64,6 +64,7 @@ import {
   nextClipId,
   trackLabel,
   visibleClipKeys,
+  type BuiltinTrackType,
   type TrackTypeOption,
 } from './model.ts'
 import { TimelineViewState } from './viewState.ts'
@@ -139,6 +140,48 @@ function defaultValueOf(
     return def.default as JsonValue
   }
   return fallback
+}
+
+/** 目录没有可用缺省、但新建片段必须携带的安全初值。 */
+const SAFE_CLIP_VALUES: Readonly<Record<BuiltinTrackType, Readonly<Record<string, JsonValue>>>> = {
+  CAMERA: {},
+  LETTERBOX: {},
+  AUDIO: { source: 'minecraft' },
+  EVENT: {},
+  MOD_EVENT: {},
+  OVERLAY: { opacity: 0 },
+  ADJUST: {},
+}
+
+/** 新建片段只写渲染所需的最小值；其余路径优先读取字段目录默认值。 */
+const TRACK_CLIP_DEFAULTS: Readonly<Record<BuiltinTrackType, ReadonlyArray<readonly [string, JsonValue]>>> = {
+  CAMERA: [
+    ['position_mode', 'relative'],
+    ['position_space', 'world'],
+    ['position.y', 0],
+    ['yaw', 0],
+    ['pitch', 0],
+    ['roll', 0],
+    ['fov', 70],
+    ['zoom', 1],
+    ['transition', 'cut'],
+  ],
+  LETTERBOX: [
+    ['aspect_ratio', 2.35],
+    ['opacity', 1],
+  ],
+  AUDIO: [
+    ['sound', 'minecraft:ambient.cave'],
+    ['source', 'file'],
+    ['volume', 1],
+  ],
+  EVENT: [],
+  MOD_EVENT: [],
+  OVERLAY: [
+    ['layer_type', 'fade'],
+    ['opacity', 1],
+  ],
+  ADJUST: [['exposure', 0]],
 }
 
 /** 控制器依赖（激活时注入；面板 / 命令共用同一实例）。 */
@@ -404,6 +447,9 @@ export class TimelineController {
     const track = this.activeTrack.value
     if (track === undefined) {
       return { ok: false, reason: '先添加轨道' }
+    }
+    if (this.trackState(track.trackId).locked) {
+      return { ok: false, reason: '轨道已锁定，不能新建片段' }
     }
     return this.canCreateClip(track.type)
   })
@@ -854,13 +900,10 @@ export class TimelineController {
 
   // ── 片段命令 ─────────────────────────────────────────────────
 
-  /** 新建片段能力（当前只支持镜头片段；EVENT / MOD_EVENT 明确说明原因）。 */
+  /** 新建片段能力：内置七轨有确定性默认片段，扩展轨保留原片段复制入口。 */
   canCreateClip(type: string): AddClipCheck {
-    if (type === 'EVENT' || type === 'MOD_EVENT') {
-      return { ok: false, reason: '事件记录不能凭空生成，请复制已有片段' }
-    }
-    if (type !== 'CAMERA') {
-      return { ok: false, reason: `当前只支持新建镜头片段（${type} 需要该轨道的构造默认值）` }
+    if (!isBuiltinTrackType(type)) {
+      return { ok: false, reason: `未知扩展轨道 ${type} 没有本地默认片段，请复制已有片段` }
     }
     return { ok: true }
   }
@@ -870,6 +913,9 @@ export class TimelineController {
     const track = findTrack(this.view.value, trackId)
     if (track === undefined) {
       return this.fail('轨道不存在')
+    }
+    if (this.trackState(track.trackId).locked) {
+      return this.fail('轨道已锁定，不能新建片段')
     }
     const check = this.canCreateClip(track.type)
     if (!check.ok) {
@@ -1371,22 +1417,17 @@ export class TimelineController {
     return Math.max(0, end)
   }
 
-  /** 05-11 / 本任务：只构造最小 CAMERA 片段（其他轨道不给假字段）。 */
+  /** 构造内置七轨的最小可编辑片段；事件轨用目录初值建安全占位记录。 */
   private buildMinimalClip(type: string, atTime: number, id: string): JsonObject {
     const objects: JsonObject = {}
-    const fixed: Array<[string, JsonValue]> = [
-      ['position_mode', 'relative'],
-      ['position_space', 'world'],
-      ['position.y', 0],
-      ['yaw', 0],
-      ['pitch', 0],
-      ['roll', 0],
-      ['fov', 70],
-      ['zoom', 1],
-      ['transition', 'cut'],
-    ]
-    for (const [path, fallback] of fixed) {
-      objects[path] = { value: defaultValueOf(this.catalog, type, path, fallback) }
+    for (const [path, fallback] of this.defaultObjectsFor(type)) {
+      objects[path] = {
+        value: SAFE_CLIP_VALUES[type as BuiltinTrackType]?.[path]
+          ?? defaultValueOf(this.catalog, type, path, fallback),
+      }
+    }
+    if (type === 'EVENT' || type === 'MOD_EVENT') {
+      this.seedEventRecord(type, objects)
     }
     return {
       id,
@@ -1397,6 +1438,25 @@ export class TimelineController {
       loop_mode: 'repeat',
       objects,
     }
+  }
+
+  /** 事件记录初值直接取 `event_type` 目录默认；目录不可用时使用安全回退。 */
+  private seedEventRecord(type: 'EVENT' | 'MOD_EVENT', objects: JsonObject): void {
+    const path = type === 'EVENT' ? 'event' : 'mod_event'
+    const eventType = defaultValueOf(
+      this.catalog,
+      type,
+      'event_type',
+      type === 'EVENT' ? 'command' : 'mod_event',
+    )
+    const body: JsonObject = type === 'EVENT'
+      ? { event_type: eventType }
+      : { event_type: eventType, data: {} }
+    objects[path] = { keyframes: [{ time: 0, value: body }] }
+  }
+
+  private defaultObjectsFor(type: string): ReadonlyArray<readonly [string, JsonValue]> {
+    return TRACK_CLIP_DEFAULTS[type as BuiltinTrackType] ?? []
   }
 
   // ── 内部：剪贴板 ─────────────────────────────────────────────

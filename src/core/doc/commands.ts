@@ -563,7 +563,7 @@ function assertValueWritable(
     }
     return
   }
-  const check = checkValue(def, value, { propertyPath: path })
+  const check = checkValue(def, value, { propertyPath: def.key })
   if (!check.ok) {
     throw new CommandError(`${path}: ${check.message}`)
   }
