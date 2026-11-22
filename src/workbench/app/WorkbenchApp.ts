@@ -257,9 +257,8 @@ export class WorkbenchApp {
       },
     })
 
-    // WebUI 传输：Electron 宿主才有 token；浏览器 dev 也尝试连（Origin 会被服务端拒，属真实限制）。
-    // token 不取闭包缓存：每次连接/重连前都重新调用 `readWebuiToken()`，令牌轮换后能读到新值。
-    const client = new WebUiClient({ token: readWebuiToken })
+    // 桌面宿主可持续读取本机游戏启动时生成的令牌。
+    const client = new WebUiClient({ token: readWebuiToken, autoDiscover: this.host.kind === 'electron' })
     this.client = client
     this.transport = new WebUiTransport({ client })
     this.resources = new ResourceServiceImpl({ client })
@@ -516,7 +515,10 @@ export class WorkbenchApp {
     if (client === null) {
       return
     }
+    let wasConnected = client.connected()
     client.subscribe((connected) => {
+      if (connected === wasConnected) return
+      wasConnected = connected
       this.documents.setConnected(connected)
       this.graph.invalidate('reconnect')
       if (connected) {

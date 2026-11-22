@@ -6,7 +6,7 @@
  * 安装唯一键盘入口（快捷键表 → 命令表）。
  * 不持有尺寸、不读文档字段、不实现业务面板。
  */
-import { onBeforeUnmount, onMounted, provide, ref } from 'vue'
+import { onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
 
 import type { CommandRegistryPort, FocusServicePort, KeyContext, KeybindingRegistryPort } from '../api/commands.ts'
 import type { HostPort } from '../api/host.ts'
@@ -28,12 +28,13 @@ import ShowPanelDialog from './ShowPanelDialog.vue'
 import type { ShellActionsPort } from '../api/actions.ts'
 import { SHELL_ACTIONS_SERVICE } from '../api/tokens.ts'
 import { registerShellFocusRegions } from './focusRegions.ts'
-import { useCurrentPageId } from './useWorkbench.ts'
+import { PREVIEW_RENDER_STATUS_KEY, useCurrentPageId, type PreviewRenderStatus } from './useWorkbench.ts'
 import { bindShellCommandDeps } from '../../plugins/core.workbench/commands.ts'
 
 const props = defineProps<{ services: ServiceRegistry }>()
 
 provide(WORKBENCH_SERVICES_KEY, props.services)
+provide(PREVIEW_RENDER_STATUS_KEY, shallowRef<PreviewRenderStatus | null>(null))
 
 const pageId = useCurrentPageId()
 let unregisterFocus: (() => void) | null = null

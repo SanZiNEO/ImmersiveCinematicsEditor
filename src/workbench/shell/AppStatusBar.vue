@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
- * 状态区（04-04）：只渲染 `statusItem` 贡献。
+ * 底部状态区汇总工作台状态和游戏预览连接。
  *
  * 条目只读；点击执行 `commandId`，不直接改文档。断连时仍然可用。
  */
-import { computed, onScopeDispose, ref } from 'vue'
+import { computed, inject, onScopeDispose, ref, shallowRef } from 'vue'
 
 import type { StatusContext } from '../api/contributions.ts'
-import { useCommands, useCurrentPageId, useDiagnostics, useDocumentSummary, useI18n, useLayout, useServices, useStatus, useStatusItems } from './useWorkbench.ts'
+import { PREVIEW_SERVICE } from '../api/tokens.ts'
+import { PREVIEW_RENDER_STATUS_KEY, useCommands, useCurrentPageId, useDiagnostics, useDocumentSummary, useI18n, useLayout, useServices, useStatus, useStatusItems } from './useWorkbench.ts'
 
 const i18n = useI18n()
 const items = useStatusItems()
@@ -18,6 +19,18 @@ const pageId = useCurrentPageId()
 const summary = useDocumentSummary()
 const diagnostics = useDiagnostics()
 const status = useStatus()
+const preview = services.get(PREVIEW_SERVICE) ?? null
+const renderStatus = inject(PREVIEW_RENDER_STATUS_KEY)
+function readPreviewConnection() {
+  return preview?.connection?.() ?? {
+    status: preview?.connected() ? 'connected' : 'offline',
+    reason: null,
+  }
+}
+
+const previewConnection = shallowRef(readPreviewConnection())
+const previewDetails = ref('')
+let lastPreviewUpdate = 0
 
 const tick = ref(0)
 const unsubscribe = status.subscribe(() => {
@@ -43,6 +56,28 @@ function context(): StatusContext {
     presetId: layout.getPage(pageId.value).presetId,
   }
 }
+
+const previewText = computed(() => {
+  const status = previewConnection.value.status
+  if (status === 'connected') return i18n.t('status.previewGame')
+  if (status === 'no-token' || status === 'reconnecting') return i18n.t('status.previewWaiting')
+  if (status === 'stopped') return i18n.t('status.previewStopped')
+  return i18n.t('status.previewOffline')
+})
+
+const previewSeverity = computed(() => renderStatus?.value?.severity ??
+  (previewConnection.value.status === 'connected' ? 'normal' : 'warning'))
+
+const previewLabel = computed(() =>
+  [previewText.value, renderStatus?.value?.text].filter(Boolean).join(' · '))
+
+const previewTooltip = computed(() =>
+  [renderStatus?.value?.text, previewDetails.value].filter(Boolean).join(' · '))
+
+const previewCanRetry = computed(() => {
+  const status = previewConnection.value.status
+  return status === 'no-token' || status === 'stopped'
+})
 
 const left = computed(() => items.list().filter((item) => item.contribution.align === 'left'))
 const right = computed(() => items.list().filter((item) => item.contribution.align === 'right'))
@@ -77,6 +112,45 @@ async function activate(commandId: string | undefined): Promise<void> {
   }
   await commands.execute({ pageId: pageId.value, services }, commandId)
 }
+
+function refreshPreview(): void {
+  preview?.requestRefresh()
+}
+
+function retryPreview(): void {
+  preview?.retry?.()
+}
+
+function updatePreviewStatus(): void {
+  if (preview === null) return
+  const next = readPreviewConnection()
+  const previous = previewConnection.value
+  const changed = next.status !== previous.status || next.reason !== previous.reason
+  if (changed) previewConnection.value = next
+
+  const now = Date.now()
+  if (!changed && now - lastPreviewUpdate < 250) return
+  lastPreviewUpdate = now
+  if (next.status !== 'connected') {
+    previewDetails.value = next.reason ?? ''
+    return
+  }
+
+  const stats = preview.stats()
+  const lastFrame = preview.lastFrameAt()
+  const dropped = (stats?.dropped ?? 0) + (stats?.inputDropped ?? 0) + (stats?.encoderDropped ?? 0)
+  previewDetails.value = [
+    stats?.encoder,
+    stats?.width && stats.height ? `${stats.width}×${stats.height}` : '',
+    lastFrame === null ? '' : `${i18n.t('preview.lastFrame')} ${new Date(lastFrame).toLocaleTimeString()}`,
+    dropped > 0 ? `${i18n.t('preview.dropped')} ${dropped}` : '',
+  ].filter(Boolean).join(' · ')
+}
+
+if (preview !== null) {
+  updatePreviewStatus()
+  onScopeDispose(preview.subscribe(updatePreviewStatus))
+}
 </script>
 
 <template>
@@ -99,6 +173,15 @@ async function activate(commandId: string | undefined): Promise<void> {
       <button type="button" class="transient-close" :aria-label="i18n.t('common.cancel')" @click="status.clearTransient()">✕</button>
     </div>
     <div class="status-group status-right">
+      <span class="status-preview" :class="`severity-${previewSeverity}`" role="status" :title="previewTooltip">
+        {{ previewLabel }}
+      </span>
+      <button v-if="previewCanRetry" type="button" class="status-item" @click="retryPreview">
+        {{ i18n.t('preview.retry') }}
+      </button>
+      <button v-if="preview !== null" type="button" class="status-item" @click="refreshPreview">
+        {{ i18n.t('preview.refresh') }}
+      </button>
       <button
         v-for="item in right"
         :key="item.contribution.itemId"
@@ -140,6 +223,13 @@ async function activate(commandId: string | undefined): Promise<void> {
 }
 .status-item:disabled { cursor: default; }
 .status-item:not(:disabled):hover { background: var(--bg-hover); color: var(--text); }
+.status-preview {
+  max-width: min(40vw, 480px);
+  padding: 2px 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .status-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .severity-warning { color: var(--warning); }
 .severity-error { color: var(--error); }

@@ -8,11 +8,10 @@
 import DockSurface from '../dock/DockSurface.vue'
 import type { ShellActionsPort } from '../api/actions.ts'
 import { SHELL_ACTIONS_SERVICE } from '../api/tokens.ts'
-import { useDocumentSummary, useI18n, useServices } from './useWorkbench.ts'
+import { useI18n, useServices } from './useWorkbench.ts'
 
 const services = useServices()
 const i18n = useI18n()
-const summary = useDocumentSummary()
 
 function actions(): ShellActionsPort {
   return services.require(SHELL_ACTIONS_SERVICE)
@@ -33,9 +32,6 @@ function actions(): ShellActionsPort {
           {{ i18n.t('project.openFolder') }}
         </button>
       </div>
-      <span class="connection" :class="{ online: summary.connected }" role="status">
-        {{ summary.connected ? i18n.t('status.connected') : i18n.t('status.offline') }}
-      </span>
     </header>
     <DockSurface page-id="project" />
   </section>
@@ -70,13 +66,4 @@ function actions(): ShellActionsPort {
 .primary { background: var(--accent); color: var(--bg-app); border: 1px solid var(--accent); }
 .ghost { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border-strong); }
 .primary:focus-visible, .ghost:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.connection {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-}
-.connection.online { color: var(--success); border-color: var(--success); }
 </style>

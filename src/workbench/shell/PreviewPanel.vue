@@ -9,22 +9,20 @@
  * - 两条路径共用同一画布、同一条 rAF 显示循环（100ms 固定抖动延迟 + 有界队列），
  *   不并行跑两套绘制循环；漂移修正只在显示循环这一处生效。
  *
- * 状态语义：`presented` 只记录**真正解码并呈现过**的帧；H.264 到达但首帧未解出时，
- * 占位文案仍在并明确区分等待关键帧 / 解码中 / 首帧超时。解码器不支持、解码失败、
- * 首帧超时都在界面可见，不允许静默黑屏。
+ * 首帧真正上屏前，底部状态区展示接收、解码与超时状态。
  */
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 
-import type { PreviewFrame, PreviewStats } from '../api/preview.ts'
-import { PREVIEW_TYPE_H264, PREVIEW_TYPE_RGBA } from '../api/preview.ts'
-import type { PreviewServicePort } from '../api/preview.ts'
+import type { PreviewFrame } from '../api/preview.ts'
+import { PREVIEW_TYPE_RGBA } from '../api/preview.ts'
 import { PREVIEW_SERVICE } from '../api/tokens.ts'
-import { useI18n, useServices } from './useWorkbench.ts'
+import { PREVIEW_RENDER_STATUS_KEY, useI18n, useServices, type PreviewRenderStatus } from './useWorkbench.ts'
 
 const services = useServices()
 const i18n = useI18n()
+const renderStatus = inject(PREVIEW_RENDER_STATUS_KEY)
 
-/** 状态区读数刷新间隔：≤8 次/秒；首帧到达与连接/断连仍即时刷新。 */
+/** 等待首帧显示时检查超时。 */
 const STATUS_REFRESH_MS = 125
 
 /** 显示抖动缓冲：画面固定滞后 100ms，按 PTS 对齐显示，吸收网络/解码抖动。 */
@@ -45,27 +43,13 @@ interface DisplayFrame {
   timestamp: number
   width: number
   height: number
-  frameId: number
-  type: number
   rgba: Uint8Array | null
   video: VideoFrame | null
 }
 
-/** 真正上屏过的最后一帧；未呈现过帧时为 `null`。 */
-interface PresentedFrame {
-  width: number
-  height: number
-  frameId: number
-  type: number
-  presentedAt: number
-}
-
 const canvas = ref<HTMLCanvasElement | null>(null)
 const connected = ref(false)
-const stats = ref<PreviewStats | null>(null)
-const lastFrameAt = ref<number | null>(null)
-const presented = shallowRef<PresentedFrame | null>(null)
-const connInfo = shallowRef<{ status: string; reason: string | null } | null>(null)
+const hasPresentedFrame = ref(false)
 const error = ref<string | null>(null)
 const decodeState = shallowRef<DecodeState>('idle')
 /** 收到首帧（任意类型）的本地时间；未收到为 `null`。 */
@@ -73,16 +57,9 @@ const frameArrivedAt = ref<number | null>(null)
 /** 首帧超时：收到帧但限时内没有解出可见帧。 */
 const firstFrameTimedOut = ref(false)
 
-let service: PreviewServicePort | null = null
 let unsubscribeFrame: (() => void) | null = null
 let unsubscribeState: (() => void) | null = null
 let statusTimer: ReturnType<typeof setInterval> | undefined
-/** 上一次已知的连接状态；状态订阅随帧也会触发，只在跳变时即时刷新。 */
-let lastConnectedState: boolean | null = null
-/** 上一次已知的连接状态码（no-token / stopped / reconnecting …），用于区分同布尔态下的状态跳变。 */
-let lastConnStatus: string | null = null
-/** 上一帧之后是否已经刷新过一次状态读数（首帧即时，后续走节流）。 */
-let statusRefreshedAfterFrame = false
 
 // ── 显示队列：RGBA 缓冲复用 + VideoFrame 逐条释放 ──────────────
 const queue: DisplayFrame[] = []
@@ -106,25 +83,6 @@ let decoder: VideoDecoder | null = null
 let decoderSizeKey = ''
 let decoderBroken = false
 let awaitingKeyframe = true
-
-function preview(): PreviewServicePort | null {
-  if (service === null) {
-    service = services.get(PREVIEW_SERVICE) ?? null
-  }
-  return service
-}
-
-function refreshStatusNow(): void {
-  const current = preview()
-  if (current === null) return
-  lastConnectedState = current.connected()
-  connected.value = lastConnectedState
-  stats.value = current.stats()
-  lastFrameAt.value = current.lastFrameAt()
-  connInfo.value = current.connection?.() ?? null
-  lastConnStatus = connInfo.value?.status ?? null
-  checkFirstFrameTimeout()
-}
 
 // ── PTS 重整与队列 ───────────────────────────────────────────
 
@@ -206,13 +164,7 @@ function drawFrame(item: DisplayFrame): void {
     pixelBuffer.set(item.rgba.subarray(0, byteLength))
     if (reusedImageData !== null) context.putImageData(reusedImageData, 0, 0)
   }
-  presented.value = {
-    width: item.width,
-    height: item.height,
-    frameId: item.frameId,
-    type: item.type,
-    presentedAt: Date.now(),
-  }
+  hasPresentedFrame.value = true
   firstFrameTimedOut.value = false
   // 解码器恢复并出帧后清掉可恢复错误；不支持 WebCodecs 的错误保留到下次重连。
   if (decodeState.value !== 'unsupported') error.value = null
@@ -276,8 +228,6 @@ function ensureDecoder(frame: PreviewFrame): void {
           timestamp: video.timestamp,
           width: video.displayWidth || video.codedWidth,
           height: video.displayHeight || video.codedHeight,
-          frameId: frame.frameId,
-          type: PREVIEW_TYPE_H264,
           rgba: null,
           video,
         })
@@ -351,7 +301,7 @@ function resetSession(): void {
   awaitingKeyframe = true
   ptsClockReady = false
   ptsResynced = false
-  presented.value = null
+  hasPresentedFrame.value = false
   frameArrivedAt.value = null
   firstFrameTimedOut.value = false
   decodeState.value = 'idle'
@@ -359,75 +309,33 @@ function resetSession(): void {
 }
 
 function checkFirstFrameTimeout(): void {
-  if (!connected.value || presented.value !== null) return
+  if (!connected.value || hasPresentedFrame.value) return
   const arrived = frameArrivedAt.value
   if (arrived === null) return
   if (Date.now() - arrived > FIRST_FRAME_TIMEOUT_MS) firstFrameTimedOut.value = true
 }
 
-function retry(): void {
-  preview()?.retry?.()
-  refreshStatusNow()
-}
-
-const showRetry = computed(() => {
-  const status = connInfo.value?.status
-  return status === 'stopped' || status === 'no-token'
-})
-
 // ── 状态派生 ──────────────────────────────────────────────────
 
-function offlineText(): string {
-  const status = connInfo.value?.status
-  if (status === 'no-token') return i18n.t('preview.noToken')
-  if (status === 'stopped') return i18n.t('preview.stopped')
-  if (status === 'reconnecting') return i18n.t('preview.reconnecting')
-  // 状态还没归类但服务端已给出可读原因（如 token 文件被清空）时，直接展示原因，
-  // 不让面板退回无信息量的「预览未接入」——用户需要知道为什么黑着。
-  const reason = connInfo.value?.reason
-  if (reason !== null && reason !== undefined && reason.trim() !== '') return reason
-  return i18n.t('preview.offline')
+const currentRenderStatus = computed<PreviewRenderStatus | null>(() => {
+  if (error.value !== null) return { text: error.value, severity: 'error' }
+  if (!connected.value || hasPresentedFrame.value) return null
+  if (firstFrameTimedOut.value) {
+    return { text: i18n.t('preview.firstFrameTimeout'), severity: 'warning' }
+  }
+  const key = decodeState.value === 'awaiting-keyframe'
+    ? 'preview.awaitingKeyframe'
+    : frameArrivedAt.value === null ? 'preview.waiting' : 'preview.decoding'
+  return { text: i18n.t(key), severity: 'normal' }
+})
+
+if (renderStatus !== undefined) {
+  watch(currentRenderStatus, (value) => { renderStatus.value = value })
 }
 
-const placeholderText = computed(() => {
-  if (!connected.value) return offlineText()
-  if (presented.value !== null) return ''
-  if (firstFrameTimedOut.value) return i18n.t('preview.firstFrameTimeout')
-  if (decodeState.value === 'awaiting-keyframe') return i18n.t('preview.awaitingKeyframe')
-  if (frameArrivedAt.value !== null) return i18n.t('preview.decoding')
-  return i18n.t('preview.waiting')
-})
-
-const droppedTotal = computed(() => {
-  const current = stats.value
-  if (current === null) return 0
-  return Number(current.dropped ?? 0) + Number(current.inputDropped ?? 0) + Number(current.encoderDropped ?? 0)
-})
-
-const statusText = computed(() => {
-  if (!connected.value) return offlineText()
-  const current = stats.value
-  if (current === null && presented.value === null) return i18n.t('preview.waiting')
-  const encoder = current?.encoder ?? 'unknown'
-  const size = presented.value === null
-    ? (current?.width !== undefined && current?.height !== undefined ? `${current.width}×${current.height}` : '—')
-    : `${presented.value.width}×${presented.value.height}`
-  const phase = presented.value !== null
-    ? i18n.t('preview.presented')
-    : firstFrameTimedOut.value
-      ? i18n.t('preview.firstFrameTimeout')
-      : decodeState.value === 'awaiting-keyframe'
-        ? i18n.t('preview.awaitingKeyframe')
-        : frameArrivedAt.value !== null
-          ? i18n.t('preview.decoding')
-          : i18n.t('preview.waiting')
-  const dropText = droppedTotal.value > 0 ? ` · ${i18n.t('preview.dropped')} ${droppedTotal.value}` : ''
-  return `${encoder} · ${size} · ${phase} · ${i18n.t('preview.lastFrame')}: ${lastFrameAt.value === null ? '-' : new Date(lastFrameAt.value).toLocaleTimeString()}${dropText}`
-})
-
 onMounted(() => {
-  const current = preview()
-  if (current === null) {
+  const current = services.get(PREVIEW_SERVICE)
+  if (current === undefined) {
     error.value = i18n.t('preview.unavailable')
     return
   }
@@ -440,32 +348,21 @@ onMounted(() => {
         timestamp,
         width: frame.width,
         height: frame.height,
-        frameId: frame.frameId,
-        type: frame.type,
         rgba: frame.payload,
         video: null,
       })
     } else {
       handleH264(frame)
     }
-    // 首帧到达即时刷新一次状态读数；后续帧交给 125ms 节流，不每帧触发响应式更新。
-    if (!statusRefreshedAfterFrame) {
-      statusRefreshedAfterFrame = true
-      refreshStatusNow()
-    }
   })
   unsubscribeState = current.subscribe(() => {
-    // 状态订阅随帧也会触发；只在连接跳变或连接状态码跳变时即时刷新，其余读数交给 125ms 节流。
     const next = current.connected()
-    const nextStatus = current.connection?.()?.status ?? null
-    if (lastConnectedState !== null && next === lastConnectedState && nextStatus === lastConnStatus) return
-    lastConnStatus = nextStatus
+    if (next === connected.value) return
+    connected.value = next
     if (!next) resetSession()
-    statusRefreshedAfterFrame = false
-    refreshStatusNow()
   })
-  refreshStatusNow()
-  statusTimer = setInterval(refreshStatusNow, STATUS_REFRESH_MS)
+  connected.value = current.connected()
+  statusTimer = setInterval(checkFirstFrameTimeout, STATUS_REFRESH_MS)
   rafId = requestAnimationFrame(renderLoop)
 })
 
@@ -483,6 +380,7 @@ onBeforeUnmount(() => {
     rafId = undefined
   }
   resetSession()
+  if (renderStatus !== undefined) renderStatus.value = null
 })
 </script>
 
@@ -490,16 +388,7 @@ onBeforeUnmount(() => {
   <section class="preview-panel">
     <div class="preview-surface">
       <canvas ref="canvas" class="preview-canvas" />
-      <p v-if="presented === null" class="preview-empty" role="status">
-        {{ placeholderText }}
-      </p>
     </div>
-    <footer class="preview-status">
-      <span :class="{ online: connected }" role="status">{{ statusText }}</span>
-      <span v-if="error" class="preview-error" role="alert">{{ error }}</span>
-      <button v-if="showRetry" type="button" class="ghost" @click="retry">{{ i18n.t('preview.retry') }}</button>
-      <button type="button" class="ghost" @click="preview()?.requestRefresh()">{{ i18n.t('preview.refresh') }}</button>
-    </footer>
   </section>
 </template>
 
@@ -516,28 +405,4 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 .preview-canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
-.preview-empty { position: absolute; color: var(--text-muted); font-size: 12px; }
-.preview-status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 26px;
-  padding: 0 8px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.preview-status .online { color: var(--success); }
-.preview-error { color: var(--error); }
-.ghost {
-  margin-left: auto;
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 6px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.ghost:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 </style>

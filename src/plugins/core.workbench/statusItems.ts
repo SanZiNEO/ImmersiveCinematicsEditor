@@ -57,15 +57,6 @@ const pluginItem: StatusItemContribution = {
   severity: (ctx: StatusContext) => (ctx.pluginErrorCount > 0 ? 'error' : 'normal'),
 }
 
-/** 预览源状态（右）。 */
-const previewItem: StatusItemContribution = {
-  itemId: 'workbench.status.preview',
-  align: 'right',
-  order: 30,
-  text: (ctx: StatusContext) => ctx.t(ctx.connected ? 'status.previewGame' : 'status.previewOffline'),
-  severity: (ctx: StatusContext) => (ctx.connected ? 'normal' : 'warning'),
-}
-
 /** 全部核心状态项。 */
 export const CORE_STATUS_ITEMS: StatusItemContribution[] = [
   connectionItem,
@@ -73,5 +64,4 @@ export const CORE_STATUS_ITEMS: StatusItemContribution[] = [
   presetItem,
   issueItem,
   pluginItem,
-  previewItem,
 ]

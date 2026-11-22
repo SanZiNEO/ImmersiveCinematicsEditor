@@ -5,8 +5,8 @@
  * 协议语义参考旧前端 `legacy/src/store.ts`（不得 import）：
  * - 连接 `ws://127.0.0.1:8765/ws?token=...`；
  * - 每次连接/重连前都重新取 token（支持令牌轮换），token 为空则不发起无意义连接；
- * - 断线指数退避：base 1500ms、×2、上限 15000ms；连续失败 8 次后停止自动重连，
- *   由用户显式 `retry()` 再试；
+ * - 断线按 1500ms 至 15000ms 指数退避。桌面端持续等待本机游戏服务，
+ *   其他调用方连续失败 8 次后可用 `retry()` 再试。
  * - 打开后发 `hello`；回执用同一 `id`；错误回执 reject；
  * - 断连 reject 全部 pending；
  * - 二进制消息按原样交给帧监听器（解析在 `WebUiTransport` 唯一一处完成）。
@@ -38,6 +38,8 @@ export interface WebUiClientOptions {
   url?: string
   /** 每次连接/重连前调用；允许返回同步串或 Promise（异步取 token）。 */
   token: () => string | Promise<string>
+  /** 持续等待本机游戏服务和启动时生成的令牌。 */
+  autoDiscover?: boolean
   now?: () => number
 }
 
@@ -49,6 +51,7 @@ interface PendingRequest {
 export class WebUiClient {
   private readonly baseUrl: string
   private readonly token: () => string | Promise<string>
+  private readonly autoDiscover: boolean
   readonly now: () => number
 
   private socket: WebSocket | null = null
@@ -70,13 +73,14 @@ export class WebUiClient {
   constructor(options: WebUiClientOptions) {
     this.baseUrl = options.url ?? WEBUI_DEFAULT_URL
     this.token = options.token
+    this.autoDiscover = options.autoDiscover ?? false
     this.now = options.now ?? (() => Date.now())
   }
 
   /** 建立连接；已连接/连接中时幂等。token 异步取到后再握手。 */
   connect(): void {
     this.manualClose = false
-    void this.openConnection()
+    if (!this.reconnectScheduled) void this.openConnection()
   }
 
   /** 显式重试：清掉退避计数与待触发定时器，重新取 token 并连接。 */
@@ -200,7 +204,13 @@ export class WebUiClient {
       if (token.length === 0) {
         this.socket = null
         this.setConnected(false)
-        this.setStatus('no-token', '缺少 WebUI token：未建立连接（请确认游戏已启动并写入 token 文件）')
+        this.setStatus('no-token', this.autoDiscover
+          ? '等待游戏连接'
+          : '缺少 WebUI token：未建立连接（请确认游戏已启动并写入 token 文件）')
+        if (this.autoDiscover) {
+          this.failureCount = 0
+          this.scheduleReconnect(WEBUI_RECONNECT_BASE_MS)
+        }
         return
       }
 
@@ -247,8 +257,8 @@ export class WebUiClient {
   }
 
   private recordFailure(): void {
-    this.failureCount += 1
-    if (this.failureCount >= WEBUI_RECONNECT_MAX_ATTEMPTS) {
+    this.failureCount = Math.min(this.failureCount + 1, WEBUI_RECONNECT_MAX_ATTEMPTS)
+    if (!this.autoDiscover && this.failureCount >= WEBUI_RECONNECT_MAX_ATTEMPTS) {
       this.setStatus('stopped', `连续失败 ${WEBUI_RECONNECT_MAX_ATTEMPTS} 次，已停止自动重连`)
       return
     }

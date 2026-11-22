@@ -216,6 +216,8 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     'status.pluginsValue': '插件错误：{count}',
     'status.previewGame': '预览：游戏内',
     'status.previewOffline': '预览：未接入',
+    'status.previewWaiting': '预览：等待游戏连接',
+    'status.previewStopped': '预览：重连已停止',
   },
   en_us: {
     'app.title': 'Immersive Cinematics Editor',
@@ -416,6 +418,8 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     'status.pluginsValue': 'Plugin errors: {count}',
     'status.previewGame': 'Preview: in game',
     'status.previewOffline': 'Preview: offline',
+    'status.previewWaiting': 'Preview: waiting for game',
+    'status.previewStopped': 'Preview: reconnect stopped',
   },
 }
 

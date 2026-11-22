@@ -4,7 +4,7 @@
  * 所有 shell 组件都用同一份服务注册表，不各自 new 一套状态。
  */
 import { computed, inject, onScopeDispose, ref, shallowRef } from 'vue'
-import type { ComputedRef, Ref, ShallowRef } from 'vue'
+import type { ComputedRef, InjectionKey, Ref, ShallowRef } from 'vue'
 
 import type { DialogStackPort, FocusServicePort, KeybindingRegistryPort, CommandRegistryPort } from '../api/commands.ts'
 import type { Diagnostic, DiagnosticSink } from '../api/diagnostics.ts'
@@ -49,6 +49,13 @@ import {
   THEME_SERVICE,
 } from '../api/tokens.ts'
 import { WORKBENCH_SERVICES_KEY } from '../host/panelContext.ts'
+
+export interface PreviewRenderStatus {
+  text: string
+  severity: 'normal' | 'warning' | 'error'
+}
+
+export const PREVIEW_RENDER_STATUS_KEY: InjectionKey<ShallowRef<PreviewRenderStatus | null>> = Symbol('preview-render-status')
 
 /** 取服务注册表（shell 根组件提供一次）。 */
 export function useServices(): ServiceRegistry {
