@@ -44,6 +44,7 @@ export function baseName(path: string): string {
 /** 外壳动作集合。 */
 export class ShellActions {
   private readonly deps: ShellActionsDeps
+  private documentRenameHandler: (() => void) | null = null
 
   constructor(deps: ShellActionsDeps) {
     this.deps = deps
@@ -136,6 +137,25 @@ export class ShellActions {
   closeDocument(): void {
     this.deps.documents.close()
     this.deps.router.reset('project')
+  }
+
+  /** 返回项目页（先走未保存守卫；关闭动作与 File → Close 共用）。 */
+  async backToProject(): Promise<void> {
+    const result = await this.guard()
+    if (result === 'proceed') this.closeDocument()
+  }
+
+  /** 由顶栏实现覆盖：当前文档改名对话框。 */
+  openDocumentRename(): void {
+    if (this.documentRenameHandler === null) {
+      this.deps.status.notify('当前没有可改名的文档', 'warning')
+      return
+    }
+    this.documentRenameHandler()
+  }
+
+  setDocumentRenameHandler(handler: (() => void) | null): void {
+    this.documentRenameHandler = handler
   }
 
   /** 打开设置页（可带分区）。 */

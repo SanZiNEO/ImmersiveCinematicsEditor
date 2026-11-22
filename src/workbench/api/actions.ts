@@ -17,6 +17,12 @@ export interface ShellActionsPort {
   revertDocument(): Promise<void>
   guard(): Promise<GuardResult>
   closeDocument(): void
+  /** 文档页「返回项目」：经过同一未保存守卫。 */
+  backToProject(): Promise<void>
+  /** 打开当前文档的 id 改名对话框。 */
+  openDocumentRename(): void
+  /** 顶栏注册自身提供的文档改名对话框。 */
+  setDocumentRenameHandler?(handler: (() => void) | null): void
   openSettings(sectionId?: string): void
   notify(message: string, severity?: 'info' | 'warning' | 'error'): void
 }

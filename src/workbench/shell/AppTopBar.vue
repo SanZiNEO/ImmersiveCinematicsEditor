@@ -5,13 +5,15 @@
  * 菜单项来自 `CommandRegistry.menuItems`（同一份注册表，不另写 handler）；
  * Windows/Linux 自绘菜单；不支持 titleBarOverlay 时显示自绘三键。
  */
-import { computed, onScopeDispose, ref } from 'vue'
+import { computed, onBeforeUnmount, onScopeDispose, ref, watch } from 'vue'
 
 import type { MenuState } from '../api/commands.ts'
 import type { RegisteredPage } from '../api/registries.ts'
-import { useCommands, useCurrentPageId, useFocus, useHost, useI18n, usePages, useRouter, useServices } from './useWorkbench.ts'
-import { DOCUMENT_SERVICE } from '../api/tokens.ts'
+import { useCommands, useCurrentPageId, useDocumentSummary, useFocus, useHost, useI18n, usePages, useRouter, useServices } from './useWorkbench.ts'
+import { DOCUMENT_COMMANDS, DOCUMENT_SERVICE, SCRIPT_MUTATION_SERVICE, SHELL_ACTIONS_SERVICE } from '../api/tokens.ts'
 import type { DocumentService } from '../api/documents.ts'
+import type { RefsApplyResult, RefsPreviewResult, ScriptMutationServicePort } from '../api/graph.ts'
+import WorkbenchDialog from './WorkbenchDialog.vue'
 
 const i18n = useI18n()
 const commands = useCommands()
@@ -21,6 +23,13 @@ const host = useHost()
 const focus = useFocus()
 const services = useServices()
 const pageId = useCurrentPageId()
+const summary = useDocumentSummary()
+const renameOpen = ref(false)
+const renameFrom = ref('')
+const renameTo = ref('')
+const renamePreview = ref<RefsPreviewResult | null>(null)
+const renameError = ref('')
+const renameBusy = ref(false)
 
 const MENUS = [
   { id: 'file', labelKey: 'menu.file' },
@@ -59,6 +68,74 @@ function pageTitle(): string {
 function documents(): DocumentService {
   return services.require(DOCUMENT_SERVICE)
 }
+
+function mutations(): ScriptMutationServicePort {
+  return services.require(SCRIPT_MUTATION_SERVICE)
+}
+
+const documentEditState = computed(() => {
+  void summary.value.revision
+  const documentCommands = services.get(DOCUMENT_COMMANDS)
+  return {
+    canUndo: documentCommands?.canUndo === true,
+    canRedo: documentCommands?.canRedo === true,
+  }
+})
+
+function openDocumentRename(): void {
+  if (summary.value.docId === null) return
+  renameFrom.value = summary.value.docId
+  renameTo.value = ''
+  renamePreview.value = null
+  renameError.value = ''
+  renameOpen.value = true
+}
+
+async function previewRename(): Promise<void> {
+  if (renameBusy.value || renameTo.value.trim() === '') return
+  renameBusy.value = true
+  renameError.value = ''
+  try {
+    const result = await mutations().previewRefs(renameFrom.value, renameTo.value.trim())
+    renamePreview.value = result
+    if (!result.ok) renameError.value = result.message
+  } finally {
+    renameBusy.value = false
+  }
+}
+
+async function applyRename(): Promise<void> {
+  const preview = renamePreview.value
+  if (renameBusy.value || preview === null || !preview.ok) return
+  renameBusy.value = true
+  try {
+    const result: RefsApplyResult = await mutations().applyRefs(
+      preview.from,
+      preview.to,
+      preview.files.length,
+    )
+    if (!result.ok) {
+      renameError.value = result.rolledBack
+        ? result.message
+        : `${result.message}（回滚失败：${(result.failedPaths ?? []).join('、')}）`
+      return
+    }
+    renameOpen.value = false
+    renamePreview.value = null
+  } finally {
+    renameBusy.value = false
+  }
+}
+
+watch(renameTo, () => {
+  renamePreview.value = null
+  renameError.value = ''
+})
+
+services.require(SHELL_ACTIONS_SERVICE).setDocumentRenameHandler?.(openDocumentRename)
+onBeforeUnmount(() => {
+  services.get(SHELL_ACTIONS_SERVICE)?.setDocumentRenameHandler?.(null)
+})
 
 async function run(commandId: string): Promise<void> {
   openMenu.value = null
@@ -149,7 +226,44 @@ defineExpose({ focusRegion: () => focus.focusRegion('topbar') })
       </div>
     </nav>
 
-    <div class="page-title" :title="pageTitle()">{{ pageTitle() }}</div>
+    <section
+      v-if="pageId === 'document' && summary.docId !== null"
+      class="edit-card"
+      role="toolbar"
+      aria-label="文档编辑"
+    >
+      <button type="button" class="edit-button script-graph-link" @click="run('file.backToProject')">
+        {{ i18n.t('nav.scriptGraph') }}
+      </button>
+      <span class="document-name" :title="summary.path ?? summary.name">{{ summary.name || i18n.t('doc.untitled') }}</span>
+      <button type="button" class="document-id" :title="i18n.t('cmd.file.renameDocId')" @click="openDocumentRename">
+        {{ summary.docId }}
+      </button>
+      <span class="edit-divider" aria-hidden="true"></span>
+      <button type="button" class="edit-button" :title="i18n.t('doc.save')" @click="run('file.saveDoc')">
+        {{ i18n.t('doc.save') }}
+      </button>
+      <button
+        type="button"
+        class="edit-icon"
+        :disabled="!documentEditState.canUndo"
+        :aria-label="i18n.t('doc.undo')"
+        :title="i18n.t('doc.undo')"
+        @click="run('edit.undo')"
+      >↶</button>
+      <button
+        type="button"
+        class="edit-icon"
+        :disabled="!documentEditState.canRedo"
+        :aria-label="i18n.t('doc.redo')"
+        :title="i18n.t('doc.redo')"
+        @click="run('edit.redo')"
+      >↷</button>
+      <button type="button" class="edit-button" :title="i18n.t('doc.validate')" @click="run('file.validateDoc')">
+        {{ i18n.t('doc.validate') }}
+      </button>
+    </section>
+    <div v-else class="page-title">{{ pageTitle() }}</div>
 
     <div v-if="showWindowButtons" class="window-buttons">
       <button type="button" class="window-button" :aria-label="i18n.t('cmd.window.minimize')" @click="host.window.minimize()">—</button>
@@ -163,6 +277,27 @@ defineExpose({ focusRegion: () => focus.focusRegion('topbar') })
       </button>
       <button type="button" class="window-button window-close" :aria-label="i18n.t('cmd.window.close')" @click="host.window.close()">✕</button>
     </div>
+
+    <WorkbenchDialog
+      v-if="renameOpen"
+      title="改脚本 id"
+      dialog-id="rename-document"
+      width="480px"
+      :dismissible="!renameBusy"
+      @close="renameOpen = false"
+    >
+      <div class="rename-form">
+        <label>旧 id<input :value="renameFrom" readonly></label>
+        <label>新 id<input v-model="renameTo" autofocus :disabled="renameBusy" placeholder="[A-Za-z0-9_]{1,32}" @keydown.enter.prevent="previewRename"></label>
+        <p v-if="renameError" class="rename-error" role="alert">{{ renameError }}</p>
+        <p v-if="renamePreview?.ok">共 {{ renamePreview.totalReferences }} 处引用，{{ renamePreview.files.length }} 个文件</p>
+      </div>
+      <template #footer>
+        <button type="button" :disabled="renameBusy" @click="renameOpen = false">取消</button>
+        <button type="button" :disabled="renameBusy || renameTo.trim() === ''" @click="previewRename">预览</button>
+        <button type="button" :disabled="renameBusy || renamePreview === null || !renamePreview.ok" @click="applyRename">应用</button>
+      </template>
+    </WorkbenchDialog>
   </header>
 </template>
 
@@ -241,8 +376,11 @@ defineExpose({ focusRegion: () => focus.focusRegion('topbar') })
 .menu-item-check { color: var(--success); }
 .menu-item-accel { color: var(--text-muted); font-size: 11px; }
 .menu-empty { padding: 6px 8px; color: var(--text-muted); font-size: 12px; }
+.page-title, .edit-card {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .page-title {
-  flex: 1;
   text-align: center;
   font-size: 12px;
   color: var(--text-secondary);
@@ -250,6 +388,76 @@ defineExpose({ focusRegion: () => focus.focusRegion('topbar') })
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.edit-card {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: fit-content;
+  max-width: 760px;
+  min-height: 30px;
+  height: 30px;
+  margin: 0 auto;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  -webkit-app-region: no-drag;
+}
+.document-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.document-id {
+  flex: 0 1 auto;
+  max-width: 150px;
+  overflow: hidden;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.document-id:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.edit-divider { width: 1px; height: 16px; margin: 0 3px; background: var(--border); }
+.edit-button, .edit-icon {
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.edit-button { padding: 0 7px; font-size: 11px; }
+.script-graph-link { flex-shrink: 0; white-space: nowrap; color: var(--text); }
+.edit-icon { width: 24px; padding: 0; font-size: 15px; line-height: 1; }
+.edit-button:hover, .edit-icon:hover:not(:disabled), .document-id:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.edit-button:focus-visible, .edit-icon:focus-visible, .document-id:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+.edit-icon:disabled { color: var(--text-muted); opacity: 0.45; cursor: default; }
+.rename-form { display: grid; gap: 10px; }
+.rename-form p { margin: 0; }
+.rename-form label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 12px; }
+.rename-form input { padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg-panel); color: var(--text); }
+.rename-error { color: var(--error); }
 .window-buttons { display: flex; align-items: center; -webkit-app-region: no-drag; }
 .window-button {
   width: 34px;
@@ -263,4 +471,14 @@ defineExpose({ focusRegion: () => focus.focusRegion('topbar') })
 .window-button:hover { background: var(--bg-hover); color: var(--text); }
 .window-close:hover { background: var(--error); color: var(--bg-app); }
 .window-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+@media (max-width: 1180px) {
+  .brand-name { display: none; }
+  .document-name { max-width: 180px; }
+  .document-id { max-width: 100px; }
+}
+@media (max-width: 900px) {
+  .document-id, .edit-divider { display: none; }
+  .document-name { max-width: 140px; }
+  .edit-card { max-width: 420px; }
+}
 </style>

@@ -4,7 +4,7 @@
  * `FocusService` 只维护区域表；这里把外壳的固定区域登记进去，
  * 让 `F6 / Shift+F6` 真正有东西可切。面板自己的区域由 `PanelHost` 注册。
  *
- * 顺序固定：顶栏 → 页面 → 文档顶栏 → 面板（含抽屉标签）→ 状态区。
+ * 顺序固定：顶栏 → 页面 → 面板（含标签）→ 状态区。
  */
 import type { FocusServicePort } from '../api/commands.ts'
 
@@ -18,7 +18,6 @@ export interface ShellFocusRegionSpec {
 export const SHELL_FOCUS_REGIONS: readonly ShellFocusRegionSpec[] = [
   { id: 'topbar', order: 10 },
   { id: 'page', order: 20 },
-  { id: 'document-header', order: 30 },
   { id: 'statusbar', order: 90 },
 ] as const
 

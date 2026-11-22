@@ -54,6 +54,10 @@ export interface ShellCommandDeps {
   openShortcutsHelp(): void
   /** 打开关于。 */
   openAbout(): void
+  /** 返回项目页（未保存守卫由外壳处理）。 */
+  backToProject(): Promise<void>
+  /** 打开当前文档 id 改名对话框。 */
+  openDocumentRename(): void
   /**
    * 保存前的未烘焙缓动三选一（06-06 §4.2）。
    *
@@ -203,6 +207,16 @@ export function registerCoreCommands(ctx: PluginContext): void {
     },
   })
 
+  register('file.renameDocId', {
+    titleKey: 'cmd.file.renameDocId',
+    category: '文件',
+    menu: { menu: 'file', group: '3_validate', order: 20 },
+    enabled: (commandCtx) => documentsOf(commandCtx).summary().docId !== null,
+    run: () => {
+      requireDeps().openDocumentRename()
+    },
+  })
+
   register('file.revertDoc', {
     titleKey: 'cmd.file.revertDoc',
     category: '文件',
@@ -225,6 +239,16 @@ export function registerCoreCommands(ctx: PluginContext): void {
       if (result === 'proceed') {
         requireDeps().closeDocument()
       }
+    },
+  })
+
+  register('file.backToProject', {
+    titleKey: 'doc.back',
+    category: '文件',
+    menu: { menu: 'file', group: '5_close', order: 20 },
+    enabled: (commandCtx) => commandCtx.pageId === 'document',
+    run: async () => {
+      await requireDeps().backToProject()
     },
   })
 

@@ -125,6 +125,8 @@ onMounted(() => {
     },
     openShortcutsHelp: () => actions().openSettings('shortcuts'),
     openAbout: () => actions().openSettings('about'),
+    backToProject: () => actions().backToProject(),
+    openDocumentRename: () => actions().openDocumentRename(),
     confirmPendingBake: async (lines) => {
       const files = props.services.get(FILE_DIALOG_PORT)
       if (files === undefined) {

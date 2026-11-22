@@ -20,6 +20,7 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
   zh_cn: {
     'app.title': '沉浸式电影编辑器',
     'nav.project': '项目',
+    'nav.scriptGraph': '脚本图',
     'nav.document': '文档',
     'nav.settings': '设置',
     'menu.file': '文件',
@@ -119,6 +120,7 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     'cmd.file.openDoc': '打开脚本…',
     'cmd.file.revertDoc': '从磁盘重载',
     'cmd.file.closeDoc': '关闭文档',
+    'cmd.file.renameDocId': '改脚本 id…',
     'cmd.app.commandPalette': '命令面板',
     'cmd.workspace.focusNext': '下一个焦点区域',
     'cmd.workspace.focusPrev': '上一个焦点区域',
@@ -218,6 +220,7 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
   en_us: {
     'app.title': 'Immersive Cinematics Editor',
     'nav.project': 'Project',
+    'nav.scriptGraph': 'Script Graph',
     'nav.document': 'Document',
     'nav.settings': 'Settings',
     'menu.file': 'File',
@@ -317,6 +320,7 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     'cmd.file.openDoc': 'Open script…',
     'cmd.file.revertDoc': 'Reload from disk',
     'cmd.file.closeDoc': 'Close document',
+    'cmd.file.renameDocId': 'Rename script ID…',
     'cmd.app.commandPalette': 'Command palette',
     'cmd.workspace.focusNext': 'Focus next region',
     'cmd.workspace.focusPrev': 'Focus previous region',

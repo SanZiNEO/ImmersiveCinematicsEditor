@@ -1,10 +1,9 @@
 <script setup lang="ts">
 /**
- * 文档页（04-04）：文档顶栏 + 布局树。
+ * 文档页（04-04）：直接渲染布局树。
  *
- * 页面不持有尺寸、不读文档字段；布局完全由 `DockSurface` → `LayoutRenderer` → `getTree` 驱动。
+ * 文档身份、保存状态与操作统一放在应用顶栏 / 菜单 / 状态栏，避免再占一整行。
  */
-import DocumentHeader from './DocumentHeader.vue'
 import DockSurface from '../dock/DockSurface.vue'
 import { useCurrentPageId } from './useWorkbench.ts'
 
@@ -13,7 +12,6 @@ const pageId = useCurrentPageId()
 
 <template>
   <section class="document-page">
-    <DocumentHeader />
     <DockSurface :page-id="pageId" />
   </section>
 </template>
