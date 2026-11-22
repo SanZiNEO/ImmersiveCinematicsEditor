@@ -47,11 +47,6 @@ const values = computed<Record<string, JsonValue>>(() => {
   return result
 })
 
-const summary = computed(() => {
-  void revision.value
-  return documentService?.summary() ?? null
-})
-
 const scriptName = computed(() => {
   const name = values.value.name
   return typeof name === 'string' && name.trim() !== '' ? name : '未命名脚本'
@@ -141,7 +136,6 @@ function openTriggers(): void {
     <header class="script-panel__header">
       <h2 class="script-panel__title">脚本参数</h2>
       <span v-if="hasDocument" class="script-panel__name" :title="scriptName">{{ scriptName }}</span>
-      <span v-if="summary?.dirty" class="script-panel__dirty">未保存</span>
     </header>
 
     <p v-if="documentService === undefined" class="script-panel__notice" role="alert">
@@ -239,15 +233,6 @@ function openTriggers(): void {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.script-panel__dirty {
-  margin-left: auto;
-  padding: 0 4px;
-  border: 1px solid var(--warning);
-  border-radius: 3px;
-  color: var(--warning);
-  font-size: 10px;
 }
 
 .script-panel__scroll {

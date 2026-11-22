@@ -88,6 +88,20 @@ const isEvent = computed(() => props.row.mode === 'event')
 const hasFrames = computed(() => props.row.keyframes.length > 0)
 const stackedLabel = computed(() =>
   props.options?.multiline === true && props.options.stackedLabel === true)
+/** 长文本、分段控件、滑杆和专用控件需要独占第二行。 */
+const wideControl = computed(() =>
+  stackedLabel.value
+  || readOnly.value
+  || isEvent.value
+  || props.row.type === 'string'
+  || props.row.type === 'ref'
+  || props.row.type === 'struct'
+  || props.options?.reference !== undefined
+  || props.options?.range !== undefined
+  || customField.value !== undefined
+  || fieldSurfaceComponent.value !== null)
+/** 分段枚举按可用宽度排列；空间不足时由值表单自行换行。 */
+const segmentedControl = computed(() => props.options?.segmented === true)
 
 /**
  * 只有支持动画的普通标量行有帧按钮；结构、事件、静态与未知路径都没有。
@@ -217,6 +231,8 @@ function jumpFrame(time: number | undefined): void {
       'prop-row--axis': axis === true,
       'prop-row--actions': animatableRow,
       'prop-row--stacked': stackedLabel,
+      'prop-row--wide': wideControl,
+      'prop-row--segmented': segmentedControl,
     }"
     :data-path="row.path"
     :data-severity="severity ?? ''"
@@ -339,17 +355,13 @@ function jumpFrame(time: number | undefined): void {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-height: 34px;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border);
+  min-height: 30px;
+  padding: 3px 0;
+  border-bottom: 0;
   border-left: 2px solid transparent;
   color: var(--text);
   font-size: 12px;
   outline: none;
-}
-
-.prop-row:last-child {
-  border-bottom: 0;
 }
 
 .prop-row:hover {
@@ -385,29 +397,22 @@ function jumpFrame(time: number | undefined): void {
 
 .prop-row__main {
   display: grid;
-  grid-template-columns: minmax(72px, 0.9fr) minmax(0, 2fr) auto;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
   grid-template-areas: 'label value frames';
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 
-/* 没有帧按钮的行：值区占满剩余宽度（三轴格里另有布局）。 */
-.prop-row:not(.prop-row--actions):not(.prop-row--axis) .prop-row__main {
-  grid-template-columns: minmax(72px, 0.9fr) minmax(0, 1fr);
+/* 值控件靠左，剩余空间留白；帧按钮组固定在共同右边缘。 */
+.prop-row:not(.prop-row--actions) .prop-row__main {
+  grid-template-columns: max-content minmax(0, 1fr);
   grid-template-areas: 'label value';
 }
 
-/* 三轴并列：标签 + 帧按钮在数值上方，容器不溢出。 */
-.prop-row--axis {
-  min-height: 0;
-  padding: 2px 0;
-  border-bottom: 0;
-  font-size: 11px;
-}
-
-/* 长文本：标签单独占首行，输入框占满下一行。 */
-.prop-row.prop-row--stacked:not(.prop-row--actions):not(.prop-row--axis) .prop-row__main {
+/* 长控件：标签与帧按钮留在首行，控件在下一行占满全宽。 */
+.prop-row.prop-row--wide .prop-row__main,
+.prop-row.prop-row--stacked .prop-row__main {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     'label frames'
@@ -416,17 +421,37 @@ function jumpFrame(time: number | undefined): void {
   gap: 3px 4px;
 }
 
-.prop-row--stacked .prop-row__value {
+.prop-row.prop-row--wide .prop-row__value,
+.prop-row.prop-row--stacked .prop-row__value {
   width: 100%;
 }
 
-.prop-row--axis .prop-row__main {
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    'label frames'
-    'value value';
-  align-items: center;
-  gap: 3px 2px;
+.prop-row--segmented .prop-row__main {
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  grid-template-areas: 'label value frames';
+  align-items: start;
+}
+
+.prop-row--segmented .prop-row__value {
+  min-width: 0;
+}
+
+/* 分段选项按文字宽度排列；两个短选项不再撑满整个值列。 */
+.prop-row--segmented .prop-row__value :deep(.value-form__segmented) {
+  display: inline-flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-self: flex-start;
+  width: auto;
+  max-width: 100%;
+  grid-auto-flow: initial;
+  grid-auto-columns: initial;
+}
+
+.prop-row--segmented .prop-row__value :deep(.value-form__segment) {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
 }
 
 .prop-row__label-wrap {
@@ -446,11 +471,6 @@ function jumpFrame(time: number | undefined): void {
   white-space: nowrap;
 }
 
-.prop-row--axis .prop-row__label {
-  font-size: 11px;
-  font-weight: 600;
-}
-
 .prop-row__badge {
   flex: 0 0 auto;
   padding: 0 4px;
@@ -466,26 +486,66 @@ function jumpFrame(time: number | undefined): void {
   min-width: 0;
 }
 
+/* 数值控件不强制撑满整列，短值仍贴着标签。 */
+.prop-row__value :deep(.value-form--inspector) {
+  width: auto;
+  max-width: 100%;
+}
+
+.prop-row__value :deep(.value-form--inspector .value-form__line) {
+  width: auto;
+  max-width: 100%;
+}
+
+.prop-row__value :deep(.value-form--inspector .value-form__line--number) {
+  width: min(132px, 100%);
+}
+
+.prop-row__value :deep(.value-form--inspector .value-form__input:not(.value-form__input--number)) {
+  max-width: 220px;
+}
+
+.prop-row__value :deep(.value-form--inspector .value-form__input--number) {
+  flex: 0 1 88px;
+  width: 88px;
+  min-width: 76px;
+  max-width: 88px;
+}
+
+.prop-row--wide .prop-row__value :deep(.value-form--inspector .value-form__input),
+.prop-row--wide .prop-row__value :deep(.value-form--inspector .value-form__line--number) {
+  max-width: none;
+}
+
+.prop-row--wide .prop-row__value :deep(.value-form--inspector) {
+  width: 100%;
+}
+
+.prop-row__value :deep(.value-form--inspector .value-form__line:has(.value-form__segmented)) {
+  width: min(320px, 100%);
+}
+
 .prop-row__frames {
   display: inline-flex;
   flex: 0 0 auto;
   grid-area: frames;
   align-items: center;
   gap: 1px;
+  margin-left: auto;
 }
 
 .prop-row__frame {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  min-height: 26px;
-  padding: 0 2px;
+  min-width: 18px;
+  min-height: 22px;
+  padding: 0 1px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
@@ -506,22 +566,13 @@ function jumpFrame(time: number | undefined): void {
 }
 
 .prop-row__frame--toggle {
-  font-size: 16px;
+  min-width: 16px;
+  min-height: 20px;
+  font-size: 10px;
 }
 
 .prop-row__frame--on {
   color: var(--accent);
-}
-
-.prop-row--axis .prop-row__frame {
-  min-width: 14px;
-  min-height: 22px;
-  padding: 0 1px;
-  font-size: 13px;
-}
-
-.prop-row--axis .prop-row__frame--toggle {
-  font-size: 14px;
 }
 
 .prop-row__raw {
@@ -603,12 +654,28 @@ function jumpFrame(time: number | undefined): void {
   color: var(--warning);
 }
 
-/* 三轴格子里数值优先，滑杆隐藏（窄栏不溢出）。 */
-.prop-row--axis :deep(.value-form__slider) {
-  display: none;
-}
+@media (max-width: 420px) {
+  .prop-row__main {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label frames'
+      'value value';
+  }
 
-.prop-row--axis :deep(.value-form__input--number) {
-  max-width: none;
+  .prop-row:not(.prop-row--actions) .prop-row__main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'label'
+      'value';
+  }
+
+  .prop-row__value :deep(.value-form--inspector) {
+    width: 100%;
+  }
+
+  .prop-row__value :deep(.value-form--inspector .value-form__line--number) {
+    width: 100%;
+  }
+
 }
 </style>

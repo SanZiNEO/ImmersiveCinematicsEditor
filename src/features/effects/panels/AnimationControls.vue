@@ -202,8 +202,10 @@ function onNext(): void {
 }
 
 .anim-ctl--compact .anim-ctl__btn {
-  min-width: 16px;
+  min-width: 14px;
+  width: 14px;
   height: 16px;
+  padding: 0;
   font-size: 10px;
 }
 

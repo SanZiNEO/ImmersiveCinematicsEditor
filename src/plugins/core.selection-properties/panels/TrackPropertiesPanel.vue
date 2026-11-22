@@ -35,11 +35,6 @@ const session = computed(() => {
   return documentService?.sessionView() ?? null
 })
 
-const summary = computed(() => {
-  void revision.value
-  return documentService?.summary() ?? null
-})
-
 const track = computed<TrackViewEntry | null>(() => {
   const id = trackId.value
   if (id === null) {
@@ -147,7 +142,6 @@ function backToScript(): void {
     <header class="track-panel__header">
       <h2 class="track-panel__title">轨道参数</h2>
       <span v-if="track !== null" class="track-panel__name" :title="displayName">{{ displayName }}</span>
-      <span v-if="summary?.dirty" class="track-panel__dirty">未保存</span>
     </header>
 
     <p v-if="documentService === undefined" class="track-panel__notice" role="alert">
@@ -282,15 +276,6 @@ function backToScript(): void {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.track-panel__dirty {
-  margin-left: auto;
-  padding: 0 4px;
-  border: 1px solid var(--warning);
-  border-radius: 3px;
-  color: var(--warning);
-  font-size: 10px;
 }
 
 .track-panel__scroll {

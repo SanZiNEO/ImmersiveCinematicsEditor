@@ -223,18 +223,20 @@ function remove(): void {
 .breath-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-raised);
+  padding: 0 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
 }
 
 .breath-card__head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  padding: 3px 0;
 }
 
 .breath-card__title {
@@ -276,14 +278,14 @@ function remove(): void {
 .breath-card__body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
 }
 
 .breath-axis {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   min-width: 0;
 }
 
@@ -292,14 +294,15 @@ function remove(): void {
 }
 
 .breath-fold {
-  margin: 2px 0 0;
-  padding: 2px 0;
-  border-top: 1px dashed var(--border);
+  margin: 0;
+  padding: 0;
+  border-top: 0;
 }
 
 .breath-fold > summary {
   color: var(--text-secondary);
   font-size: 11px;
+  padding: 3px 0;
   cursor: pointer;
 }
 
@@ -308,8 +311,8 @@ function remove(): void {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
+  padding: 4px 0 6px;
+  border-top: 0;
 }
 
 .breath-card__remove {
@@ -330,6 +333,7 @@ function remove(): void {
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.45;
+  padding-bottom: 3px;
 }
 
 .breath-warning {

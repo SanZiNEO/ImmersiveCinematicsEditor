@@ -1155,7 +1155,7 @@ function onRefPayloadChange(event: Event): void {
 /* Inspector opt-in：只作用于右栏显式传入 options 的实例，共享面板不受影响。 */
 .value-form--inspector {
   gap: 3px;
-  font-size: 12px;
+  font-size: 10px;
 }
 
 .value-form--inspector .value-form__line {
@@ -1163,21 +1163,21 @@ function onRefPayloadChange(event: Event): void {
 }
 
 .value-form--inspector .value-form__input {
-  min-height: 25px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  min-height: 22px;
+  padding: 1px 5px;
+  border-radius: 3px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 10px;
 }
 
 .value-form--inspector .value-form__input--number {
-  max-width: 84px;
+  max-width: 88px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
 .value-form--inspector .value-form__suffix {
-  font-size: 11px;
+  font-size: 9.5px;
 }
 
 .value-form--inspector .value-form__slider {
@@ -1185,6 +1185,18 @@ function onRefPayloadChange(event: Event): void {
   min-width: 30px;
   margin: 0;
   accent-color: var(--accent);
+}
+
+/* 窄栏里的滑杆行改为两行：控件行 + 滑杆行，不压扁数值。 */
+@media (max-width: 420px) {
+  .value-form--inspector .value-form__line--number {
+    flex-wrap: wrap;
+  }
+
+  .value-form--inspector .value-form__slider {
+    order: 2;
+    flex-basis: 100%;
+  }
 }
 
 .value-form--inspector .value-form__slider:disabled {
@@ -1236,13 +1248,13 @@ function onRefPayloadChange(event: Event): void {
 .value-form--inspector .value-form__reset {
   flex: 0 0 auto;
   min-width: 20px;
-  min-height: 24px;
+  min-height: 22px;
   padding: 0 3px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 11px;
   line-height: 1;
   cursor: pointer;
 }
@@ -1265,23 +1277,23 @@ function onRefPayloadChange(event: Event): void {
   grid-auto-flow: column;
   gap: 2px;
   min-width: 0;
-  padding: 2px;
+  padding: 1px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg-panel);
 }
 
 .value-form--inspector .value-form__segment {
   min-width: 0;
-  min-height: 25px;
-  padding: 2px 6px;
+  min-height: 20px;
+  padding: 1px 5px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.35;
-  white-space: normal;
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1313,7 +1325,7 @@ function onRefPayloadChange(event: Event): void {
   padding: 4px 6px;
   border-radius: 4px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 10px;
   resize: vertical;
 }
 

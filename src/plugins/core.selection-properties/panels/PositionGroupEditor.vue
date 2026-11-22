@@ -450,7 +450,7 @@ const worldOriginNote = computed(() => {
         </p>
       </fieldset>
 
-      <!-- 三轴：各自 schema 行与帧状态，横向排布、窄栏换行 -->
+      <!-- 三轴：各自 schema 行与帧状态，逐行全宽排列。 -->
       <div class="pos-axis-label">{{ axisTitle }}</div>
       <div class="pos-axis">
         <div v-if="axisXRow" class="pos-axis__cell">
@@ -482,14 +482,15 @@ const worldOriginNote = computed(() => {
 .pos-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
 }
 
 .pos-card__head {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 3px;
+  padding: 2px 0;
 }
 
 .pos-card__title {
@@ -508,15 +509,14 @@ const worldOriginNote = computed(() => {
 .pos-card__body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
 }
 
 .pos-basis {
-  margin: 2px 0;
-  padding: 4px 0 6px;
+  margin: 0;
+  padding: 0;
   border: 0;
-  border-block-start: 1px solid var(--border);
   min-inline-size: 0;
 }
 
@@ -527,9 +527,9 @@ const worldOriginNote = computed(() => {
 }
 
 .pos-axis {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   min-width: 0;
 }
 
@@ -540,22 +540,25 @@ const worldOriginNote = computed(() => {
 .pos-axis-label {
   color: var(--text-muted);
   font-size: 11px;
+  padding-top: 4px;
 }
 
 .pos-fold {
-  margin: 2px 0 0;
-  padding: 2px 0;
-  border-top: 1px dashed var(--border);
+  margin: 0;
+  padding: 0;
+  border-top: 0;
 }
 
 .pos-fold > summary {
   color: var(--text-secondary);
   font-size: 11px;
+  padding: 3px 0;
   cursor: pointer;
 }
 
 .pos-note {
   margin: 0;
+  padding: 3px 0 5px;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.45;

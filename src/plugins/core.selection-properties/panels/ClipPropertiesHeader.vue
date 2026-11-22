@@ -92,7 +92,6 @@ function focusTimeline(): void {
     <div class="props-header__line">
       <span class="props-header__type">{{ typeLabel }}</span>
       <h2 class="props-header__name">{{ clip.label }}</h2>
-      <span v-if="summary?.dirty" class="props-header__dirty">未保存</span>
       <button
         v-if="issueLabel !== null"
         type="button"
@@ -150,14 +149,6 @@ function focusTimeline(): void {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.props-header__dirty {
-  padding: 0 4px;
-  border: 1px solid var(--warning);
-  border-radius: 3px;
-  color: var(--warning);
-  font-size: 10px;
 }
 
 .props-header__badge {

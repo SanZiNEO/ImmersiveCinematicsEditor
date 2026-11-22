@@ -521,14 +521,15 @@ const LOCK_NOTE = '锁非空时替换该轴基准，随后再叠加偏航 / 俯�
 .ori-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
 }
 
 .ori-card__head {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 3px;
+  padding: 2px 0;
 }
 
 .ori-card__title {
@@ -547,14 +548,14 @@ const LOCK_NOTE = '锁非空时替换该轴基准，随后再叠加偏航 / 俯�
 .ori-card__body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
 }
 
 .ori-axis {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   min-width: 0;
 }
 
@@ -564,29 +565,31 @@ const LOCK_NOTE = '锁非空时替换该轴基准，随后再叠加偏航 / 俯�
 
 .ori-fold,
 .ori-angle {
-  margin: 2px 0 0;
-  padding: 2px 0;
-  border-top: 1px dashed var(--border);
+  margin: 0;
+  padding: 0;
+  border-top: 0;
 }
 
 .ori-fold > summary,
 .ori-angle > summary {
   color: var(--text-secondary);
   font-size: 11px;
+  padding: 3px 0;
   cursor: pointer;
 }
 
 .ori-base {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
+  gap: 0;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .ori-note {
   margin: 0;
+  padding: 3px 0 5px;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.45;
