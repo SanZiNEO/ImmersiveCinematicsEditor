@@ -26,6 +26,7 @@ import {
   type RecordRef,
 } from '../../../../features/behavior/shared.ts'
 import { onFocus, takeFocus } from '../../../../features/behavior/focus.ts'
+import { enumerateRawClips } from '../../../core.timeline/eventMarkers.ts'
 import EventRecordDetail from './EventRecordDetail.vue'
 
 const props = defineProps<{
@@ -68,6 +69,30 @@ const root = computed<JsonObject | null>(() => {
   void props.docRevision
   return documentService?.root() ?? null
 })
+
+/**
+ * 行为记录身份保留 JSON 路径；文档读取与命令改用注册表片段键。
+ *
+ * `eventRecords()` 与 `enumerateRawClips()` 按同一文档顺序枚举内联 / 独立片段，
+ * `DocumentService.clips()` 也按同一存活片段顺序返回注册表键。这里按顺序一一配对，
+ * 不按可能重复的运行时 id 猜测，也不会被非对象槽位改变原始路径下标。
+ */
+const registryKeys = computed<ReadonlyMap<string, string>>(() => {
+  const currentRoot = root.value
+  if (currentRoot === null || documentService === undefined) {
+    return new Map()
+  }
+  const raw = enumerateRawClips(currentRoot)
+  const clips = documentService.clips()
+  if (raw.length !== clips.length) {
+    return new Map()
+  }
+  return new Map(raw.map((clip, index) => [clip.path, clips[index].clipKey]))
+})
+
+function registryKeyOf(path: string): string {
+  return registryKeys.value.get(path) ?? path
+}
 
 /** 片段显示名与播放上下文（起始 / 时长 / 无限），用于摘要全局时间换算。 */
 interface ClipInfo {
@@ -119,6 +144,7 @@ function siblingKey(node: EventRecordNode): string {
 
 interface ClipGroup {
   clipKey: string
+  registryKey: string
   label: string
   ctx: ClipEventContext
   nodes: EventRecordNode[]
@@ -150,9 +176,11 @@ const trackGroups = computed<TrackGroup[]>(() => {
     }
     const clips: ClipGroup[] = []
     for (const [clipKey, clipNodes] of byClip) {
-      const info = clipInfo.value.get(clipKey)
+      const registryKey = registryKeyOf(clipKey)
+      const info = clipInfo.value.get(registryKey)
       clips.push({
         clipKey,
+        registryKey,
         label: info?.label ?? clipKey,
         ctx: info?.ctx ?? { clipStartTime: 0, duration: 0, infinite: false },
         nodes: clipNodes,
@@ -172,15 +200,30 @@ const selectedNode = computed<EventRecordNode | undefined>(() => {
   return nodes.value.find((node) => sameRecordRef(node.ref, activeRef.value!))
 })
 
-const selectedObjects = computed<JsonObject | null>(() => {
+const selectedRegistryKey = computed<string | null>(() => {
   if (selectedNode.value === undefined) {
     return null
   }
-  return documentService?.clipObjects(selectedNode.value.clipKey) ?? null
+  return registryKeyOf(selectedNode.value.clipKey)
+})
+
+/** 详情编辑器只换命令 / 文档读取键；`ref` 仍是行为模型的原始路径身份。 */
+const selectedDetailNode = computed<EventRecordNode | undefined>(() => {
+  if (selectedNode.value === undefined || selectedRegistryKey.value === null) {
+    return undefined
+  }
+  return { ...selectedNode.value, clipKey: selectedRegistryKey.value }
+})
+
+const selectedObjects = computed<JsonObject | null>(() => {
+  if (selectedRegistryKey.value === null) {
+    return null
+  }
+  return documentService?.clipObjects(selectedRegistryKey.value) ?? null
 })
 
 function describe(node: EventRecordNode): string {
-  const info = clipInfo.value.get(node.clipKey)
+  const info = clipInfo.value.get(registryKeyOf(node.clipKey))
   return describeEventRecord(node, info?.ctx)
 }
 
@@ -233,7 +276,7 @@ function nodeKey(node: EventRecordNode): string {
                 type="button"
                 class="events-tab__locate"
                 :title="`定位到片段 ${clip.label}`"
-                @click="openClip(clip.clipKey)"
+                @click="openClip(clip.registryKey)"
               >
                 定位到片段
               </button>
@@ -260,11 +303,11 @@ function nodeKey(node: EventRecordNode): string {
 
       <div class="events-tab__detail">
         <EventRecordDetail
-          v-if="selectedNode !== undefined"
+          v-if="selectedNode !== undefined && selectedDetailNode !== undefined"
           :key="nodeKey(selectedNode)"
-          :node="selectedNode"
+          :node="selectedDetailNode"
           :objects="selectedObjects"
-          :clip-ctx="clipInfo.get(selectedNode.clipKey)?.ctx ?? { clipStartTime: 0, duration: 0, infinite: false }"
+          :clip-ctx="clipInfo.get(selectedRegistryKey ?? '')?.ctx ?? { clipStartTime: 0, duration: 0, infinite: false }"
           :sibling-count="siblingCounts.get(siblingKey(selectedNode)) ?? 1"
         />
         <p v-else class="events-tab__empty">请选择左侧一条事件记录。</p>
