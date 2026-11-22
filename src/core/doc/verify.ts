@@ -610,7 +610,7 @@ async function main(): Promise<void> {
         continue
       }
       const text = await readSource(name)
-      if (text.includes('selection.track') || text.includes('selectedClips') || text.includes('.selection.keyframe]')) {
+      if (/\bselection\.track\b/.test(text) || text.includes('selectedClips') || text.includes('.selection.keyframe]')) {
         offender = name
         break
       }
