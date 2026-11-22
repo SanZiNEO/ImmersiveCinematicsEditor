@@ -16,7 +16,7 @@ import type { DocumentService, CommitOutcome } from '../../../workbench/api/docu
 import type { JsonObject } from '../../../core/doc/types.ts'
 import { isJsonObject } from '../../../core/doc/json.ts'
 import type { DocCommand } from '../../../core/doc/commands.ts'
-import { onFocus, takeFocus, requestFocus, clearFocus } from '../../../features/behavior/focus.ts'
+import { onFocus, takeFocus, clearFocus } from '../../../features/behavior/focus.ts'
 import type { RecordRef } from '../../../features/behavior/shared.ts'
 import { sameRecordRef } from '../../../features/behavior/shared.ts'
 import { describeEventRecord, type EventRecordNode } from '../../../features/behavior/events.ts'
@@ -49,6 +49,10 @@ import BindingDetail from './BindingDetail.vue'
 import DepsPane from './DepsPane.vue'
 import EventRecordsTab from './events/EventRecordsTab.vue'
 import FactInspectorTab from './facts/FactInspectorTab.vue'
+import TriggerDialog from './TriggerDialog.vue'
+import { GRAPH_SERVICE } from '../../../workbench/api/tokens.ts'
+import type { GraphServicePort } from '../../../workbench/api/graph.ts'
+import { buildPanelTriggers, type PanelScriptContext } from '../panels/triggerPanelModel.ts'
 
 const ctx = usePanelContext()
 const revision = usePanelRevision(ctx)
@@ -68,6 +72,30 @@ const clips = computed(() => {
 
 const model = computed<BehaviorModel>(() => buildBehaviorModel(root.value, clips.value))
 
+const metaObject = computed<JsonObject | null>(() => {
+  void revision.value
+  return documentService?.metaObject() ?? null
+})
+
+const scriptContext = computed<PanelScriptContext>(() => {
+  void revision.value
+  const graph: GraphServicePort | null = ctx.services.get(GRAPH_SERVICE) ?? null
+  const selfScriptId = typeof metaObject.value?.id === 'string' ? metaObject.value.id : undefined
+  const counts = new Map<string, number>()
+  for (const node of graph?.current()?.nodes ?? []) {
+    if (typeof node.scriptId === 'string' && node.scriptId.length > 0) {
+      counts.set(node.scriptId, (counts.get(node.scriptId) ?? 0) + 1)
+    }
+  }
+  return {
+    selfScriptId,
+    knownScriptIds: [...counts.keys()],
+    ambiguousScriptIds: [...counts].filter(([, count]) => count > 1).map(([id]) => id),
+  }
+})
+
+const triggerRows = computed(() => buildPanelTriggers(root.value, scriptContext.value))
+
 const docExists = computed(() => root.value !== null)
 
 // ── 会话态（不写 localStorage）─────────────────────────────────────────────────
@@ -80,6 +108,7 @@ const filter = ref('')
 const onlyMatch = ref(true)
 const expanded = ref<ReadonlySet<string>>(new Set(['group:trigger', 'group:rule', 'group:event']))
 const notice = ref('')
+const triggerDialog = ref<{ identity: string | null; createNew: boolean } | null>(null)
 
 // ── 草稿 ────────────────────────────────────────────────────────────────────────
 
@@ -112,6 +141,7 @@ function consumeFocus(): void {
   if (row === null) return
   selectRecord(request.target)
   if (request.target.kind === 'event') pane.value = 'events'
+  if (request.target.kind === 'trigger') openTrigger(request.target.identity)
 }
 
 onMounted(() => {
@@ -344,9 +374,8 @@ function addBinding(): void {
 }
 
 function addTrigger(): void {
-  // 触发器字段编辑器只在右栏面板；这里只把焦点交过去，不建第二套表单。
-  ctx.requestFocus('behavior.triggers')
-  requestFocus({ target: { kind: 'trigger', identity: '' }, surface: 'right-panel', origin: 'behavior-drawer' })
+  if (!docExists.value) return
+  triggerDialog.value = { identity: null, createNew: true }
 }
 
 function addEvent(): void {
@@ -366,8 +395,37 @@ function showOverview(): void {
 }
 
 function jumpTrigger(identity: string): void {
-  requestFocus({ target: { kind: 'trigger', identity }, surface: 'right-panel', origin: 'behavior-drawer' })
-  ctx.requestFocus('behavior.triggers')
+  openTrigger(identity)
+}
+
+function openTrigger(identity: string): void {
+  const row = triggerRows.value.find((candidate) => candidate.identity === identity)
+  if (row === undefined) {
+    ctx.status.notify('触发器不存在', 'warning')
+    return
+  }
+  selectRecord({ kind: 'trigger', identity })
+  triggerDialog.value = { identity, createNew: false }
+}
+
+function closeTrigger(): void {
+  triggerDialog.value = null
+}
+
+function triggerSaved(identity: string): void {
+  notice.value = '触发器已保存'
+  selectRecord({ kind: 'trigger', identity })
+}
+
+function triggerRemoved(): void {
+  notice.value = '触发器已删除'
+  selected.value = null
+}
+
+function triggerReordered(from: number, to: number): void {
+  const moved = triggerRows.value.find((entry) => entry.node.index === to)
+  if (moved !== undefined) selectRecord({ kind: 'trigger', identity: moved.identity })
+  notice.value = `触发器已从第 ${from + 1} 位移到第 ${to + 1} 位`
 }
 
 function locateBinding(bindingId: string): void {
@@ -426,7 +484,7 @@ function handleRemoveBinding(): void {
       <div class="behavior-drawer__toolbar-group">
         <button type="button" :disabled="addRuleDisabled" :title="addRuleDisabled ? '当前无文档' : '新增规则'" @click="addRule">规则</button>
         <button type="button" :disabled="addBindingDisabled" :title="addBindingDisabled ? (selectedRuleRow === null ? '需先选择一条规则' : '当前无文档') : '新增绑定'" @click="addBinding">绑定</button>
-        <button type="button" :disabled="!docExists" title="触发器在右栏面板新建 / 编辑" @click="addTrigger">触发器</button>
+        <button type="button" :disabled="!docExists" title="在居中弹窗新建触发器" @click="addTrigger">添加触发器</button>
         <button type="button" :disabled="addEventDisabled" :title="addEventDisabled ? '需先选中一个片段' : '在当前片段新增事件'" @click="addEvent">事件</button>
         <button type="button" @click="showOverview">依赖总览</button>
       </div>
@@ -506,10 +564,10 @@ function handleRemoveBinding(): void {
           @locate-rule="locateRule"
         />
 
-        <!-- 触发器摘要（只读，跳转右栏） -->
+        <!-- 触发器摘要 -->
         <section v-else-if="triggerRow !== null" class="behavior-drawer__readonly">
           <p class="behavior-drawer__summary">{{ triggerRow.summary }}</p>
-          <button type="button" @click="jumpTrigger(triggerRow.identity)">在右栏编辑触发器</button>
+          <button type="button" @click="jumpTrigger(triggerRow.identity)">编辑触发器</button>
         </section>
 
         <!-- 事件摘要（只读；字段编辑在事件页签） -->
@@ -549,6 +607,19 @@ function handleRemoveBinding(): void {
         <button type="button" @click="resolveConflict('cancel')">取消</button>
       </div>
     </div>
+
+    <TriggerDialog
+      v-if="triggerDialog !== null"
+      :rows="triggerRows"
+      :meta="metaObject"
+      :script-context="scriptContext"
+      :initial-identity="triggerDialog.identity"
+      :create-new="triggerDialog.createNew"
+      @close="closeTrigger"
+      @saved="triggerSaved"
+      @removed="triggerRemoved"
+      @reorder="triggerReordered"
+    />
   </div>
 </template>
 

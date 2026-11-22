@@ -3,7 +3,7 @@
  * 行为树左栏（11-01 §三）。
  *
  * 固定顺序：触发器 → 规则（每条下挂全部绑定，未绑定规则仍显示）→ 事件（EVENT / MOD_EVENT
- * 分组，组内按片段）。触发器行只做摘要 + 「在右栏编辑」跳转，不出现字段编辑器。
+ * 分组，组内按片段）。触发器行只做摘要 + 编辑弹窗入口，不出现字段编辑器。
  * 筛选只 dim 不自动选中；展开状态只进会话态。
  */
 import { computed } from 'vue'
@@ -100,7 +100,7 @@ const dimmed = computed(() => props.onlyMatch && props.filter.trim().length > 0)
           </button>
           <span class="tree-row__severity" :class="severityClass(row)">{{ row.severity ?? '—' }}</span>
           <button type="button" class="tree-row__jump" @click="emit('jumpTrigger', row.identity)">
-            在右栏编辑
+            编辑
           </button>
         </div>
       </div>

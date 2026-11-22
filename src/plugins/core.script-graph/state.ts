@@ -1297,7 +1297,7 @@ export class GraphController {
     }
     requestFocus({
       target: { kind: 'trigger', identity },
-      surface: 'right-panel',
+      surface: 'behavior-drawer',
       origin: 'script-graph.hover',
     })
   }

@@ -82,11 +82,11 @@ function consumeFocus(request: FocusRequest): void {
 }
 
 onMounted(() => {
-  const pending = takeFocus('right-panel')
+  const pending = takeFocus('behavior-drawer')
   if (pending !== null) consumeFocus(pending)
   disposeFocus = onFocus((request) => {
-    if (request.surface !== 'right-panel') return
-    consumeFocus(takeFocus('right-panel') ?? request)
+    if (request.surface !== 'behavior-drawer') return
+    consumeFocus(takeFocus('behavior-drawer') ?? request)
   })
 })
 

@@ -68,6 +68,14 @@ export function triggerSetTypeIntent(
   return { kind: 'trigger.setType', triggerIdentity, value, clearInapplicable }
 }
 
+/** 整体替换触发器级前置；草稿保存时与其他字段一起提交。 */
+export function triggerSetRequiresIntent(
+  triggerIdentity: string,
+  requires: JsonValue[],
+): DocCommand {
+  return { kind: 'trigger.setRequires', triggerIdentity, requires }
+}
+
 // ── 规则意图 ────────────────────────────────────────────────────────────────────
 
 /** 在 `index` 处新建规则；条件 / 动作 / 策略可由调用方给初始值。 */

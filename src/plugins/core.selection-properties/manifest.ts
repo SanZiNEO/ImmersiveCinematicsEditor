@@ -4,7 +4,7 @@
  * 编辑器页右栏唯一的**检查器**面板：同一 `selection.properties` 按选区显示
  * 脚本参数（空选区）/ 轨道参数（`domain: 'track'`）/ 片段属性（片段、对象、关键帧、
  * 多选、失效、外部域）。没有内部页签；`core.meta` 的脚本字段 UI 已并入本插件。
- * 触发器仍由独立插件 `core.behavior`（`behavior.triggers`）编辑。
+ * 触发器由「行为」侧栏中的编辑弹窗承载。
  */
 import type { PluginManifest } from '../../workbench/api/contributions.ts'
 import activate from './index.ts'

@@ -91,6 +91,8 @@ export type DocCommand =
     targetScriptId: string
   }
   | { kind: 'trigger.requires.remove'; triggerIdentity: string; index: number }
+  /** 整体替换前置数组；空数组删除 `requires` 键。 */
+  | { kind: 'trigger.setRequires'; triggerIdentity: string; requires: JsonValue[] }
   | { kind: 'trigger.setConditions'; triggerIdentity: string; patch: Record<string, JsonValue>; remove?: string[] }
   | { kind: 'trigger.setFields'; triggerIdentity: string; patch: JsonObject }
   | { kind: 'clip.add'; trackIndex: number; index?: number; clip: JsonObject }
@@ -1189,6 +1191,11 @@ export function applyCommand(ctx: ApplyContext, command: DocCommand): ApplyResul
       }
       array.splice(command.index, 1)
       writeRequires(trigger, array)
+      return { warnings }
+    }
+    case 'trigger.setRequires': {
+      const trigger = requireTrigger(ctx, command.triggerIdentity)
+      writeRequires(trigger, cloneJson(command.requires))
       return { warnings }
     }
     case 'trigger.setConditions': {

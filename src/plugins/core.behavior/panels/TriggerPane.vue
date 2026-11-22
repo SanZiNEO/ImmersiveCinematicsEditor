@@ -44,6 +44,11 @@ const props = defineProps<{
   focusRequest: FocusRequest | null
 }>()
 
+const rawTriggerCount = computed(() => {
+  const raw = props.meta?.triggers
+  return Array.isArray(raw) ? raw.length : 0
+})
+
 const emit = defineEmits<{ 'focus-consumed': [] }>()
 
 const ctx = usePanelContext()
@@ -156,7 +161,7 @@ function applyDraft(): void {
   if (working === null) return
 
   if (isNew.value) {
-    const blocking = draftBlockingProblems(working, props.rows.length, props.scriptContext)
+    const blocking = draftBlockingProblems(working, rawTriggerCount.value, props.scriptContext)
     if (blocking.length > 0) {
       flash('error', `存在阻塞问题，不能创建：${blockingMessages(blocking)}`)
       return
@@ -167,18 +172,18 @@ function applyDraft(): void {
         flash('error', `id 必须匹配 ${TRIGGER_ID_PATTERN.source}`)
         return
       }
-      if (idCollision(nextId, props.rows.length)) {
+      if (idCollision(nextId, rawTriggerCount.value)) {
         flash('error', `id「${nextId}」与其他触发器重复，不能保存`)
         return
       }
     }
-    const outcome = ctx.commands.commit(triggerAddIntent(props.rows.length, cloneJson(working)))
+    const outcome = ctx.commands.commit(triggerAddIntent(rawTriggerCount.value, cloneJson(working)))
     if (!outcome.ok) {
       flash('error', outcome.error ?? '创建触发器失败')
       return
     }
-    selectedIdentity.value = identityOfDraft(working, props.rows.length)
-    selectedIndex.value = props.rows.length
+    selectedIdentity.value = identityOfDraft(working, rawTriggerCount.value)
+    selectedIndex.value = rawTriggerCount.value
     draft.value = null
     draftOrigin.value = null
     isNew.value = false
@@ -199,9 +204,6 @@ function applyDraft(): void {
   const diff = diffDraft(origin, working)
   const commands: DocCommand[] = []
 
-  if (diff.typeChanged) {
-    commands.push(triggerSetTypeIntent(current.identity, String(working.type ?? '')))
-  }
   if (Object.keys(diff.fieldsPatch).length > 0) {
     commands.push({
       kind: 'trigger.setFields',
@@ -231,8 +233,18 @@ function applyDraft(): void {
   }
   // 空串 / 缺省 = 删除 `id` 键（`trigger.setId` 置空分支），身份回落 `type#index`；
   // 空条目不参与唯一性冲突。id 改动放最后：前面的命令仍按旧身份定位。
-  if (diff.idChanged) {
+  if (current.node.explicitId === undefined && diff.idChanged) {
     commands.push(triggerSetIdIntent(current.identity, nextIdText))
+    if (diff.typeChanged) {
+      commands.push(triggerSetTypeIntent(nextIdText, String(working.type ?? '')))
+    }
+  } else {
+    if (diff.typeChanged) {
+      commands.push(triggerSetTypeIntent(current.identity, String(working.type ?? '')))
+    }
+    if (diff.idChanged) {
+      commands.push(triggerSetIdIntent(current.identity, nextIdText))
+    }
   }
 
   if (commands.length === 0) {
@@ -337,7 +349,7 @@ function requestMove(direction: -1 | 1): void {
   const current = selectedRow.value
   if (current === undefined) return
   const to = current.node.index + direction
-  if (to < 0 || to >= props.rows.length) return
+  if (to < 0 || to >= rawTriggerCount.value) return
   const hasUnnamed = props.rows.some((row) => row.node.explicitId === undefined)
   if (hasUnnamed) {
     pendingMove.value = { from: current.node.index, to }
@@ -424,7 +436,7 @@ const severityLabel: Record<string, string> = {
         <button
           type="button"
           class="trigger-pane__tool"
-          :disabled="selectedRow === undefined || selectedRow.node.index === rows.length - 1"
+          :disabled="selectedRow === undefined || selectedRow.node.index === rawTriggerCount - 1"
           @click="requestMove(1)"
         >
           下移

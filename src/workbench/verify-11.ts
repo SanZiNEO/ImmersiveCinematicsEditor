@@ -467,6 +467,28 @@ function commandGroup(catalog: CatalogIndex): void {
     check('重名 id 被拒绝', dup.ok === false, dup.error)
   }
 
+  // ── 同次保存：无 id 记录同时改字段 / 前置 / 类型 / id ──
+  {
+    const store = openStore(catalog, minimalRaw())
+    store.commit({ kind: 'trigger.setId', triggerIdentity: 't1', value: '' } satisfies DocCommand)
+    const before = JSON.stringify(freshRoot(store))
+    const identity = triggerIdentity(parseTriggerNode(triggers(freshRoot(store))[0], 0), 0)
+    const batch = store.commit({
+      kind: 'compound',
+      commands: [
+        { kind: 'trigger.setFields', triggerIdentity: identity, patch: { delay: 1 } },
+        { kind: 'trigger.setRequires', triggerIdentity: identity, requires: [newRequirement('script_played', 'other_script')] },
+        { kind: 'trigger.setId', triggerIdentity: identity, value: 'qa_both' },
+        { kind: 'trigger.setType', triggerIdentity: 'qa_both', value: 'login' },
+      ],
+    } satisfies DocCommand)
+    check('无 id 同次改字段 / 前置 / 类型 / id 成功', batch.ok === true, batch.error)
+    const saved = triggers(freshRoot(store))[0]
+    check('同次保存落成新类型与 id', saved.type === 'login' && saved.id === 'qa_both', saved)
+    check('同次保存保留字段与前置', saved.delay === 1 && Array.isArray(saved.requires) && saved.requires.length === 1, saved)
+    check('同次保存一次撤销回到原状', store.undo() === true && JSON.stringify(freshRoot(store)) === before)
+  }
+
   // ── 规则 / 绑定事务改名：自身 + 引用一并改，撤销回到原位 ──
   {
     const store = openStore(catalog, minimalRaw())
@@ -905,23 +927,22 @@ function staticGroup(): void {
     check(`${relative(REPO_ROOT, panel)} 只引用摘要模块 eventRecordSummary`, /eventRecordSummary/.test(source))
   }
 
-  // 边界 1 抽屉侧：抽屉不引入右栏触发器编辑器组件，抽屉内无第二套触发器字段输入控件。
+  // 边界 1 行为侧栏：触发器只有一个弹窗编辑器，结构树本身没有字段输入控件。
   const drawerDir = join(SRC_DIR, 'plugins/core.behavior/drawer')
   const drawerFiles = files.filter((file) => file.startsWith(drawerDir))
   const drawerPanelsImports: string[] = []
-  const drawerSectionRefs: string[] = []
-  const sectionNames = ['TriggerIdentitySection', 'TriggerConditionsSection', 'TriggerRequirementsSection', 'TriggerTimingSection', 'RegionEditor', 'ConditionLeafFields']
   for (const file of drawerFiles) {
     const source = sourceOf.get(file) ?? ''
-    if (/from\s+['"]\.\.\/panels\//.test(source) || /from\s+['"]\.\.\/\.\.\/panels\//.test(source)) {
+    if (/from\s+['"]\.\.\/panels\/[^'"]+\.vue['"]/.test(source)
+      || /from\s+['"]\.\.\/\.\.\/panels\/[^'"]+\.vue['"]/.test(source)) {
       drawerPanelsImports.push(relative(REPO_ROOT, file))
     }
-    for (const section of sectionNames) {
-      if (source.includes(section)) drawerSectionRefs.push(`${relative(REPO_ROOT, file)}:${section}`)
-    }
   }
-  check('抽屉文件不引用右栏 panels/ 编辑器', drawerPanelsImports.length === 0, drawerPanelsImports)
-  check('抽屉文件不出现右栏触发器编辑器组件名', drawerSectionRefs.length === 0, drawerSectionRefs)
+  const triggerDialog = join(drawerDir, 'TriggerDialog.vue')
+  const triggerDialogSource = sourceOf.get(triggerDialog) ?? ''
+  check('行为侧栏只有 TriggerDialog 挂载触发器字段区', drawerPanelsImports.length === 0
+    && triggerDialogSource.includes('../editor/TriggerIdentitySection.vue')
+    && triggerDialogSource.includes('../editor/TriggerConditionsSection.vue'), drawerPanelsImports)
 
   const behaviorTree = join(drawerDir, 'BehaviorTree.vue')
   const treeSource = sourceOf.get(behaviorTree) ?? ''

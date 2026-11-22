@@ -384,6 +384,8 @@ export interface TriggerDraftDiff {
   conditionsPatch: Record<string, JsonValue>
   conditionsRemove: string[]
   continuityOmittable: boolean
+  /** 原始与草稿都没有 `requires` 时为 false。 */
+  requiresChanged: boolean
 }
 
 const TIMING_KEYS = ['repeatable', 'delay', 'on_enter', 'exit_buffer', 'poll_interval', 'continuity'] as const
@@ -418,6 +420,8 @@ export function diffDraft(original: JsonObject, draft: JsonObject): TriggerDraft
     }
   }
 
+  const requiresChanged = !sameJson(original.requires, draft.requires)
+
   return {
     idChanged: draft.id !== original.id,
     typeChanged: draft.type !== original.type,
@@ -425,6 +429,7 @@ export function diffDraft(original: JsonObject, draft: JsonObject): TriggerDraft
     conditionsPatch,
     conditionsRemove,
     continuityOmittable: continuityIsOmittable(draft),
+    requiresChanged,
   }
 }
 

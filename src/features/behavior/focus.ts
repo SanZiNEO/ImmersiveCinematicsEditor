@@ -4,7 +4,7 @@
  * 三处会用到：
  * - 脚本图悬停卡「定位到触发器」→ 行为页（抽屉）选中该触发器；
  * - 效果面板 / 片段属性「在行为页打开」→ 抽屉事件页选中该记录；
- * - 抽屉触发器组「在右栏编辑」→ 右栏 `behavior.triggers` 面板选中该触发器。
+ * - 脚本图 / 行为树「编辑触发器」→ 行为面板打开居中触发器编辑弹窗。
  *
  * 语义刻意做窄：
  * - 只传**记录身份**（`RecordRef`）与目标面板，不传字段值、不传文档副本，因此不会成为第二条写通路；
@@ -16,7 +16,7 @@
 import type { RecordRef } from './shared.ts'
 
 /** 接收定位的面板。 */
-export type FocusSurface = 'right-panel' | 'behavior-drawer'
+export type FocusSurface = 'behavior-drawer'
 
 /** 一次定位请求。 */
 export interface FocusRequest {
