@@ -24,6 +24,8 @@ const props = defineProps<{
   primaryKey?: string
   tool: TimelineTool
   trackColor: string
+  /** 正在拖动的片段：原块降亮，时间轴覆盖层显示实时落点。 */
+  draggingKeys?: readonly string[]
 }>()
 
 const emit = defineEmits<{
@@ -151,6 +153,7 @@ const rowStyle = computed(() => ({
       :compact="rowHeight < 40"
       :selected="selectedSet.has(clip.clipKey)"
       :primary="primaryKey === clip.clipKey"
+      :dragging="draggingKeys?.includes(clip.clipKey) === true"
       @select="emit('select', $event)"
     />
     <div v-if="track.clips.length === 0" class="track-row__empty">

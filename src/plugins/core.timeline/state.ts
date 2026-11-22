@@ -1175,12 +1175,12 @@ export class TimelineController {
 
   /** 指针锚定缩放：缩放前后指针下的时间不变。 */
   zoomAt(pointerX: number, nextPxPerSecond: number): void {
-    const scale = this.scale.value
-    const anchor = screenXToTime(pointerX, scale)
+    const anchor = screenXToTime(pointerX, this.scale.value)
     const pps = clampPxPerSecond(nextPxPerSecond)
     const nextScroll = Math.max(0, anchor * pps - pointerX)
     this.documents.setPxPerSecond(pps)
-    this.scrollLeft.value = nextScroll
+    this.session.value = this.documents.sessionView()
+    this.setScrollLeft(nextScroll)
   }
 
   zoomBy(factor: number, anchorX?: number): void {

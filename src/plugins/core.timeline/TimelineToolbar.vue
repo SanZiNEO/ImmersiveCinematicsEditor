@@ -212,7 +212,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="timeline-toolbar" :class="{ 'timeline-toolbar--compact': compact, 'timeline-toolbar--narrow': narrow }" role="toolbar" aria-label="时间轴工具栏">
-    <div class="timeline-toolbar__group" role="group" aria-label="编辑工具">
+    <div class="timeline-toolbar__group timeline-toolbar__group--edit" role="group" aria-label="片段与轨道编辑工具">
       <button
         type="button"
         class="timeline-toolbar__button"
@@ -242,7 +242,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div class="timeline-toolbar__group" role="group" aria-label="创建">
+    <div class="timeline-toolbar__group" role="group" aria-label="创建与粘贴">
       <button
         type="button"
         class="timeline-toolbar__button"
@@ -305,36 +305,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div class="timeline-toolbar__group" role="group" aria-label="缩放">
-      <button type="button" class="timeline-toolbar__button" aria-label="缩小时间轴" title="缩小（1.25 倍步进）" @click="emit('zoomOut')">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 8h8" stroke="currentColor" stroke-width="1.6" fill="none" /></svg>
-      </button>
-      <button type="button" class="timeline-toolbar__button" aria-label="放大时间轴" title="放大（1.25 倍步进）" @click="emit('zoomIn')">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 8h8M8 4v8" stroke="currentColor" stroke-width="1.6" fill="none" /></svg>
-      </button>
-      <button type="button" class="timeline-toolbar__button" aria-label="适配时间轴" title="适配已知内容末端" @click="emit('fit')">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-          <path d="M2.5 5V3.5H5M11 3.5h2.5V5M13.5 11v1.5H11M5 12.5H2.5V11" fill="none" stroke="currentColor" stroke-width="1.3" />
-        </svg>
-      </button>
-      <span v-if="!narrow" class="timeline-toolbar__value" :title="`当前缩放 ${ppsText}`">{{ ppsText }}</span>
-    </div>
-
-    <div class="timeline-toolbar__group" role="group" aria-label="吸附与标记">
-      <button
-        type="button"
-        class="timeline-toolbar__button"
-        :class="{ 'timeline-toolbar__button--on': snapEnabled }"
-        :aria-pressed="snapEnabled"
-        aria-label="吸附开关"
-        title="吸附（8px；按住 Alt 临时关闭）"
-        @click="emit('toggleSnap')"
-      >
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-          <path d="M4 12V4h4a2 2 0 0 1 0 4H4" fill="none" stroke="currentColor" stroke-width="1.4" />
-          <path d="M11 3v10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2" />
-        </svg>
-      </button>
+    <div class="timeline-toolbar__group" role="group" aria-label="标记与辅助">
       <button type="button" class="timeline-toolbar__button" aria-label="添加标记" title="在播放头添加标记（会话）" @click="emit('addMarker')">
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path d="M4 2v12M4 3h8l-2 2.5L12 8H4" fill="none" stroke="currentColor" stroke-width="1.3" />
@@ -380,7 +351,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div class="timeline-toolbar__group timeline-toolbar__group--time" role="group" aria-label="播放头">
+    <div class="timeline-toolbar__group timeline-toolbar__group--transport timeline-toolbar__group--time" role="group" aria-label="播放头">
       <input
         class="timeline-toolbar__time"
         type="number"
@@ -397,7 +368,7 @@ onBeforeUnmount(() => {
       <span class="timeline-toolbar__unit" aria-hidden="true">s</span>
     </div>
 
-    <div class="timeline-toolbar__group" role="group" aria-label="播放控制">
+    <div class="timeline-toolbar__group timeline-toolbar__group--transport" role="group" aria-label="播放控制">
       <button
         type="button"
         class="timeline-toolbar__button"
@@ -428,6 +399,35 @@ onBeforeUnmount(() => {
     <div class="timeline-toolbar__spacer"></div>
 
     <span class="timeline-toolbar__selection" :title="selectionText">{{ selectionText }}</span>
+
+    <div class="timeline-toolbar__group timeline-toolbar__group--track-settings" role="group" aria-label="轨道视图与吸附">
+      <button
+        type="button"
+        class="timeline-toolbar__button"
+        :class="{ 'timeline-toolbar__button--on': snapEnabled }"
+        :aria-pressed="snapEnabled"
+        aria-label="吸附开关"
+        title="吸附（8px；按住 Alt 临时关闭）"
+        @click="emit('toggleSnap')"
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M4 12V4h4a2 2 0 0 1 0 4H4" fill="none" stroke="currentColor" stroke-width="1.4" />
+          <path d="M11 3v10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2" />
+        </svg>
+      </button>
+      <button type="button" class="timeline-toolbar__button" aria-label="缩小时间轴" title="缩小（1.25 倍步进）" @click="emit('zoomOut')">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 8h8" stroke="currentColor" stroke-width="1.6" fill="none" /></svg>
+      </button>
+      <button type="button" class="timeline-toolbar__button" aria-label="放大时间轴" title="放大（1.25 倍步进）" @click="emit('zoomIn')">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 8h8M8 4v8" stroke="currentColor" stroke-width="1.6" fill="none" /></svg>
+      </button>
+      <button type="button" class="timeline-toolbar__button" aria-label="适配时间轴" title="适配已知内容末端" @click="emit('fit')">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M2.5 5V3.5H5M11 3.5h2.5V5M13.5 11v1.5H11M5 12.5H2.5V11" fill="none" stroke="currentColor" stroke-width="1.3" />
+        </svg>
+      </button>
+      <span v-if="!narrow" class="timeline-toolbar__value" :title="`当前缩放 ${ppsText}`">{{ ppsText }}</span>
+    </div>
 
     <div v-if="!hasTracks" class="timeline-toolbar__group" role="group" aria-label="空态">
       <span class="timeline-toolbar__hint">还没有轨道</span>
@@ -516,6 +516,39 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   gap: 1px;
   align-items: center;
+}
+
+.timeline-toolbar__group--edit {
+  order: -2;
+  gap: 2px;
+  padding-right: 6px;
+  border-right: 1px solid var(--border);
+}
+
+.timeline-toolbar__group[aria-label='创建与粘贴'] {
+  order: -1;
+}
+
+.timeline-toolbar__group--track-settings {
+  gap: 2px;
+  order: 10;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+
+.timeline-toolbar__group[aria-label='轨道视图与吸附'] {
+  order: 10;
+}
+
+.timeline-toolbar__group[aria-label='标记与辅助'] {
+  order: -0.5;
+}
+
+.timeline-toolbar__group--transport {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
 }
 
 .timeline-toolbar__group--time {

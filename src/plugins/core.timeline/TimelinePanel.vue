@@ -65,12 +65,14 @@ const playhead = computed(() => session.value.playhead)
 
 const addTrackOpen = ref(false)
 const scrollTop = ref(0)
+const scrollViewportHeight = ref(0)
 const draggingTrackId = ref<string | null>(null)
 const narrow = computed(() => controller.viewportWidth.value < 480)
 const compact = computed(() => controller.panelHeight.value < 240)
 const rowHeight = computed(() => (compact.value ? 34 : 52))
 const clipHeight = computed(() => (compact.value ? 28 : 40))
 const totalHeight = computed(() => tracks.value.length * rowHeight.value)
+const canvasHeight = computed(() => Math.max(totalHeight.value + 8, scrollViewportHeight.value))
 const playheadX = computed(() => playhead.value * pxPerSecond.value)
 const hiddenTracks = computed(() =>
   controller.tracks.value
@@ -193,6 +195,9 @@ function measure(): void {
   const element = scrollEl.value
   if (element !== null) {
     controller.setViewportWidth(element.clientWidth)
+    if (element.clientHeight !== scrollViewportHeight.value) {
+      scrollViewportHeight.value = element.clientHeight
+    }
     return
   }
   const fallback = Math.max(1, (root?.clientWidth ?? 800) - HEADER_WIDTH)
@@ -1351,7 +1356,7 @@ function onMarkerContextMenu(event: MouseEvent, time: number): void {
 }
 
 function onWheelZoom(event: WheelEvent, anchorHost: HTMLElement | null): void {
-  if (!(event.ctrlKey || event.metaKey)) {
+  if (!(event.ctrlKey || event.metaKey || event.altKey)) {
     return
   }
   event.preventDefault()
@@ -1360,42 +1365,52 @@ function onWheelZoom(event: WheelEvent, anchorHost: HTMLElement | null): void {
     return
   }
   const rect = host.getBoundingClientRect()
-  controller.zoomByWheel(event.clientX - rect.left, event.deltaY)
+  const delta = wheelDelta(event.deltaY, event.deltaMode, host.clientHeight)
+  controller.zoomByWheel(event.clientX - rect.left, delta)
+  const element = scrollEl.value
+  if (element !== null && Math.abs(element.scrollLeft - controller.scrollLeft.value) > 0.5) {
+    element.scrollLeft = controller.scrollLeft.value
+  }
+}
+
+/** 把滚轮的行 / 页模式统一换算为像素，避免不同设备的步长相差数十倍。 */
+function wheelDelta(delta: number, mode: number, pageSize: number): number {
+  if (mode === WheelEvent.DOM_DELTA_LINE) return delta * 16
+  if (mode === WheelEvent.DOM_DELTA_PAGE) return delta * Math.max(1, pageSize)
+  return delta
+}
+
+/** 标尺、轨道头与轨道画布共用同一套滚轮语义。 */
+function onTimelineWheel(event: WheelEvent, anchorHost: HTMLElement | null): void {
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    onWheelZoom(event, anchorHost)
+    return
+  }
+  const element = scrollEl.value
+  if (element === null) {
+    return
+  }
+  event.preventDefault()
+  const vertical = wheelDelta(event.deltaY, event.deltaMode, element.clientHeight)
+  const horizontal = wheelDelta(event.deltaX, event.deltaMode, element.clientWidth)
+  if (event.shiftKey) {
+    element.scrollLeft += vertical === 0 ? horizontal : vertical
+    return
+  }
+  element.scrollTop += vertical
+  element.scrollLeft += horizontal
 }
 
 function onContentWheel(event: WheelEvent): void {
-  onWheelZoom(event, scrollEl.value)
+  onTimelineWheel(event, scrollEl.value)
 }
 
 function onRulerWheel(event: WheelEvent): void {
-  if (event.ctrlKey || event.metaKey) {
-    onWheelZoom(event, scrollEl.value)
-    return
-  }
-  const element = scrollEl.value
-  if (element === null) {
-    return
-  }
-  event.preventDefault()
-  if (event.shiftKey) {
-    element.scrollLeft += event.deltaY
-    return
-  }
-  element.scrollTop += event.deltaY
-  element.scrollLeft += event.deltaX
+  onTimelineWheel(event, scrollEl.value)
 }
 
 function onHeaderWheel(event: WheelEvent): void {
-  if (event.ctrlKey || event.metaKey) {
-    onWheelZoom(event, scrollEl.value)
-    return
-  }
-  const element = scrollEl.value
-  if (element === null) {
-    return
-  }
-  event.preventDefault()
-  element.scrollTop += event.deltaY
+  onTimelineWheel(event, scrollEl.value)
 }
 
 // ── 拖动 ghost / 框选覆盖层 ─────────────────────────────────
@@ -1406,6 +1421,9 @@ interface GhostBlock {
   top: number
   width: number
   height: number
+  label: string
+  start: number
+  end: number | null
 }
 
 const ghostBlocks = computed<GhostBlock[]>(() => {
@@ -1430,9 +1448,17 @@ const ghostBlocks = computed<GhostBlock[]>(() => {
       top: top + (rowHeight.value - clipHeight.value) / 2,
       width,
       height: clipHeight.value,
+      label: controller.clipOf(origin.clipKey)?.clip.label ?? '片段',
+      start,
+      end: origin.infinite ? null : start + origin.duration,
     })
   }
   return blocks
+})
+
+const movingClipKeys = computed<readonly string[]>(() => {
+  const active = gesture.value
+  return active !== null && active.kind === 'move' && active.moved ? active.keys : []
 })
 
 const trimGhostX = computed(() => {
@@ -1597,6 +1623,7 @@ function trackColorOf(type: string): string {
         <div
           ref="scrollEl"
           class="timeline-panel__scroll"
+          :style="{ '--timeline-canvas-height': `${scrollViewportHeight > 0 ? scrollViewportHeight : '100%'}${scrollViewportHeight > 0 ? 'px' : ''}` }"
           @scroll="onScroll"
           @wheel="onContentWheel"
           @pointerdown="onContentPointerDown"
@@ -1604,7 +1631,7 @@ function trackColorOf(type: string): string {
         >
           <div
             class="timeline-panel__content"
-            :style="{ width: `${contentWidth}px`, height: `${totalHeight + 8}px` }"
+            :style="{ width: `${contentWidth}px` }"
           >
             <TrackRow
               v-for="track in tracks"
@@ -1621,20 +1648,21 @@ function trackColorOf(type: string): string {
               :primary-key="controller.primaryClipKey.value"
               :tool="controller.tool.value"
               :track-color="trackColorOf(track.type)"
+              :dragging-keys="movingClipKeys"
               @select="onClipSelect"
               @add-clip="controller.addClip($event)"
             />
 
             <div
               class="timeline-panel__playhead"
-              :style="{ left: `${playheadX}px`, height: `${totalHeight}px` }"
+              :style="{ left: `${playheadX}px`, height: `${canvasHeight}px` }"
               aria-hidden="true"
             ></div>
 
             <div
               v-if="trimGhostX !== null"
               class="timeline-panel__trim"
-              :style="{ left: `${trimGhostX}px`, height: `${totalHeight}px` }"
+              :style="{ left: `${trimGhostX}px`, height: `${canvasHeight}px` }"
               aria-hidden="true"
             ></div>
 
@@ -1649,7 +1677,14 @@ function trackColorOf(type: string): string {
                 height: `${ghost.height}px`,
               }"
               aria-hidden="true"
-            ></div>
+            >
+              <span class="timeline-panel__ghost-label">{{ ghost.label }}</span>
+              <span class="timeline-panel__ghost-time">
+                {{ formatSeconds(ghost.start) }}
+                <template v-if="ghost.end !== null"> – {{ formatSeconds(ghost.end) }}</template>
+                <template v-else> – ∞</template>
+              </span>
+            </div>
 
             <div
               v-if="marqueeRect !== null"
@@ -1908,12 +1943,17 @@ function trackColorOf(type: string): string {
   min-width: 0;
   overflow: auto;
   background: var(--bg-app);
-  scrollbar-color: var(--scrollbar) transparent;
+  scrollbar-width: none;
+}
+
+.timeline-panel__scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .timeline-panel__content {
   position: relative;
   min-width: 100%;
+  min-height: var(--timeline-canvas-height, 100%);
 }
 
 .timeline-panel__playhead {
@@ -1943,6 +1983,26 @@ function trackColorOf(type: string): string {
   border-radius: 4px;
   background: var(--bg-selected);
   opacity: 0.55;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--text);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.timeline-panel__ghost-label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.timeline-panel__ghost-time {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .timeline-panel__marquee {
