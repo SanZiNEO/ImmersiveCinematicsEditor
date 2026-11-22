@@ -526,7 +526,7 @@ function main(): void {
     check('07-05 补 id 冲突被拦', conflict.ok === false, conflict)
   }
 
-  // ── 07-05 面板停靠：`document.drawer` 默认树由注册表填入，且仍是合法槽位 ────
+  // ── 面板停靠：旧抽屉插件的面板安排在右侧 ────
   {
     const source = {
       bySlot: (slot: string) => (slot === 'document.drawer'
@@ -543,12 +543,11 @@ function main(): void {
     }
     const tree = buildDefaultTree('document', source as never)
     const drawer = findGroup(tree.root, 'document.drawer')
-    const drawerPanels = drawer !== undefined
-      ? drawer.panels.map((node) => `${node.pluginId}:${node.panelId}`)
-      : []
-    check('drawer 默认树填入已注册面板', drawerPanels.includes('core.paths:paths.collection'), drawerPanels)
-    check('drawer 默认关闭且高度 280', drawer !== undefined && drawer.visible === false)
-    check('路径面板不进主时间轴槽', drawerPanels.length === 1, drawerPanels)
+    const right = findGroup(tree.root, 'document.right')
+    const bottom = findGroup(tree.root, 'document.bottom')
+    check('旧版抽屉面板默认停靠在右侧', right?.panels.some((panel) => panel.panelId === 'paths.collection') === true)
+    check('旧抽屉容器默认隐藏且为空', drawer?.visible === false && drawer.panels.length === 0)
+    check('路径面板不进主时间轴槽', bottom?.panels.every((panel) => panel.panelId !== 'paths.collection') === true)
   }
 
   console.log(`summary ok=${ok} fail=${fail}`)

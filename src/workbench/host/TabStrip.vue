@@ -3,10 +3,11 @@
  * 标签条（04-05）。
  *
  * 只负责标签展示、激活、右键菜单和拖动入口；不写布局、不持尺寸。
- * 面板管理集中在右键菜单，标签本身保持纯文字行，避免每个标签都挂关闭按钮。
+ * 面板管理集中在右键菜单，标签本身保持连续纯文字行，避免按钮式分块和逐标签关闭。
  * 键盘：Enter / Space 激活；Delete 不绑定；拖动交给注入的 `DockContext`。
+ * 溢出时隐藏水平滚动条，并把普通垂直滚轮转成横向滚动；触控板横向手势保持原生。
  */
-import { computed, inject } from 'vue'
+import { computed, inject, ref } from 'vue'
 import type { PanelNode } from '../api/layout.ts'
 import { DOCK_CONTEXT_KEY } from '../dock/dockContext.ts'
 import { DRAWER_TAB_REGISTRY, I18N_SERVICE, PANEL_REGISTRY } from '../api/tokens.ts'
@@ -31,6 +32,7 @@ const drawerTabs: DrawerTabRegistry | undefined = services?.get(DRAWER_TAB_REGIS
 const i18n: I18nApi | undefined = services?.get(I18N_SERVICE)
 const dock = inject(DOCK_CONTEXT_KEY, null)
 const groupId = inject(TAB_STRIP_GROUP_KEY, '')
+const stripElement = ref<HTMLElement | null>(null)
 
 const activeId = computed(() => {
   if (props.activePanelId !== undefined) {
@@ -50,6 +52,10 @@ function titleOf(panel: PanelNode): string {
   }
   return panel.panelId
 }
+
+const visibleTabs = computed(() => props.panels.flatMap((panel, index) =>
+  panel.visible ? [{ panel, index }] : [],
+))
 
 function isActive(panel: PanelNode): boolean {
   return panel.id === activeId.value
@@ -87,12 +93,42 @@ function onKeyboardContextMenu(event: KeyboardEvent, panel: PanelNode): void {
   const rect = target.getBoundingClientRect()
   emit('contextMenu', panel.panelId, rect.left, rect.bottom)
 }
+
+/**
+ * 普通鼠标滚轮只有纵向增量。仅转换以纵向为主的事件，让触控板横向手势和
+ * 浏览器缩放保持原生行为；无横向溢出时不吞掉事件。
+ */
+function onWheel(event: WheelEvent): void {
+  const element = stripElement.value
+  if (
+    element === null
+    || event.ctrlKey
+    || event.metaKey
+    || Math.abs(event.deltaX) >= Math.abs(event.deltaY)
+    || element.scrollWidth <= element.clientWidth
+  ) {
+    return
+  }
+  const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? 16
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? element.clientWidth
+      : 1
+  event.preventDefault()
+  element.scrollLeft += event.deltaY * unit
+}
 </script>
 
 <template>
-  <div class="tab-strip" role="tablist" aria-orientation="horizontal">
+  <div
+    ref="stripElement"
+    class="tab-strip"
+    role="tablist"
+    aria-orientation="horizontal"
+    @wheel="onWheel"
+  >
     <div
-      v-for="(panel, index) in panels"
+      v-for="{ panel, index } in visibleTabs"
       :key="panel.id"
       class="tab-strip__tab"
       :class="{ 'tab-strip__tab--active': isActive(panel), 'tab-strip__tab--dragging': dock?.isPanelDragging(panel) }"
@@ -123,23 +159,31 @@ function onKeyboardContextMenu(event: KeyboardEvent, panel: PanelNode): void {
   display: flex;
   flex: 0 0 auto;
   align-items: stretch;
-  gap: 2px;
+  gap: 0;
   min-height: 28px;
   padding: 0 6px;
   overflow-x: auto;
   overflow-y: hidden;
   background: var(--bg-app);
   border-bottom: 1px solid var(--border);
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.tab-strip::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .tab-strip__tab {
-  position: relative;
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   max-width: 220px;
-  padding: 0 8px;
+  padding: 0 9px;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
@@ -150,24 +194,13 @@ function onKeyboardContextMenu(event: KeyboardEvent, panel: PanelNode): void {
 }
 
 .tab-strip__tab:hover {
-  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
   color: var(--text);
 }
 
 .tab-strip__tab--active {
-  background: transparent;
   color: var(--text);
-}
-
-.tab-strip__tab--active::after {
-  position: absolute;
-  right: 8px;
-  bottom: 0;
-  left: 8px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--accent);
-  content: '';
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .tab-strip__tab--dragging {

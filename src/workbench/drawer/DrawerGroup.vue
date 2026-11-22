@@ -378,15 +378,6 @@ onBeforeUnmount(() => {
           <span class="drawer-group__tab-title">{{ titleOf(entry) }}</span>
         </div>
       </div>
-      <button
-        v-if="visible"
-        type="button"
-        class="drawer-group__close"
-        aria-label="关闭抽屉"
-        @click="closeDrawer"
-      >
-        关闭
-      </button>
     </header>
 
     <p v-if="visible && noticeText.length > 0 && !noticeDismissed" class="drawer-group__notice" role="status">
@@ -468,18 +459,17 @@ onBeforeUnmount(() => {
 .drawer-group__tabs {
   display: flex;
   align-items: stretch;
-  gap: 2px;
+  gap: 0;
   overflow-x: auto;
 }
 
 .drawer-group__tab {
-  position: relative;
   display: inline-flex;
   align-items: center;
   max-width: 200px;
-  padding: 0 8px;
+  padding: 0 9px;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1;
@@ -489,24 +479,13 @@ onBeforeUnmount(() => {
 }
 
 .drawer-group__tab:hover {
-  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
   color: var(--text);
 }
 
 .drawer-group__tab--active {
-  background: transparent;
   color: var(--text);
-}
-
-.drawer-group__tab--active::after {
-  position: absolute;
-  right: 8px;
-  bottom: 0;
-  left: 8px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--accent);
-  content: '';
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .drawer-group__tab:focus-visible {
@@ -517,27 +496,6 @@ onBeforeUnmount(() => {
 .drawer-group__tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.drawer-group__close {
-  flex: 0 0 auto;
-  padding: 0 8px;
-  border: none;
-  border-left: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.drawer-group__close:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.drawer-group__close:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
 }
 
 .drawer-group__notice {

@@ -7,7 +7,7 @@
  */
 import type { GroupNode, LayoutFile, LayoutTree, PageLayout, PanelNode } from '../api/layout.ts'
 import type { PanelRef, SlotId } from '../api/ids.ts'
-import { CORE_PAGE_IDS } from '../api/ids.ts'
+import { CORE_PAGE_IDS, panelNodeId } from '../api/ids.ts'
 import type { PanelContribution } from '../api/contributions.ts'
 import type { RegisteredPanel } from '../api/registries.ts'
 import {
@@ -18,6 +18,12 @@ import {
   DEFAULT_DRAWER_HEIGHT,
   DRAWER_GROUP_ID,
   DRAWER_MIN_HEIGHT,
+  collectPanelRefs,
+  collectGroups,
+  findGroup,
+  findPanel,
+  removePanelNode,
+  replaceNode,
 } from './tree.ts'
 
 /** 内置预设 ID（04-02）；任何页都可以切到这些 ID。 */
@@ -97,6 +103,19 @@ export const CORE_PANEL_REFS = {
 /** 面板注册表里本模块需要的唯一能力；测试可只用 `{ bySlot }` 替身。 */
 export interface PanelSlotSource {
   bySlot(slot: SlotId): readonly RegisteredPanel[]
+}
+
+/** 抽屉贡献的布局身份；宿主通过同一 `PanelHost` 解析，拖动仍按普通面板处理。 */
+export interface DrawerPanelSource {
+  ref: PanelRef
+  order: number
+  minWidth?: number
+  minHeight?: number
+}
+
+/** 应用装配层提供的抽屉贡献列表（按注册顺序即可）。 */
+export interface DrawerPanelSlotSource {
+  list(): readonly DrawerPanelSource[]
 }
 
 /** 每个页每个槽位在“一个面板都没注册”时的兜底面板引用。 */
@@ -223,12 +242,15 @@ function buildDocumentTree(shape: PresetShape, panels?: PanelSlotSource): Layout
   const center = slotGroup('document', 'document.center', shape, panels)
   const right = slotGroup('document', 'document.right', shape, panels)
   const bottom = slotGroup('document', 'document.bottom', shape, panels)
-  // 抽屉内容有两个来源：`drawerTab` 注册表（DrawerGroup 负责补在前面）与布局树里的普通面板节点。
-  // 默认树按注册表把 `defaultSlot = document.drawer` 的面板放进抽屉组（07-05 的 `paths.collection`），
-  // 这样“默认停在抽屉”与“拖到任意合法 slot”都成立；抽屉默认关闭、高度 280。
+  // 旧版 `document.drawer` 槽位保留为合法停靠点，但默认贡献进入侧栏。
+  const drawerPanels = resolveSlotPanels('document', DRAWER_GROUP_ID, panels).map((entry) => entry.node)
+  if (panels !== undefined) {
+    right.panels.push(...drawerPanels)
+    right.activePanelId ??= right.panels[0]?.id
+  }
   const drawer = createGroup(
     DRAWER_GROUP_ID,
-    resolveSlotPanels('document', DRAWER_GROUP_ID, panels).map((entry) => entry.node),
+    [],
     {
       visible: false,
       collapsed: true,
@@ -245,11 +267,69 @@ function buildDocumentTree(shape: PresetShape, panels?: PanelSlotSource): Layout
   const root = createSplit(
     'document.root',
     'vertical',
-    [main, drawer, bottom],
-    shape.root,
-    [0, DRAWER_MIN_HEIGHT, BOTTOM_MIN_HEIGHT],
+    [main, bottom, drawer],
+    [shape.root[0], shape.root[2], shape.root[1]],
+    [0, BOTTOM_MIN_HEIGHT, DRAWER_MIN_HEIGHT],
   )
   return { root }
+}
+
+/**
+ * 在文档页三栏中补齐抽屉贡献，不改变已有面板顺序。
+ *
+ * 新贡献放左栏，已有普通面板留在原处；右栏用于属性 / 触发器等工作面，
+ * 避免工具类抽屉在默认树里抢占检查器标签。旧布局由 `LayoutService` 单独迁移。
+ */
+export function appendDrawerPanelsToDocument(
+  tree: LayoutTree,
+  drawers: DrawerPanelSlotSource,
+): number {
+  const left = findGroup(tree.root, 'document.left')
+  const right = findGroup(tree.root, 'document.right')
+  const target = left?.visible ? left : right ?? left
+  if (target === null) return 0
+  const existing = new Set(collectPanelRefs(tree.root).map((ref) => `${ref.pluginId}:${ref.panelId}`))
+  const additions = drawers.list()
+    .filter((entry) => !existing.has(`${entry.ref.pluginId}:${entry.ref.panelId}`))
+    .sort((a, b) => a.order - b.order || a.ref.panelId.localeCompare(b.ref.panelId))
+    .map((entry) => createPanelNode(entry.ref, {
+      minWidth: entry.minWidth,
+      minHeight: entry.minHeight,
+    }))
+  if (additions.length === 0) return 0
+  const next: GroupNode = {
+    ...target,
+    panels: [...target.panels, ...additions],
+    activePanelId: target.activePanelId ?? additions[0]?.id,
+  }
+  const root = replaceNode(tree.root, target.id, next)
+  if (root === null) return 0
+  tree.root = root
+  return additions.length
+}
+
+/** 移除已下线面板的布局节点（当前只用于触发器的 legacy 右栏入口）。 */
+export function removeLegacyDocumentPanels(tree: LayoutTree): number {
+  let removed = 0
+  const legacy = [
+    { pluginId: 'core.behavior', panelId: 'behavior.triggers' },
+  ]
+  for (const ref of legacy) {
+    if (findPanel(tree.root, ref) === null) continue
+    const next = removePanelNode(tree.root, panelNodeId(ref), [DRAWER_GROUP_ID])
+    if (next === null) continue
+    tree.root = next
+    removed += 1
+  }
+  for (const group of collectGroups(tree.root)) {
+    if (group.activePanelId !== undefined && group.panels.every((panel) => panel.id !== group.activePanelId)) {
+      const next = { ...group, panels: group.panels }
+      delete next.activePanelId
+      const root = replaceNode(tree.root, group.id, next)
+      if (root !== null) tree.root = root
+    }
+  }
+  return removed
 }
 
 function buildProjectTree(panels?: PanelSlotSource): LayoutTree {

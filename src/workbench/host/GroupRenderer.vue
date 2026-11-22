@@ -8,9 +8,8 @@
 import { computed, inject, nextTick, onBeforeUnmount, provide, ref } from 'vue'
 import type { GroupNode } from '../api/layout.ts'
 import type { PanelRef } from '../api/ids.ts'
-import type { DrawerTabRegistry } from '../api/registries.ts'
 import type { WorkspaceLayoutService } from '../api/layout.ts'
-import { DRAWER_TAB_REGISTRY, LAYOUT_SERVICE } from '../api/tokens.ts'
+import { LAYOUT_SERVICE } from '../api/tokens.ts'
 import TabStrip from './TabStrip.vue'
 import PanelHost from './PanelHost.vue'
 import { PANEL_ACTIONS_KEY, WORKBENCH_SERVICES_KEY } from './panelContext.ts'
@@ -24,7 +23,6 @@ const props = defineProps<{
 
 const services = inject(WORKBENCH_SERVICES_KEY, null)
 const layout: WorkspaceLayoutService | undefined = services?.get(LAYOUT_SERVICE)
-const drawerTabs: DrawerTabRegistry | undefined = services?.get(DRAWER_TAB_REGISTRY)
 const actions = inject(PANEL_ACTIONS_KEY, null)
 
 provide(TAB_STRIP_GROUP_KEY, props.group.id)
@@ -47,10 +45,6 @@ function panelRefOf(panelId: string): PanelRef | null {
   return panel === undefined ? null : { pluginId: panel.pluginId, panelId: panel.panelId }
 }
 
-function isDrawerTabRef(ref: PanelRef): boolean {
-  return drawerTabs?.get(ref.panelId)?.pluginId === ref.pluginId
-}
-
 function activate(panelId: string): void {
   const target = panelRefOf(panelId)
   if (target === null || layout === undefined) {
@@ -62,11 +56,6 @@ function activate(panelId: string): void {
 function closePanel(panelId: string): void {
   const target = panelRefOf(panelId)
   if (target === null) {
-    return
-  }
-  // 抽屉标签被拖到普通 group 后，关闭它应回到抽屉，而不是留下不可见的布局节点。
-  if (isDrawerTabRef(target) && actions !== null) {
-    actions.removePanel(target)
     return
   }
   if (actions !== null) {

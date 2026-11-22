@@ -8,10 +8,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import type { PanelRef } from '../api/ids.ts'
-import { panelRefKey } from '../api/ids.ts'
-import type { PanelRegistry } from '../api/registries.ts'
 import type { WorkspaceLayoutService } from '../api/layout.ts'
-import { LAYOUT_SERVICE, PANEL_REGISTRY } from '../api/tokens.ts'
+import { DRAWER_TAB_REGISTRY, LAYOUT_SERVICE, PANEL_REGISTRY } from '../api/tokens.ts'
+import { collectGroups, DRAWER_GROUP_ID } from '../layout/tree.ts'
 import { useDialogs, useI18n, useServices } from './useWorkbench.ts'
 
 const props = defineProps<{ pageId: string }>()
@@ -28,10 +27,6 @@ function layout(): WorkspaceLayoutService {
   return services.require(LAYOUT_SERVICE)
 }
 
-function panels(): PanelRegistry {
-  return services.require(PANEL_REGISTRY)
-}
-
 interface Row {
   ref: PanelRef
   label: string
@@ -39,26 +34,23 @@ interface Row {
 
 const rows = computed<Row[]>(() => {
   const tree = layout().getTree(props.pageId)
+  const panels = services.get(PANEL_REGISTRY)
+  const drawerTabs = services.get(DRAWER_TAB_REGISTRY)
   const hidden: Row[] = []
-  const visit = (node: { type: string; panels?: unknown[]; children?: unknown[] }): void => {
-    if (node.type === 'group') {
-      const group = node as unknown as { visible: boolean; panels: Array<{ pluginId: string; panelId: string; visible: boolean }> }
-      if (!group.visible) {
-        for (const panel of group.panels) {
-          const contribution = panels().get(panel.pluginId, panel.panelId)
-          hidden.push({
-            ref: { pluginId: panel.pluginId, panelId: panel.panelId },
-            label: contribution === undefined ? `${panel.pluginId}:${panel.panelId}` : i18n.t(contribution.titleKey),
-          })
-        }
-      }
-      return
-    }
-    for (const child of node.children ?? []) {
-      visit(child as never)
+  for (const group of collectGroups(tree.root)) {
+    if (group.id === DRAWER_GROUP_ID) continue
+    for (const panel of group.panels) {
+      if (group.visible && !group.collapsed && panel.visible) continue
+      const { pluginId, panelId } = panel
+      const tab = drawerTabs?.get(panelId)
+      const contribution = panels?.get(pluginId, panelId)
+        ?? (tab?.pluginId === pluginId ? tab.contribution : undefined)
+      hidden.push({
+        ref: { pluginId, panelId },
+        label: contribution === undefined ? `${pluginId}:${panelId}` : i18n.t(contribution.titleKey),
+      })
     }
   }
-  visit(tree.root as never)
   return hidden
 })
 
@@ -97,7 +89,6 @@ onBeforeUnmount(() => {
   dialogs.close('show-panel')
 })
 
-void panelRefKey
 </script>
 
 <template>

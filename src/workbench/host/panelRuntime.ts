@@ -22,7 +22,8 @@ import {
   SELECTION_SERVICE,
 } from '../api/tokens.ts'
 import { panelGeometry } from './layoutGeometry.ts'
-import { openDrawerTab } from '../drawer/drawerController.ts'
+import { DRAWER_GROUP_ID, openDrawerTab } from '../drawer/drawerController.ts'
+import { collectGroups } from '../layout/tree.ts'
 
 /** 把“打开抽屉”绑到某一页；缺抽屉 group 时记诊断，不伪造高度。 */
 function drawerOpener(
@@ -31,6 +32,15 @@ function drawerOpener(
   diagnostics: DiagnosticSink | undefined,
 ): (tabId: string) => void {
   return (tabId) => {
+    // 新版文档页把抽屉贡献作为普通标签显示在左右栏；旧布局仍可通过空容器回退。
+    const ref = collectGroups(layout.getTree(pageId).root)
+      .filter((group) => group.id !== DRAWER_GROUP_ID)
+      .flatMap((group) => group.panels)
+      .find((panel) => panel.panelId === tabId)
+    if (ref !== undefined) {
+      layout.showPanel(pageId, { pluginId: ref.pluginId, panelId: ref.panelId })
+      return
+    }
     const result = openDrawerTab(layout, pageId, tabId)
     if (result === null) {
       diagnostics?.report({

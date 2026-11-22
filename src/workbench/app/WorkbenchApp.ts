@@ -70,7 +70,6 @@ import { KeybindingRegistryImpl } from '../keybindings/KeybindingRegistryImpl.ts
 import { FocusServiceImpl } from '../focus/FocusServiceImpl.ts'
 import { LayoutService } from '../layout/LayoutService.ts'
 import { LayoutPersistence } from '../layout/persist.ts'
-import { validateLayoutFile } from '../layout/validate.ts'
 import { buildDefaultTree, createDefaultFile } from '../layout/defaultLayouts.ts'
 import { ThemeRegistry } from '../theme/ThemeRegistry.ts'
 import { ThemeService } from '../theme/ThemeService.ts'
@@ -229,9 +228,16 @@ export class WorkbenchApp {
       diagnostics: this.diagnostics,
       // 默认树按「已注册面板」生成：没有面板的槽位就是空组，不用核心面板占位。
       defaults: (pageId) => buildDefaultTree(pageId, this.panels),
-      // 抽屉标签不是面板节点，但可以被拖出/拖回：两个谓词让布局校验与 movePanel 都认得它。
+      // 侧栏中的标签既可以由面板插件贡献，也可以由旧抽屉插件贡献。
       registered: (ref) =>
         this.panels.has(ref) || this.drawerTabs.get(ref.panelId)?.pluginId === ref.pluginId,
+      drawerPanels: {
+        list: () => this.drawerTabs.list().map((entry) => ({
+          ref: { pluginId: entry.pluginId, panelId: entry.contribution.tabId },
+          order: entry.contribution.order,
+          minHeight: entry.contribution.minHeight,
+        })),
+      },
       isDrawerTab: (ref) =>
         this.drawerTabs.get(ref.panelId)?.pluginId === ref.pluginId,
     })
@@ -364,6 +370,9 @@ export class WorkbenchApp {
     // 反过来的话首启会是空布局（面板注册表还没填）。
     await this.startPlugins()
     await this.loadLayout()
+    this.layout.pruneLegacyDocumentPanels()
+    this.layout.migrateDocumentDrawer()
+    this.layout.ensureDocumentDrawerPanels()
     // 已落盘的旧 layout.json 里没有后来新增的面板；补进它们声明的槽位，只补不改。
     for (const pageId of CORE_PAGE_IDS) {
       this.layout.ensureSlotPanels(pageId, this.panels)
@@ -447,19 +456,7 @@ export class WorkbenchApp {
 
   private async loadLayout(): Promise<void> {
     const text = await this.host.storage.read('layout.json')
-    const defaults = createDefaultFile(this.panels)
-    const validated = validateLayoutFile(text === null ? defaults : safeParse(text), {
-      pageIds: ['project', 'document', 'settings'],
-      panels: (ref) => this.panels.has(ref),
-    })
-    for (const message of validated.result.messages) {
-      this.diagnostics.report({
-        severity: validated.result.reverted ? 'warning' : 'info',
-        source: 'layout',
-        message,
-      })
-    }
-    this.layout.load(JSON.stringify(validated.file))
+    this.layout.load(text ?? JSON.stringify(createDefaultFile(this.panels)))
   }
 
   private async saveLayout(): Promise<void> {
@@ -607,14 +604,6 @@ export class WorkbenchApp {
     } catch {
       // 草稿删除失败不阻塞保存结果。
     }
-  }
-}
-
-function safeParse(text: string): unknown {
-  try {
-    return JSON.parse(text) as unknown
-  } catch {
-    return null
   }
 }
 

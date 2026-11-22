@@ -9,7 +9,6 @@ import { computed, inject } from 'vue'
 import type { LayoutNode } from '../api/layout.ts'
 import ResizeHandle from '../dock/ResizeHandle.vue'
 import GroupRenderer from './GroupRenderer.vue'
-import DrawerGroup from '../drawer/DrawerGroup.vue'
 import { DRAWER_GROUP_ID } from '../drawer/drawerController.ts'
 import { LAYOUT_PREVIEW_KEY } from './layoutPreview.ts'
 import { normalizedSizes } from './layoutGeometry.ts'
@@ -31,34 +30,16 @@ const ratios = computed<number[]>(() => {
 })
 
 function isHiddenPane(node: LayoutNode | undefined): boolean {
-  return node?.type === 'group' && !node.visible
+  return node?.type === 'group' && (node.id === DRAWER_GROUP_ID || !node.visible)
 }
 
-/**
- * 折叠成标签条的 group（04-06 抽屉）：占固定 26px，不按比例。
- *
- * 抽屉默认 `visible=false + collapsed=true`：`visible` 为 false 表示内容区关着，
- * 但折叠条必须仍然渲染，否则用户没有重新打开的入口。
- * 只有抽屉 group 这样处理；普通面板 group 的 `visible=false` 仍然是完全隐藏。
- */
-function isCollapsedBar(node: LayoutNode | undefined): boolean {
-  return node?.type === 'group' && node.id === DRAWER_GROUP_ID && node.collapsed
-}
-
-const COLLAPSED_BAR_SIZE = '26px'
-
-function paneStyle(index: number): Record<string, string | number> {
+const visibleRatios = computed(() => {
   const node = props.node
-  if (node.type !== 'split') {
-    return {}
-  }
-  const child = node.children[index]
-  if (isCollapsedBar(child)) {
-    return { flexGrow: 0, flexBasis: COLLAPSED_BAR_SIZE, flexShrink: 0 }
-  }
-  const ratio = isHiddenPane(child) ? 0 : (ratios.value[index] ?? 0)
-  return { flexGrow: ratio, flexBasis: '0px', flexShrink: 0 }
-}
+  if (node.type !== 'split') return []
+  const visible = ratios.value.map((ratio, index) => isHiddenPane(node.children[index]) ? 0 : ratio)
+  const total = visible.reduce((sum, ratio) => sum + ratio, 0)
+  return visible.map((ratio) => total > 0 ? ratio / total : 0)
+})
 </script>
 
 <template>
@@ -68,8 +49,8 @@ function paneStyle(index: number): Record<string, string | number> {
     :class="`layout-split--${node.orientation}`"
   >
     <template v-for="(child, index) in node.children" :key="child.id">
-      <div class="layout-split__pane" :style="paneStyle(index)">
-        <LayoutNodeView :node="child" :page-id="pageId" />
+      <div class="layout-split__pane" :style="{ flexGrow: visibleRatios[index], flexBasis: '0px' }">
+        <LayoutNodeView v-if="child.id !== DRAWER_GROUP_ID" :node="child" :page-id="pageId" />
       </div>
       <ResizeHandle
         v-if="index < node.children.length - 1 && !isHiddenPane(child) && !isHiddenPane(node.children[index + 1])"
@@ -79,8 +60,7 @@ function paneStyle(index: number): Record<string, string | number> {
       />
     </template>
   </div>
-  <DrawerGroup v-else-if="node.id === DRAWER_GROUP_ID" :group-id="node.id" :page-id="pageId" />
-  <GroupRenderer v-else :group="node" :page-id="pageId" />
+  <GroupRenderer v-else-if="node.type === 'group'" :group="node" :page-id="pageId" />
 </template>
 
 <style scoped>
@@ -102,6 +82,7 @@ function paneStyle(index: number): Record<string, string | number> {
 
 .layout-split__pane {
   display: flex;
+  flex: 0 0 0px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;

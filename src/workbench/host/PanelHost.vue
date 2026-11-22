@@ -21,7 +21,7 @@ import type {
   PanelContribution,
 } from '../api/contributions.ts'
 import type { PanelNode } from '../api/layout.ts'
-import { panelNodeId, type PanelRef } from '../api/ids.ts'
+import type { PanelRef } from '../api/ids.ts'
 import PanelBoundary from './PanelBoundary.vue'
 import PanelSlot from './PanelSlot.vue'
 import HostError from './HostError.vue'
@@ -88,8 +88,7 @@ const active = computed(() => {
   if (current === undefined) {
     return false
   }
-  const activePanel = activePanelOf(current)
-  return activePanel !== undefined && activePanel.id === panelNodeId(panelRef)
+  return node.value !== undefined && activePanelOf(current)?.id === node.value.id
 })
 
 const keepAlive = computed(() => contribution.value?.keepAlive === true)

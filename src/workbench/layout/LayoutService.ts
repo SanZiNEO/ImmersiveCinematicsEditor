@@ -28,6 +28,9 @@ import type { PanelRegistry } from '../api/registries.ts'
 import {
   buildDefaultTree,
   buildPresetTree,
+  appendDrawerPanelsToDocument,
+  type DrawerPanelSlotSource,
+  removeLegacyDocumentPanels,
   isPagePresetId,
   mergePanelConstraint,
   PAGE_PRESETS,
@@ -86,6 +89,7 @@ export interface LayoutServiceOptions {
    * 所以应用装配层会把 `DrawerTabRegistry` 也并进这个谓词。
    */
   registered?: (ref: PanelRef) => boolean
+  drawerPanels?: DrawerPanelSlotSource
   /** 「这个 ref 是抽屉标签吗」——抽屉 group 的回归语义用它区分。 */
   isDrawerTab?: (ref: PanelRef) => boolean
 }
@@ -267,6 +271,8 @@ export class LayoutService implements WorkspaceLayoutService {
 
   private readonly registered?: (ref: PanelRef) => boolean
 
+  private readonly drawerPanels?: DrawerPanelSlotSource
+
   private readonly isDrawerTabRef?: (ref: PanelRef) => boolean
 
   private readonly now: () => number
@@ -290,6 +296,7 @@ export class LayoutService implements WorkspaceLayoutService {
     this.diagnostics = options.diagnostics
     this.defaults = options.defaults
     this.registered = options.registered
+    this.drawerPanels = options.drawerPanels
     this.isDrawerTabRef = options.isDrawerTab
     this.now = options.now ?? Date.now
     this.file = { version: 1, currentPageId: 'project', pages: {} }
@@ -379,7 +386,7 @@ export class LayoutService implements WorkspaceLayoutService {
       }
       if (!sourcePanel || !sourceGroup) {
         // 抽屉 group：回归只设 activeTabId，不建面板节点（抽屉标签归注册表管）。
-        if (target.id === DRAWER_GROUP_ID && this.isDrawerTab(panel)) {
+        if (isDrawerGroupId(target.id) && this.isDrawerTab(panel)) {
           const nextDrawer: GroupNode = {
             ...target,
             activeTabId: panel.panelId,
@@ -394,11 +401,11 @@ export class LayoutService implements WorkspaceLayoutService {
         // 抽屉标签被拖进普通 group：源不是面板节点，落成新面板节点。
         return this.dropDrawerTabInto(tree, panel, target, index)
       }
-      if (target.id === DRAWER_GROUP_ID && this.isDrawerTab(panel)) {
+      if (isDrawerGroupId(target.id) && this.isDrawerTab(panel)) {
         // 从普通 group 拖回抽屉：移除面板节点，改回 activeTabId。
         const without = removePanelNode(tree.root, sourcePanel.id, [DRAWER_GROUP_ID])
         if (!without) return false
-        const drawer = findGroup(without, DRAWER_GROUP_ID)
+        const drawer = findGroup(without, target.id)
         if (drawer === null) return false
         const nextDrawer: GroupNode = {
           ...drawer,
@@ -716,15 +723,14 @@ export class LayoutService implements WorkspaceLayoutService {
         if (registered.length === 0) {
           continue
         }
-        const group = findGroup(tree.root, slot)
-        if (!group) {
-          continue
-        }
+        const destination = pageId === 'document' && slot === DRAWER_GROUP_ID ? 'document.right' : slot
         for (const entry of registered) {
           const ref: PanelRef = { pluginId: entry.pluginId, panelId: entry.contribution.panelId }
           if (findPanel(tree.root, ref) !== null) {
             continue
           }
+          const group = findGroup(tree.root, destination)
+          if (group === null) continue
           const node = createPanelNode(ref, mergePanelConstraint(ref.panelId, entry.contribution))
           const nextGroup: GroupNode = {
             ...group,
@@ -942,7 +948,11 @@ export class LayoutService implements WorkspaceLayoutService {
           this.report('warning', `未知布局预设 ${presetId}`)
           return false
         }
-        page.presets[presetId] = buildPresetTree(pageId, presetId, this.panels)
+        const tree = buildPresetTree(pageId, presetId, this.panels)
+        if (pageId === 'document' && this.drawerPanels !== undefined) {
+          appendDrawerPanelsToDocument(tree, this.drawerPanels)
+        }
+        page.presets[presetId] = tree
       }
       if (page.presetId === presetId) return false
       page.presetId = presetId
@@ -1034,6 +1044,105 @@ export class LayoutService implements WorkspaceLayoutService {
       }
       return changed
     })
+  }
+
+  /** 把注册表里的抽屉贡献补进文档左栏，旧 `document.drawer` 保留为兼容容器。 */
+  ensureDocumentDrawerPanels(): number {
+    const drawers = this.drawerPanels
+    if (drawers === undefined) return 0
+    let added = 0
+    this.mutate('document', 'ensureDocumentDrawerPanels', (page) => {
+      added = 0
+      for (const presetId of Object.keys(page.presets)) {
+        added += appendDrawerPanelsToDocument(page.presets[presetId], drawers)
+      }
+      return added > 0
+    })
+    return added
+  }
+
+  /**
+   * 旧版 `document.drawer` 迁移（文档工作区改版）。
+   *
+   * 普通面板迁入左右侧栏；抽屉贡献保留为可拖节点，旧 `document.drawer` 保留为空容器，
+   * 以兼容现有外部命令，同时避免在工作区底部继续渲染固定抽屉条。
+   */
+  migrateDocumentDrawer(): number {
+    let moved = 0
+    this.mutate('document', 'migrateDocumentDrawer', (page) => {
+      let changed = false
+      for (const presetId of Object.keys(page.presets)) {
+        const tree = page.presets[presetId]
+        const drawer = findGroup(tree.root, DRAWER_GROUP_ID)
+        if (drawer === null) continue
+        for (const panel of [...drawer.panels]) {
+          const contribution = this.panels.get(panel.pluginId, panel.panelId)
+          const targetId = contribution?.defaultSlot === 'document.left'
+            ? 'document.left'
+            : 'document.right'
+          const without = removePanelNode(tree.root, panel.id, [DRAWER_GROUP_ID])
+          if (without === null) continue
+          const target = findGroup(without, targetId)
+            ?? findGroup(without, 'document.left')
+            ?? findGroup(without, 'document.right')
+          if (target === null) continue
+          const nextPanel = clonePanelNode(panel)
+          const nextTarget: GroupNode = {
+            ...target,
+            panels: [...target.panels, nextPanel],
+            activePanelId: target.activePanelId ?? nextPanel.id,
+          }
+          const root = replaceNode(without, target.id, nextTarget)
+          if (root === null) continue
+          tree.root = root
+          moved += 1
+          changed = true
+        }
+        const remaining = findGroup(tree.root, DRAWER_GROUP_ID)
+        if (remaining !== null && (remaining.visible || !remaining.collapsed || remaining.activeTabId !== undefined)) {
+          const nextDrawer: GroupNode = {
+            ...remaining,
+            panels: remaining.panels,
+            visible: false,
+            collapsed: true,
+          }
+          delete nextDrawer.activeTabId
+          const root = replaceNode(tree.root, remaining.id, nextDrawer)
+          if (root !== null) {
+            tree.root = root
+            changed = true
+          }
+        }
+        const root = tree.root
+        if (root.type !== 'split' || root.id !== 'document.root') continue
+        const drawerIndex = root.children.findIndex((child) => child.id === DRAWER_GROUP_ID)
+        if (drawerIndex < 0 || drawerIndex === root.children.length - 1) continue
+        const [drawerNode] = root.children.splice(drawerIndex, 1)
+        const [size] = root.sizes.splice(drawerIndex, 1)
+        root.children.push(drawerNode)
+        root.sizes.push(size)
+        if (root.minSizes !== undefined) {
+          const [minimum] = root.minSizes.splice(drawerIndex, 1)
+          root.minSizes.push(minimum)
+        }
+        changed = true
+      }
+      return changed
+    })
+    return moved
+  }
+
+  /** 清理新版不再注册的 legacy 文档节点，避免它们成为永久缺失占位。 */
+  pruneLegacyDocumentPanels(): number {
+    let removed = 0
+    this.mutate('document', 'pruneLegacyDocumentPanels', (page) => {
+      removed = 0
+      for (const presetId of Object.keys(page.presets)) {
+        removed += removeLegacyDocumentPanels(page.presets[presetId])
+      }
+      return removed > 0
+    })
+    return removed
   }
 
   // ── 事务与历史 ────────────────────────────────────────────────────────
@@ -1145,7 +1254,11 @@ export class LayoutService implements WorkspaceLayoutService {
 
   private defaultTree(pageId: string): LayoutTree {
     const custom = this.defaults?.(pageId)
-    return custom ? cloneTree(custom) : buildDefaultTree(pageId, this.panels)
+    const tree = custom ? cloneTree(custom) : buildDefaultTree(pageId, this.panels)
+    if (pageId === 'document' && this.drawerPanels !== undefined) {
+      appendDrawerPanelsToDocument(tree, this.drawerPanels)
+    }
+    return tree
   }
 
   private ensurePage(pageId: string): PageLayout {
