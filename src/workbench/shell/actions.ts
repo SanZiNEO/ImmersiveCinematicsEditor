@@ -45,6 +45,7 @@ export function baseName(path: string): string {
 export class ShellActions {
   private readonly deps: ShellActionsDeps
   private documentRenameHandler: (() => void) | null = null
+  private settingsHandler: ((sectionId?: string) => void) | null = null
 
   constructor(deps: ShellActionsDeps) {
     this.deps = deps
@@ -158,9 +159,17 @@ export class ShellActions {
     this.documentRenameHandler = handler
   }
 
-  /** 打开设置页（可带分区）。 */
+  /** 由外壳实现覆盖：设置弹窗（未注册时回退到设置页路由）。 */
   openSettings(sectionId?: string): void {
+    if (this.settingsHandler !== null) {
+      this.settingsHandler(sectionId)
+      return
+    }
     this.deps.router.navigate('settings', sectionId === undefined ? {} : { section: sectionId })
+  }
+
+  setSettingsHandler(handler: ((sectionId?: string) => void) | null): void {
+    this.settingsHandler = handler
   }
 
   /** 提示。 */

@@ -23,6 +23,9 @@ export interface ShellActionsPort {
   openDocumentRename(): void
   /** 顶栏注册自身提供的文档改名对话框。 */
   setDocumentRenameHandler?(handler: (() => void) | null): void
+  /** 打开设置弹窗（可带分区）。 */
   openSettings(sectionId?: string): void
+  /** 外壳注册自身提供的设置弹窗；未注册时 `openSettings` 回退到设置页路由。 */
+  setSettingsHandler?(handler: ((sectionId?: string) => void) | null): void
   notify(message: string, severity?: 'info' | 'warning' | 'error'): void
 }

@@ -44,9 +44,9 @@ export interface ShellCommandDeps {
   revertDocument(): Promise<void>
   /** 打开命令面板。 */
   openPalette(): void
-  /** 打开设置页指定分区。 */
+  /** 打开设置弹窗指定分区。 */
   openSettings(sectionId?: string): void
-  /** 打开主题选择器（设置页外观分区）。 */
+  /** 打开主题选择器（设置弹窗外观分区）。 */
   openThemePicker(): void
   /** 打开「显示面板」对话框。 */
   openShowPanel(): void

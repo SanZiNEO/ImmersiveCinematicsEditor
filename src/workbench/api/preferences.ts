@@ -35,7 +35,14 @@ export interface PreferencesSettingsState {
   lastSectionId?: string
   showStatusBar?: boolean
   confirmOnClose?: boolean
+  /** 已完成的引导版本；缺省表示从未完成。 */
+  onboardingVersion?: number
+  /** 用户主动关闭过引导（只记录选择，不阻塞下次启动判断）。 */
+  onboardingDismissed?: boolean
 }
+
+/** 当前引导版本；改版引导时递增。 */
+export const ONBOARDING_VERSION = 1
 
 /** 插件作用域偏好值。 */
 export type PluginPreferenceValue = string | number | boolean

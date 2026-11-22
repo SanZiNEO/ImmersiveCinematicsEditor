@@ -401,6 +401,20 @@ function normalizeSettings(value: unknown, issues: string[]): PreferencesSetting
       issues.push('settings.lastSectionId 类型错误，已忽略')
     }
   }
+  if (record.onboardingVersion !== undefined) {
+    if (typeof record.onboardingVersion === 'number' && Number.isFinite(record.onboardingVersion)) {
+      settings.onboardingVersion = record.onboardingVersion
+    } else {
+      issues.push('settings.onboardingVersion 类型错误，已忽略')
+    }
+  }
+  if (record.onboardingDismissed !== undefined) {
+    if (typeof record.onboardingDismissed === 'boolean') {
+      settings.onboardingDismissed = record.onboardingDismissed
+    } else {
+      issues.push('settings.onboardingDismissed 类型错误，已忽略')
+    }
+  }
   return settings
 }
 

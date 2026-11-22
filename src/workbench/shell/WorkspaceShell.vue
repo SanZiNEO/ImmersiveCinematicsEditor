@@ -6,7 +6,7 @@
  * 安装唯一键盘入口（快捷键表 → 命令表）。
  * 不持有尺寸、不读文档字段、不实现业务面板。
  */
-import { onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
 
 import type { CommandRegistryPort, FocusServicePort, KeyContext, KeybindingRegistryPort } from '../api/commands.ts'
 import type { HostPort } from '../api/host.ts'
@@ -18,17 +18,24 @@ import {
   KEYBINDING_SERVICE,
   FOCUS_SERVICE,
   I18N_SERVICE,
+  PREFERENCES_SERVICE,
 } from '../api/tokens.ts'
 import { WORKBENCH_SERVICES_KEY } from '../host/panelContext.ts'
 import AppStatusBar from './AppStatusBar.vue'
 import AppTopBar from './AppTopBar.vue'
 import CommandPalette from './CommandPalette.vue'
 import PageHost from './PageHost.vue'
+import SettingsDialog from './SettingsDialog.vue'
 import ShowPanelDialog from './ShowPanelDialog.vue'
 import type { ShellActionsPort } from '../api/actions.ts'
 import { SHELL_ACTIONS_SERVICE } from '../api/tokens.ts'
+import { ONBOARDING_VERSION } from '../api/preferences.ts'
 import { registerShellFocusRegions } from './focusRegions.ts'
-import { PREVIEW_RENDER_STATUS_KEY, useCurrentPageId, type PreviewRenderStatus } from './useWorkbench.ts'
+import {
+  PREVIEW_RENDER_STATUS_KEY,
+  useCurrentPageId,
+  type PreviewRenderStatus,
+} from './useWorkbench.ts'
 import { bindShellCommandDeps } from '../../plugins/core.workbench/commands.ts'
 
 const props = defineProps<{ services: ServiceRegistry }>()
@@ -41,6 +48,8 @@ let unregisterFocus: (() => void) | null = null
 
 const paletteOpen = ref(false)
 const showPanelOpen = ref(false)
+const settingsOpen = ref(false)
+const settingsSection = ref<string | undefined>(undefined)
 const announcement = ref('')
 
 function commands(): CommandRegistryPort {
@@ -70,7 +79,7 @@ function keyContext(editable: boolean): KeyContext {
     region: focus().currentRegion(),
     editable,
     composing: false,
-    dialogOpen: paletteOpen.value || showPanelOpen.value,
+    dialogOpen: paletteOpen.value || showPanelOpen.value || settingsOpen.value,
   }
 }
 
@@ -109,6 +118,11 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
+  actions().setSettingsHandler?.((sectionId) => {
+    settingsSection.value = sectionId
+    settingsOpen.value = true
+  })
+
   bindShellCommandDeps({
     notify: (message, severity) => actions().notify(message, severity),
     guard: () => actions().guard(),
@@ -158,9 +172,22 @@ onMounted(() => {
 
   window.addEventListener('keydown', onKeydown)
   unregisterFocus = registerShellFocusRegions(focus())
+
+  // 首次启动（或引导版本升级）：自动打开设置弹窗的引导分区。
+  // 偏好已在 WorkbenchApp.start() 里加载完成，这里只读快照。
+  const onboarding = props.services.require(PREFERENCES_SERVICE).get().settings
+  const needsOnboarding =
+    (onboarding.onboardingVersion ?? 0) < ONBOARDING_VERSION && onboarding.onboardingDismissed !== true
+  if (needsOnboarding) {
+    void nextTick(() => {
+      settingsSection.value = 'onboarding'
+      settingsOpen.value = true
+    })
+  }
 })
 
 onBeforeUnmount(() => {
+  actions().setSettingsHandler?.(null)
   window.removeEventListener('keydown', onKeydown)
   unregisterFocus?.()
   unregisterFocus = null
@@ -173,6 +200,7 @@ onBeforeUnmount(() => {
     <PageHost />
     <AppStatusBar />
     <CommandPalette v-if="paletteOpen" :page-id="pageId" @close="paletteOpen = false" />
+    <SettingsDialog v-if="settingsOpen" :section-id="settingsSection" @close="settingsOpen = false" />
     <ShowPanelDialog v-if="showPanelOpen" :page-id="pageId" @close="showPanelOpen = false" />
     <p class="sr-only" aria-live="polite" @keydown.esc="announcement = ''">{{ announcement }}</p>
   </div>
