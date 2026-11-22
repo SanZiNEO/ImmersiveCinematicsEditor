@@ -8,7 +8,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { LaidOutNode } from '../../core/graph/layout.ts'
-import { NODE_H, NODE_W, intersectsViewport } from '../../core/graph/layout.ts'
+import { NODE_H, NODE_W, PARTITION_HEADER_H, intersectsViewport } from '../../core/graph/layout.ts'
 import type { GraphNode } from '../../core/graph/types.ts'
 import {
   buildEdgeViews,
@@ -84,8 +84,8 @@ const lodSplit = computed<LodSplit>(() => {
   void controller.layoutRevision.value
   const nodes = controller.visibleNodes.value
   const viewport = { width: controller.viewport.width, height: controller.viewport.height }
-  if (viewport.width <= 0 || viewport.height <= 0) {
-    // 视口未就绪：全部进精细层，但仍要拷贝（拖动靠新引用触发重渲染）。
+  if (!cropping.value || viewport.width <= 0 || viewport.height <= 0) {
+    // 小图平移只更新取景变换；节点拖动仍需要新引用触发重渲染。
     return { detail: nodes.map((node) => ({ ...node })), coarse: [] }
   }
   const view = state.view
@@ -346,7 +346,8 @@ function laneStyle(partition: { x: number; y: number; w: number; h: number }, co
     left: `${partition.x}px`,
     top: `${partition.y}px`,
     width: `${partition.w}px`,
-    height: collapsed ? '30px' : `${partition.h}px`,
+    height: `${collapsed ? PARTITION_HEADER_H : partition.h}px`,
+    '--graph-lane-header-height': `${PARTITION_HEADER_H}px`,
   }
 }
 
@@ -902,7 +903,8 @@ onBeforeUnmount(() => {
                   'graph-edge--down': edgeDirection(edge) === 'down',
                 }"
                 :d="edge.d"
-                :marker-end="edgeMarker(edge)"
+                :marker-start="state.edgeFlow === 'reverse' ? edgeMarker(edge) : undefined"
+                :marker-end="state.edgeFlow === 'forward' ? edgeMarker(edge) : undefined"
               >
                 <title>{{ edgeTooltip(edge) }}</title>
               </path>
@@ -1020,7 +1022,6 @@ onBeforeUnmount(() => {
 
       <div v-else-if="controller.emptyResult.value" class="graph-overlay graph-overlay--center" data-graph-overlay="true">
         <p class="overlay-title">没有匹配的脚本</p>
-        <p class="overlay-text">搜索 / 触发器类型 / 只显异常的组合过滤掉了所有节点。</p>
         <button type="button" class="overlay-button" @click="clearFilters">清除过滤</button>
       </div>
 
@@ -1029,7 +1030,7 @@ onBeforeUnmount(() => {
           拖拽平移 · 滚轮缩放 · 单击高亮上下游 · 双击打开脚本 · 悬停看触发器设定
         </p>
         <p class="graph-legend">
-          实线箭头 = 前置关系（被依赖 → 依赖方）· 跨文件夹连线 = 跨框前置 · 虚线框 = 文件夹
+          箭头 {{ state.edgeFlow === 'forward' ? '前置 → 后续' : '后续 → 前置' }} · 虚线连线为跨文件夹前置 · 虚线框为文件夹
         </p>
       </div>
 
@@ -1110,7 +1111,7 @@ onBeforeUnmount(() => {
   left: 0;
   top: 0;
   width: 100%;
-  height: 30px;
+  height: calc(var(--graph-lane-header-height) - 1px);
   display: flex;
   align-items: center;
   gap: 6px;

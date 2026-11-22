@@ -4,7 +4,7 @@
  * 用户指令（05 轮中明确覆盖 `plan/05/05-02` 的“确定性分层、非力导向”）：
  *   1. 以「最终脚本 / 起始脚本」（锚点）为中心向外散发，不再是泳道网格；
  *   2. 每个文件夹一个「框」（簇），框内是该文件夹的脚本，按脚本关系自然连线；
- *   3. 两种渲染模式共用同一套力导向坐标：dot（小圆点）与 card（大卡片）；
+ *   3. 圆点和卡片使用同一套算法，按各自尺寸预留分组空间；
  *   4. 上千节点也要可布局：斥力用空间网格近似，同步固定步数，不做运行时动画。
  *
  * 确定性：用 mulberry32(固定种子) 初始化 + 固定迭代步数 + 稳定的遍历顺序，
@@ -20,6 +20,9 @@ export const NODE_H = 64
 export const DOT_RADIUS = 12
 /** 圆点模式命中框边长（较大以便点击；渲染圆点半径仍为 DOT_RADIUS）。 */
 export const DOT_HIT = 32
+
+/** 目录框标题栏高度（世界像素）；节点拖动不得进入此安全区。 */
+export const PARTITION_HEADER_H = 30
 
 /** 视野/布局包围盒间距（世界像素）。 */
 export const WORLD_PAD = 60
@@ -64,6 +67,8 @@ export interface GraphLayoutOptions {
    * 而不是字典序前缀那种与可见性无关的切片。
    */
   order?: readonly string[]
+  /** 命中框尺寸：圆点或卡片。目录框按此尺寸给手摆节点留边。 */
+  nodeSize?: 'dot' | 'card'
 }
 
 /** 布局后的节点（x/y 为圆心，w/h 为命中框，r 为圆点半径）。 */
@@ -104,7 +109,7 @@ export interface GraphPartition {
   count: number
 }
 
-/** 布局结果（mode 无关；卡片/dot 共用）。 */
+/** 布局结果。 */
 export interface GraphLayout {
   nodes: LaidOutNode[]
   edges: LaidOutEdge[]
@@ -113,6 +118,21 @@ export interface GraphLayout {
   centerPath: string | null
   width: number
   height: number
+}
+
+/** 将节点圆心限制在文件夹正文内，给节点命中框与标题留出空间。 */
+export function positionInPartition(
+  partition: GraphPartition,
+  node: Pick<LaidOutNode, 'w' | 'h'>,
+  x: number,
+  y: number,
+): { x: number; y: number } {
+  const halfWidth = node.w / 2
+  const halfHeight = node.h / 2
+  return {
+    x: Math.max(partition.x + halfWidth, Math.min(partition.x + partition.w - halfWidth, x)),
+    y: Math.max(partition.y + PARTITION_HEADER_H + halfHeight, Math.min(partition.y + partition.h - halfHeight, y)),
+  }
 }
 
 /** 目录标签。 */
@@ -555,8 +575,10 @@ function separateZones(nodes: readonly PhysNode[], folderIndexByKey: Map<string,
    主布局
    ===================================================================== */
 
-/** 簇内网格间距（世界像素）：dot 圆点不重叠，card 模式可缩放细看。 */
-const PLACE_CELL = 90
+/** 簇内网格间距（世界像素）：卡片与圆点分别避免命中框重叠。 */
+const PLACE_CELL_DOT = 90
+const PLACE_CELL_CARD_W = 220
+const PLACE_CELL_CARD_H = 96
 
 /**
  * O(n) 快速摆放：每个文件夹一个方阵簇，簇心由 `folderCenters` 给出（锚点文件夹在原点）。
@@ -569,6 +591,8 @@ function initialPlacement(
   laidNodes: readonly LaidOutNode[],
   folderIndexByKey: Map<string, number>,
   centers: readonly { x: number; y: number }[],
+  cellWidth: number,
+  cellHeight: number,
 ): void {
   const count = laidNodes.length
   const folderCount = centers.length
@@ -598,15 +622,15 @@ function initialPlacement(
     const center = centers[slot]
     const cols = Math.max(1, Math.ceil(Math.sqrt(size)))
     const rows = Math.max(1, Math.ceil(size / cols))
-    const originX = center.x - ((cols - 1) / 2) * PLACE_CELL
-    const originY = center.y - ((rows - 1) / 2) * PLACE_CELL
+    const originX = center.x - ((cols - 1) / 2) * cellWidth
+    const originY = center.y - ((rows - 1) / 2) * cellHeight
     for (let at = offsets[slot]; at < offsets[slot + 1]; at += 1) {
       const node = laidNodes[order[at]]
       const position = at - offsets[slot]
       const col = position % cols
       const row = (position - col) / cols
-      node.x = Math.round(originX + col * PLACE_CELL)
-      node.y = Math.round(originY + row * PLACE_CELL)
+      node.x = Math.round(originX + col * cellWidth)
+      node.y = Math.round(originY + row * cellHeight)
     }
   }
 }
@@ -692,12 +716,15 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
     : graph.edges.filter((edge) => included.has(edge.from) && included.has(edge.to))
   const { layer, isolated } = layersOf(nodes, edges)
 
+  const nodeSize = options.nodeSize === 'card' ? 'card' : 'dot'
+  const hitWidth = nodeSize === 'card' ? NODE_W : DOT_HIT
+  const hitHeight = nodeSize === 'card' ? NODE_H : DOT_HIT
   const laidNodes: LaidOutNode[] = nodes.map((node, index) => ({
     ...node,
     x: 0,
     y: 0,
-    w: DOT_HIT,
-    h: DOT_HIT,
+    w: hitWidth,
+    h: hitHeight,
     r: DOT_RADIUS,
     layer: layer[index],
     isolated: isolated[index] === 1,
@@ -741,11 +768,14 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
 
   // 文件夹环绕半径随规模自适应（照原型四角/环绕的思路，规模大则铺更开）。
   const perFolderAvg = Math.max(1, laidNodes.length / Math.max(1, folders.length))
-  const folderRadius = Math.round(Math.max(600, Math.sqrt(perFolderAvg) * 150 * Math.sqrt(Math.max(1, folders.length))))
+  const cellWidth = nodeSize === 'card' ? PLACE_CELL_CARD_W : PLACE_CELL_DOT
+  const cellHeight = nodeSize === 'card' ? PLACE_CELL_CARD_H : PLACE_CELL_DOT
+  const radiusUnit = Math.max(cellWidth, cellHeight) * (nodeSize === 'card' ? 1.7 : 1.65)
+  const folderRadius = Math.round(Math.max(600, Math.sqrt(perFolderAvg) * radiusUnit * Math.sqrt(Math.max(1, folders.length))))
   const centers = folderCenters(folders, anchorFolder, folderRadius)
 
-  // 第一步：O(n) 快速摆放。`steps === 0` 时这就是最终坐标（大图 1 秒内可见）。
-  initialPlacement(laidNodes, folderIndexByKey, centers)
+  // 第一步：O(n) 快速摆放；小图随后跑一次性力导向，大图仍走快速布局。
+  initialPlacement(laidNodes, folderIndexByKey, centers, cellWidth, cellHeight)
   const iterations = options.steps ?? defaultSteps(laidNodes.length)
 
   if (iterations > 0) {
@@ -817,21 +847,7 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
     })
   }
 
-  // 手摆覆盖优先。
-  const overrides = options.overrides ?? {}
-  for (const node of laidNodes) {
-    const override = overrides[node.path]
-    if (override === undefined) {
-      continue
-    }
-    if (Number.isFinite(override.x) && Number.isFinite(override.y)
-      && Math.abs(override.x) <= 1e6 && Math.abs(override.y) <= 1e6) {
-      node.x = Math.round(override.x)
-      node.y = Math.round(override.y)
-    }
-  }
-
-  // 文件夹簇包围盒（单次遍历累加，避免 10 万参数展开）。
+  // 文件夹簇包围盒只按自动坐标生成；手摆坐标后应用并夹回框内，避免框逐次变大。
   const partitions: GraphPartition[] = []
   const folderCount = folders.length
   const minXs = new Float64Array(folderCount).fill(Number.POSITIVE_INFINITY)
@@ -858,18 +874,39 @@ export function computeGraphLayout(graph: GraphData, options: GraphLayoutOptions
     const minY = minYs[slot]
     const maxX = maxXs[slot]
     const maxY = maxYs[slot]
-    // 照原型 ZPAD=52：框与节点之间留足呼吸空间，框顶部再留出标题高度。
+    // 每个目录框只由显式布局生成一次；按真实命中框留边，节点拖动后不会被重算覆盖。
     const boxPad = 52
-    const headerPad = 26
+    const headerPad = PARTITION_HEADER_H
+    const halfW = hitWidth / 2
+    const halfH = hitHeight / 2
     partitions.push({
       folder: folders[slot],
       label: folderLabel(folders[slot]),
-      x: minX - boxPad,
-      y: minY - boxPad - headerPad,
-      w: maxX - minX + boxPad * 2,
-      h: maxY - minY + boxPad * 2 + headerPad,
+      x: minX - halfW - boxPad,
+      y: minY - halfH - boxPad - headerPad,
+      w: maxX - minX + hitWidth + boxPad * 2,
+      h: maxY - minY + hitHeight + boxPad * 2 + headerPad,
       count: counts[slot],
     })
+  }
+
+  // 手摆覆盖优先，但只按自动框夹取显示坐标；原始覆盖值不改写。
+  const overrides = options.overrides ?? {}
+  const partitionByFolder = new Map(partitions.map((partition) => [partition.folder, partition]))
+  for (const node of laidNodes) {
+    const override = overrides[node.path]
+    if (override === undefined) {
+      continue
+    }
+    if (!Number.isFinite(override.x) || !Number.isFinite(override.y)
+      || Math.abs(override.x) > 1e6 || Math.abs(override.y) > 1e6) {
+      continue
+    }
+    const box = partitionByFolder.get(node.folder)
+    if (box === undefined) continue
+    const position = positionInPartition(box, node, override.x, override.y)
+    node.x = position.x
+    node.y = position.y
   }
 
   // 边（曲线由 geometry 层负责；这里只产出端点与方向数据）。

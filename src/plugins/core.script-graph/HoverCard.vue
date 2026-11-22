@@ -4,7 +4,8 @@
  *
  * 卡片内容：全部触发器 + 每条完整条件树（任意深度组合器）+ 全部前置；
  * 条件文案只复用 `describeTriggerCondition`（纯函数层唯一摘要生成处），
- * 前置状态复用 `resolveRequirement`。卡片内选中只是临时态，不写 `state.selection`；
+ * 前置只展示目标脚本名，不展示解析状态；唯一命中的内置目标把 id 放进 title。
+ * 卡片内选中只是临时态，不写 `state.selection`；
  * 没有任何输入控件、没有编辑入口。读取失败退回节点摘要并提示条件暂不可用。
  */
 import { computed, ref, watch } from 'vue'
@@ -13,19 +14,14 @@ import {
   conditionSummary,
   continuitySummary,
   delayLabel,
-  requirementStatusLabel,
-  requirementStatusOf,
   requirementTargetLabel,
   requirementTypeLabel,
   repeatableLabel,
   triggerTypeLabel,
 } from './labels.ts'
 import {
-  HOVER_REQUIREMENT_STATUS_LABELS,
-  hoverRequirementStatusKind,
   triggerMetaParts,
   type HoverSummaryOutcome,
-  type HoverTriggerView,
 } from './hoverSummary.ts'
 import ConditionTreeView from './ConditionTreeView.vue'
 import { useGraphController } from './state.ts'
@@ -76,20 +72,44 @@ async function load(): Promise<void> {
 
 const fallbackTriggers = computed<GraphTrigger[]>(() => props.node.triggers)
 
+/** 图中 scriptId 唯一且有效的目标：id → 节点。重复 id 不参与名称解析。 */
+const uniqueScriptTargets = computed(() => {
+  const nodes = controller.graph.value?.nodes ?? []
+  const counts = new Map<string, number>()
+  for (const node of nodes) {
+    if (node.scriptId === null || node.scriptId === undefined || node.scriptId === '') continue
+    counts.set(node.scriptId, (counts.get(node.scriptId) ?? 0) + 1)
+  }
+  const result = new Map<string, GraphNode>()
+  for (const node of nodes) {
+    const scriptId = node.scriptId
+    if (!node.valid || scriptId === null || scriptId === undefined || scriptId === '') continue
+    if (counts.get(scriptId) === 1) result.set(scriptId, node)
+  }
+  return result
+})
+
+function targetNodeFor(target: string | undefined): GraphNode | undefined {
+  return target === undefined ? undefined : uniqueScriptTargets.value.get(target)
+}
+
+function targetDisplayName(target: string | undefined): string | undefined {
+  const node = targetNodeFor(target)
+  if (node === undefined) return undefined
+  return node.name.trim() === '' ? target : node.name.trim()
+}
+
+function targetTitle(target: string | undefined): string | undefined {
+  const node = targetNodeFor(target)
+  return node === undefined || target === undefined ? undefined : `${targetDisplayName(target)} · id=${target} · ${node.path}`
+}
+
 function toggleSelect(identity: string): void {
   selectedIdentity.value = selectedIdentity.value === identity ? null : identity
 }
 
 function isSelected(identity: string): boolean {
   return selectedIdentity.value === identity
-}
-
-function statusLabel(status: HoverTriggerView['requirements'][number]['status']): string {
-  return HOVER_REQUIREMENT_STATUS_LABELS[status]
-}
-
-function badgeKind(status: HoverTriggerView['requirements'][number]['status']): string {
-  return hoverRequirementStatusKind(status)
 }
 
 function locate(): void {
@@ -109,16 +129,12 @@ function fallbackCondition(trigger: GraphTrigger): string | null {
   return conditionSummary(trigger)
 }
 
-function fallbackStatusLabel(requirement: GraphRequirement): string {
-  return requirementStatusLabel(requirementStatusOf(requirement))
-}
-
 function fallbackRequirementLabel(requirement: GraphRequirement): string {
   return requirementTypeLabel(requirement.type)
 }
 
 function fallbackRequirementTarget(requirement: GraphRequirement): string {
-  return requirementTargetLabel(requirement)
+  return targetDisplayName(requirement.scriptId) ?? requirementTargetLabel(requirement)
 }
 
 function fallbackRepeatable(trigger: GraphTrigger): string {
@@ -171,9 +187,13 @@ function fallbackTypeLabel(trigger: GraphTrigger): string {
             <p v-if="fallbackCondition(trigger) !== null" class="hover-trigger__condition">{{ fallbackCondition(trigger) }}</p>
             <ul v-if="trigger.requirements.length > 0" class="hover-reqs">
               <li v-for="requirement in trigger.requirements" :key="requirement.index" class="hover-req">
-                <span class="hover-req__type">{{ fallbackRequirementLabel(requirement) }}</span>
-                <span class="hover-req__target">{{ fallbackRequirementTarget(requirement) }}</span>
-                <span class="hover-req__status">{{ fallbackStatusLabel(requirement) }}</span>
+                <template v-if="targetNodeFor(requirement.scriptId) !== undefined">
+                  <span class="hover-req__target" :title="targetTitle(requirement.scriptId)">{{ fallbackRequirementTarget(requirement) }}</span>
+                </template>
+                <template v-else>
+                  <span class="hover-req__type">{{ fallbackRequirementLabel(requirement) }}</span>
+                  <span class="hover-req__target">{{ fallbackRequirementTarget(requirement) }}</span>
+                </template>
               </li>
             </ul>
           </div>
@@ -210,13 +230,15 @@ function fallbackTypeLabel(trigger: GraphTrigger): string {
             <div class="hover-trigger__block">
               <p class="hover-trigger__block-title">前置</p>
               <ul v-if="view.requirements.length > 0" class="hover-reqs">
-                <li v-for="requirement in view.requirements" :key="requirement.index" class="hover-req" :title="requirement.message">
-                  <span class="hover-req__type">{{ requirement.typeLabel }}</span>
-                  <span v-if="requirement.target !== undefined" class="hover-req__target">→ {{ requirement.target }}</span>
-                  <span class="hover-req__status" :class="`hover-req__status--${badgeKind(requirement.status)}`">
-                    {{ statusLabel(requirement.status) }}
-                  </span>
-                  <span v-if="requirement.rawText !== ''" class="hover-req__raw">{{ requirement.rawText }}</span>
+                <li v-for="requirement in view.requirements" :key="requirement.index" class="hover-req">
+                  <template v-if="targetNodeFor(requirement.target) !== undefined">
+                    <span class="hover-req__target" :title="targetTitle(requirement.target)">{{ targetDisplayName(requirement.target) }}</span>
+                  </template>
+                  <template v-else>
+                    <span class="hover-req__type">{{ requirement.typeLabel }}</span>
+                    <span v-if="requirement.target !== undefined" class="hover-req__target">→ {{ requirement.target }}</span>
+                    <span v-if="requirement.rawText !== ''" class="hover-req__raw">{{ requirement.rawText }}</span>
+                  </template>
                 </li>
               </ul>
               <p v-else class="hover-card__note">无前置</p>
@@ -331,17 +353,6 @@ function fallbackTypeLabel(trigger: GraphTrigger): string {
 }
 .hover-req__type { color: var(--text-secondary); }
 .hover-req__target { overflow-wrap: anywhere; }
-.hover-req__status {
-  padding: 0 4px;
-  border-radius: 3px;
-  border: 1px solid var(--border-strong);
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.hover-req__status--success { color: var(--success); border-color: var(--success); }
-.hover-req__status--error { color: var(--error); border-color: var(--error); }
-.hover-req__status--warning { color: var(--warning); border-color: var(--warning); }
-.hover-req__status--muted { color: var(--text-muted); border-color: var(--border); }
 .hover-req__raw { flex-basis: 100%; color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
 
 .hover-card__foot {

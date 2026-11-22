@@ -552,6 +552,18 @@ async function main(): Promise<void> {
     check('力导向：中心坐标确定且稳定',
       Number.isFinite(root?.x) && Number.isFinite(root?.y))
 
+    const fixedGraph = makeGraph(
+      [makeNode('a.json', 'A'), makeNode('b.json', 'B'), makeNode('c.json', 'C')],
+      [makeEdge('b.json', 'a.json')],
+    )
+    const small = computeGraphLayout(fixedGraph, { steps: undefined })
+    const smallFast = computeGraphLayout(fixedGraph, { steps: 0 })
+    check('小图默认执行一次性力导向',
+      small.nodes.some((node) => {
+        const fast = laidOf(smallFast, node.path)
+        return fast !== undefined && (fast.x !== node.x || fast.y !== node.y)
+      }), small.nodes.map((node) => [node.path, node.x, node.y]))
+
     const cycleGraph = makeGraph(
       [makeNode('a.json', 'A'), makeNode('b.json', 'B'), makeNode('c.json', 'C')],
       [makeEdge('b.json', 'a.json'), makeEdge('a.json', 'b.json'), makeEdge('c.json', 'a.json')],
@@ -562,14 +574,45 @@ async function main(): Promise<void> {
       cycleLayout.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y)),
       cycleLayout.nodes.map((node) => [node.path, node.x, node.y]))
 
-    const overrides = { 'team/alpha.json': { x: 5000, y: 6000 } }
+    const overrides = { 'team/alpha.json': { x: 0, y: 0 } }
     const overridden = computeGraphLayout(stableGraph, { overrides })
-    check('手摆覆盖优先', laidOf(overridden, 'team/alpha.json')?.x === 5000
-      && laidOf(overridden, 'team/alpha.json')?.y === 6000, laidOf(overridden, 'team/alpha.json'))
+    const overriddenAlpha = laidOf(overridden, 'team/alpha.json')
+    const overriddenBox = overridden.partitions.find((partition) => partition.folder === 'team')
+    check('手摆覆盖优先且夹在自动框内', overriddenAlpha !== undefined && overriddenBox !== undefined
+      && overriddenAlpha.x === 0
+      && overriddenAlpha.x >= overriddenBox.x && overriddenAlpha.x <= overriddenBox.x + overriddenBox.w
+      && overriddenAlpha.y >= overriddenBox.y + 30 && overriddenAlpha.y <= overriddenBox.y + overriddenBox.h,
+    { overriddenAlpha, overriddenBox })
     check('未覆盖节点保持自动坐标',
       laidOf(overridden, 'team/zeta.json')?.x === zeta?.x
       && laidOf(overridden, 'team/zeta.json')?.y === zeta?.y,
       laidOf(overridden, 'team/zeta.json'))
+
+    // 显式布局生成固定目录框；旧手摆坐标仍在框内，卡片与圆点按各自尺寸留边。
+    {
+      const dotBox = overridden.partitions.find((partition) => partition.folder === 'team')
+      const cardBox = computeGraphLayout(stableGraph, { overrides, nodeSize: 'card' })
+        .partitions.find((partition) => partition.folder === 'team')
+      check('目录框：按目录生成一次', dotBox !== undefined && dotBox.count === 2, dotBox)
+      check('目录框：卡片尺寸比圆点更宽', cardBox !== undefined && dotBox !== undefined
+        && cardBox.w > dotBox.w && cardBox.h > dotBox.h, { dotBox, cardBox })
+      const farOverride = computeGraphLayout(stableGraph, {
+        overrides: { 'team/alpha.json': { x: 5000, y: 6000 } },
+        nodeSize: 'card',
+      })
+      const manual = laidOf(farOverride, 'team/alpha.json')
+      const farBox = farOverride.partitions.find((partition) => partition.folder === 'team')
+      check('目录框：旧手摆坐标显示时夹取且不改框', manual !== undefined && dotBox !== undefined
+        && farBox !== undefined
+        && manual.x >= farBox.x && manual.x <= farBox.x + farBox.w
+        && manual.y >= farBox.y + 30 && manual.y <= farBox.y + farBox.h, { manual, farBox })
+      const autoOnly = computeGraphLayout(stableGraph, { nodeSize: 'card' })
+      check('目录框：手摆不扩框', JSON.stringify(farBox)
+        === JSON.stringify(autoOnly.partitions.find((partition) => partition.folder === 'team')))
+      const first = JSON.stringify(computeGraphLayout(stableGraph, { overrides, nodeSize: 'card' }).partitions)
+      const second = JSON.stringify(computeGraphLayout(stableGraph, { overrides, nodeSize: 'card' }).partitions)
+      check('目录框：相同输入下位置尺寸稳定', first === second)
+    }
 
     // 不重叠：任意两节点命中框（DOT_HIT）不相交（力导向布局）。
     const forceLayout = computeGraphLayout(stableGraph)

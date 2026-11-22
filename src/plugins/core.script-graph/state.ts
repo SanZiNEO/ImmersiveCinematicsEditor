@@ -41,7 +41,7 @@ import {
   clampScale,
   computeGraphLayout,
   neighboursOf,
-  screenToWorld,
+  positionInPartition,
   type GraphLayout,
   type GraphNodePosition,
   type GraphPartition,
@@ -63,7 +63,6 @@ import {
 } from './geometry.ts'
 import { mutationErrorText } from './labels.ts'
 import { HoverIntent } from '../../workbench/shared/hoverIntent.ts'
-import { LayoutScheduler } from './layoutScheduler.ts'
 import { LayoutPersist } from './layoutPersist.ts'
 
 /** 插件 / 面板 ID（05-13 固定）。 */
@@ -75,6 +74,8 @@ export const GRAPH_PANEL_SCOPE = `panel:${GRAPH_PLUGIN_ID}:${GRAPH_PANEL_ID}`
 
 /** 面板阶段。 */
 export type GraphPanelPhase = 'idle' | 'loading' | 'ready' | 'empty' | 'error'
+
+export type GraphFilterRole = 'all' | 'entry' | 'terminal'
 
 /** 图上维护前置的对话框目标。 */
 export interface GraphEditorTarget {
@@ -100,15 +101,17 @@ export interface GraphPanelState {
   search: string
   /** 触发器类型过滤（多选；空数组 = 全部）。 */
   filterTypes: string[]
+  filterRole: GraphFilterRole
+  filterDependencyCount: number | null
   onlyAnomalies: boolean
   /** 是否显示文件夹框（原「目录分组」开关语义：控制 clusters 是否绘制）。 */
   grouping: boolean
   /** 是否绘制边线（连线展示开关）。 */
   showEdges: boolean
+  /** 边的视觉流向；反向只改变锚点与显式布局。 */
+  edgeFlow: 'forward' | 'reverse'
   /** 渲染模式：小圆点（简洁） / 大卡片。 */
   mode: 'dot' | 'card'
-  /** 是否播放布局收敛动画（只对视口内节点做精细计算）。 */
-  animate: boolean
   collapsed: string[]
   view: GraphViewState
   highlight: 'both' | 'up' | 'down'
@@ -146,6 +149,9 @@ export interface PartitionView {
 /** 空集合（避免每次分配）。 */
 const EMPTY_PATHS: ReadonlySet<string> = new Set<string>()
 
+/** 大图按文件夹快速布置，小图只在重排时运行一次力导向。 */
+const FORCE_LAYOUT_LIMIT = 800
+
 type LoadKind = 'mount' | 'manual' | 'auto'
 
 /** 默认状态。 */
@@ -157,11 +163,13 @@ function initialState(): GraphPanelState {
     hoverPath: null,
     search: '',
     filterTypes: [],
+    filterRole: 'all',
+    filterDependencyCount: null,
     onlyAnomalies: false,
     grouping: true,
     showEdges: true,
+    edgeFlow: 'forward',
     mode: 'dot',
-    animate: true,
     collapsed: [],
     view: { scale: 1, tx: 0, ty: 0 },
     highlight: 'both',
@@ -272,26 +280,8 @@ export class GraphController {
   private bootstrapping = false
   /** 首次把视图居中到力导向锚点（之后不再自动移动，尊重用户平移/持久化视图）。 */
   private viewCentered = false
-  /**
-   * 布局调度（06-12 拆分）：分批出图、分批顺序、视口内力导向动画。
-   *
-   * 控制器只判断"什么时候要重算"，具体调度交给它；本类不再持有布局计时器。
-   */
-  private readonly layoutScheduler = new LayoutScheduler({
-    graph: () => this.graph.value,
-    layout: () => this.layout.value,
-    mounted: () => this.mountedFlag,
-    animate: () => this.state.animate,
-    overrides: () => this.manualPositions,
-    worldBox: () => this.worldBoxOfViewport(),
-    publish: (next) => {
-      this.layout.value = next
-      this.layoutRevision.value += 1
-    },
-    onFirstBatch: () => {
-      this.centerOnAnchorIfNeeded()
-    },
-  })
+  /** 上次自动居中的锚点；反向刷新只在根变化时重新居中。 */
+  private lastCenteredAnchor: string | null = null
   private loading: Promise<void> | null = null
   private queuedRefresh = false
   private autoPending = false
@@ -321,7 +311,8 @@ export class GraphController {
 
   readonly hoverNode: ComputedRef<GraphNode | null> = computed(() => {
     const path = this.state.hoverPath
-    return path === null ? null : this.graph.value?.nodes.find((node) => node.path === path) ?? null
+    if (path === null || this.matchingPaths.value?.has(path) === false) return null
+    return this.graph.value?.nodes.find((node) => node.path === path) ?? null
   })
 
   readonly detailNode: ComputedRef<GraphNode | null> = computed(() => {
@@ -346,12 +337,13 @@ export class GraphController {
     if (graph === null) {
       return { mode: 'none', source: null, up: EMPTY_PATHS, down: EMPTY_PATHS }
     }
-    if (selected !== null && graph.nodes.some((node) => node.path === selected)) {
+    const matching = this.matchingPaths.value
+    if (selected !== null && matching?.has(selected) !== false && graph.nodes.some((node) => node.path === selected)) {
       const result = neighboursOf(graph.nodes, graph.edges, selected)
       return { mode: 'selection', source: selected, up: result.up, down: result.down }
     }
     const hover = this.state.hoverPath
-    if (hover !== null) {
+    if (hover !== null && matching?.has(hover) !== false) {
       const result = adjacentOf(graph.edges, hover)
       return { mode: 'hover', source: hover, up: result.up, down: result.down }
     }
@@ -370,7 +362,7 @@ export class GraphController {
   readonly revealedPaths: ComputedRef<ReadonlySet<string>> = computed(() => {
     const hover = this.state.hoverPath
     const graph = this.graph.value
-    if (hover === null || graph === null) {
+    if (hover === null || graph === null || this.matchingPaths.value?.has(hover) === false) {
       return EMPTY_PATHS
     }
     const { up, down } = adjacentOf(graph.edges, hover)
@@ -384,31 +376,48 @@ export class GraphController {
     return result
   })
 
+  private readonly matchingPaths = computed<ReadonlySet<string> | null>(() => {
+    if (!this.hasFilters.value) return null
+    const nodes = this.graph.value?.nodes ?? []
+    const search = this.state.search.trim()
+    const { filterTypes, filterRole, filterDependencyCount } = this.state
+    const anomalies = this.state.onlyAnomalies ? this.anomalyPaths.value : null
+    const terminalDegrees = filterRole === 'terminal' ? this.degrees.value : null
+    const matching = new Set<string>()
+    for (const node of nodes) {
+      if (anomalies !== null && !anomalies.has(node.path)) {
+        continue
+      }
+      if (filterTypes.length > 0 && !node.triggers.some((trigger) => filterTypes.includes(trigger.type))) {
+        continue
+      }
+      if (search !== '' && !matchesSearch(node, search)) {
+        continue
+      }
+      const dependencyCount = node.requiresTargets.length
+      if (filterDependencyCount !== null && dependencyCount !== filterDependencyCount) {
+        continue
+      }
+      if (filterRole === 'entry' && dependencyCount > 0) {
+        continue
+      }
+      if (terminalDegrees !== null && (terminalDegrees.get(node.path)?.dependents ?? 0) > 0) {
+        continue
+      }
+      matching.add(node.path)
+    }
+    return matching
+  })
+
   readonly visibleNodes: ComputedRef<LaidOutNode[]> = computed(() => {
     const layout = this.layout.value
     void this.layoutRevision.value
-    if (layout === null) {
-      return []
-    }
-    const search = this.state.search.trim()
-    const filterTypes = this.state.filterTypes
-    const anomalies = this.state.onlyAnomalies ? this.anomalyPaths.value : null
+    if (layout === null) return []
+
+    const matching = this.matchingPaths.value
     const revealed = this.revealedPaths.value
-    return layout.nodes.filter((node) => {
-      if (anomalies !== null && !anomalies.has(node.path)) {
-        return false
-      }
-      if (filterTypes.length > 0 && !node.triggers.some((trigger) => filterTypes.includes(trigger.type))) {
-        return false
-      }
-      if (search !== '' && !matchesSearch(node, search)) {
-        return false
-      }
-      if (isFolderHidden(node.folder, this.state.collapsed) && !revealed.has(node.path)) {
-        return false
-      }
-      return true
-    })
+    return layout.nodes.filter((node) => matching?.has(node.path) !== false
+      && (!isFolderHidden(node.folder, this.state.collapsed) || revealed.has(node.path)))
   })
 
   readonly partitions: ComputedRef<PartitionView[]> = computed(() => {
@@ -430,6 +439,12 @@ export class GraphController {
 
   readonly degrees: ComputedRef<Map<string, NodeDegree>> = computed(() => nodeDegrees(this.graph.value))
 
+  readonly dependencyCountOptions = computed(() => {
+    const counts = new Set((this.graph.value?.nodes ?? []).map((node) => node.requiresTargets.length))
+    if (this.state.filterDependencyCount !== null) counts.add(this.state.filterDependencyCount)
+    return [...counts].sort((left, right) => left - right)
+  })
+
   readonly typeOptions: ComputedRef<string[]> = computed(() => {
     const types = new Set<string>()
     for (const node of this.graph.value?.nodes ?? []) {
@@ -443,7 +458,8 @@ export class GraphController {
   })
 
   readonly hasFilters: ComputedRef<boolean> = computed(() =>
-    this.state.search.trim() !== '' || this.state.filterTypes.length > 0 || this.state.onlyAnomalies)
+    this.state.search.trim() !== '' || this.state.filterTypes.length > 0 || this.state.onlyAnomalies
+    || this.state.filterRole !== 'all' || this.state.filterDependencyCount !== null)
 
   readonly emptyResult: ComputedRef<boolean> = computed(() =>
     this.hasFilters.value && (this.graph.value?.nodes.length ?? 0) > 0 && this.visibleNodes.value.length === 0)
@@ -509,7 +525,6 @@ export class GraphController {
     this.unsubscribe = null
     this.hover.dispose()
     this.clearAutoTimer()
-    this.layoutScheduler.dispose()
     this.flushLayoutWrites()
     this.state.gestureActive = false
     this.state.editor = null
@@ -570,19 +585,14 @@ export class GraphController {
     this.viewport.width = nextWidth
     this.viewport.height = nextHeight
     this.centerOnAnchorIfNeeded()
-    this.scheduleViewportAnimation()
   }
 
   /** 首次布局就绪后把锚点居中（1:1，不压缩整图）；之后尊重用户视图。 */
   private centerOnAnchorIfNeeded(): void {
-    if (this.viewCentered) {
-      return
-    }
     const layout = this.layout.value
     if (layout === null || this.viewport.width <= 0 || this.viewport.height <= 0) {
       return
     }
-    this.viewCentered = true
     const anchor = layout.centerPath === null
       ? undefined
       : layout.nodes.find((node) => node.path === layout.centerPath)
@@ -590,6 +600,12 @@ export class GraphController {
     if (target === undefined) {
       return
     }
+    if (this.viewCentered
+      && (this.state.edgeFlow !== 'reverse' || this.lastCenteredAnchor === target.path)) {
+      return
+    }
+    this.viewCentered = true
+    this.lastCenteredAnchor = target.path
     const scale = this.state.view.scale
     this.state.view = {
       scale,
@@ -785,6 +801,10 @@ export class GraphController {
   private onInvalidation(event: GraphInvalidation): void {
     this.state.stale = true
     this.state.lastInvalidation = event.kind
+    // 反向锚点在刷新前先按旧图失效；新图到达后 resolveLayoutCenterPath 会重选。
+    if (this.state.edgeFlow === 'reverse') {
+      this.lastCenteredAnchor = null
+    }
     this.state.connected = this.service?.connected() ?? false
     // 图失效对应脚本内容可能已变：悬停卡摘要缓存整表丢弃，下次悬停回源重读。
     this.hoverCache.clear()
@@ -820,19 +840,13 @@ export class GraphController {
     }
   }
 
-  /** 拖动 / 缩放期间延后自动刷新，并暂停力导向动画（否则节点会从指针下跑掉）。 */
+  /** 拖动 / 缩放期间延后自动刷新。 */
   noteGesture(active: boolean): void {
     const wasActive = this.state.gestureActive
     this.state.gestureActive = active
-    if (active) {
-      this.stopLayoutAnimation()
-    }
     if (wasActive && !active && this.autoPending) {
       this.autoPending = false
       this.scheduleAutoRefresh(250)
-    }
-    if (wasActive && !active) {
-      this.scheduleViewportAnimation()
     }
   }
 
@@ -843,45 +857,16 @@ export class GraphController {
     if (graph === null) {
       this.layout.value = null
       this.layoutRevision.value += 1
-      this.layoutScheduler.stopBatch()
-      this.layoutScheduler.stopAnimation()
       return
     }
-    this.layoutScheduler.recompute()
-  }
-
-  private stopLayoutBatch(): void {
-    this.layoutScheduler.stopBatch()
-  }
-
-  private stopLayoutAnimation(): void {
-    this.layoutScheduler.stopAnimation()
-  }
-
-  /** 视口对应的世界包围盒（四角经 `screenToWorld` 转换）。 */
-  private worldBoxOfViewport(): { minX: number; minY: number; maxX: number; maxY: number } {
-    const view = this.state.view
-    const width = this.viewport.width
-    const height = this.viewport.height
-    const topLeft = screenToWorld({ x: 0, y: 0 }, view)
-    const bottomRight = screenToWorld({ x: Math.max(1, width), y: Math.max(1, height) }, view)
-    return {
-      minX: Math.min(topLeft.x, bottomRight.x),
-      minY: Math.min(topLeft.y, bottomRight.y),
-      maxX: Math.max(topLeft.x, bottomRight.x),
-      maxY: Math.max(topLeft.y, bottomRight.y),
-    }
-  }
-
-  /** 视口变了：等 300ms 稳定后，对新区间重新起一轮力导向（拖动时不每帧重启）。 */
-  private scheduleViewportAnimation(): void {
-    if (!this.state.animate || this.graph.value === null) {
-      return
-    }
-    if (this.viewport.width <= 0 || this.viewport.height <= 0) {
-      return
-    }
-    this.layoutScheduler.scheduleViewportAnimation()
+    this.layout.value = computeGraphLayout(graph, {
+      overrides: this.manualPositions,
+      centerPath: this.state.edgeFlow === 'reverse' ? this.reverseAnchorPath() : null,
+      nodeSize: this.state.mode,
+      steps: graph.nodes.length > FORCE_LAYOUT_LIMIT ? 0 : undefined,
+    })
+    this.layoutRevision.value += 1
+    this.centerOnAnchorIfNeeded()
   }
 
   setView(next: GraphViewState): void {
@@ -891,7 +876,6 @@ export class GraphController {
       ty: finiteOr(next.ty, 0),
     }
     this.scheduleViewSave()
-    this.scheduleViewportAnimation()
   }
 
   zoomBy(factor: number, anchor?: { x: number; y: number }): void {
@@ -952,12 +936,16 @@ export class GraphController {
 
   /** 拖动中的节点位置（世界坐标；松手后写盘）。 */
   moveNode(path: string, x: number, y: number): void {
-    const node = this.layout.value?.nodes.find((candidate) => candidate.path === path)
-    if (node === undefined) {
-      return
-    }
-    node.x = Math.max(-1e6, Math.min(1e6, x))
-    node.y = Math.max(-1e6, Math.min(1e6, y))
+    const layout = this.layout.value
+    if (layout === null) return
+    const node = layout.nodes.find((candidate) => candidate.path === path)
+    if (node === undefined) return
+    const partition = layout.partitions.find((item) => item.folder === node.folder)
+    if (partition === undefined) return
+    const next = positionInPartition(partition, node, x, y)
+    if (next.x === node.x && next.y === node.y) return
+    node.x = next.x
+    node.y = next.y
     this.layoutRevision.value += 1
   }
 
@@ -1050,15 +1038,54 @@ export class GraphController {
     this.state.onlyAnomalies = !this.state.onlyAnomalies
   }
 
+  setFilterRole(role: GraphFilterRole): void {
+    this.state.filterRole = role
+  }
+
+  setFilterDependencyCount(count: number | null): void {
+    this.state.filterDependencyCount = count
+  }
+
   setMode(mode: 'dot' | 'card'): void {
     if (mode !== this.state.mode) {
       this.state.mode = mode
+      this.recomputeLayout()
     }
   }
 
   toggleMode(): void {
-    this.state.mode = this.state.mode === 'dot' ? 'card' : 'dot'
+    this.setMode(this.state.mode === 'dot' ? 'card' : 'dot')
   }
+
+  /** 方向切换是显式布局操作：选稳定根，重排后居中；手摆覆盖原样保留。 */
+  setEdgeFlow(value: 'forward' | 'reverse'): void {
+    if (value === this.state.edgeFlow) {
+      return
+    }
+    this.state.edgeFlow = value
+    this.lastCenteredAnchor = null
+    this.viewCentered = false
+    this.recomputeLayout()
+  }
+
+  /** 反向视图以起始脚本为中心：有后续、无前置、有效且尽量非孤立；无根回退默认。 */
+  private reverseAnchorPath(): string | null {
+    const graph = this.graph.value
+    if (graph === null) return null
+    const incoming = new Set<string>()
+    const outgoing = new Set<string>()
+    for (const edge of graph.edges) {
+      incoming.add(edge.to)
+      outgoing.add(edge.from)
+    }
+    let anchor: string | null = null
+    for (const node of graph.nodes) {
+      if (!node.valid || node.requiresTargets.length > 0 || !outgoing.has(node.path) || incoming.has(node.path)) continue
+      if (anchor === null || node.path.localeCompare(anchor) < 0) anchor = node.path
+    }
+    return anchor
+  }
+
 
   setShowEdges(value: boolean): void {
     this.state.showEdges = value
@@ -1068,9 +1095,11 @@ export class GraphController {
     this.state.showEdges = !this.state.showEdges
   }
 
-  clearFilters(): void {
-    this.state.search = ''
+  clearFilters({ keepSearch = false }: { keepSearch?: boolean } = {}): void {
+    if (!keepSearch) this.state.search = ''
     this.state.filterTypes = []
+    this.state.filterRole = 'all'
+    this.state.filterDependencyCount = null
     this.state.onlyAnomalies = false
   }
 
@@ -1140,12 +1169,10 @@ export class GraphController {
    * 悬停意图（06-12：改用工作台共享机制，行为等价）。
    *
    * 进入延迟 250ms（避免扫过时闪烁）、离开延迟 420ms（允许指针移到悬浮卡片上）；
-   * 进入计时开始时冻结布局动画——节点在指针下移动会让 pointerleave 抖动、卡片闪烁。
    */
   private readonly hover = new HoverIntent({
     showDelayMs: 250,
     hideDelayMs: 420,
-    onIntent: () => this.stopLayoutAnimation(),
     onShow: (path) => {
       this.state.hoverPath = path
     },
@@ -1163,7 +1190,6 @@ export class GraphController {
 
   /** 键盘聚焦节点时立即显示（不依赖 hover 计时）。 */
   hoverNow(path: string): void {
-    this.stopLayoutAnimation()
     this.hover.now(path)
   }
 

@@ -2,14 +2,16 @@
 /**
  * 图工具栏（05-02）：浮在画布右上角的可拖动卡片。
  *
- * 常显：刷新 / 搜索 / 模式切换 / 缩放 / 适配 / 更多。
- * 「更多」展开：撤销、触发器类型多选、只显异常、边线、文件夹框、新建脚本、诊断、统计。
+ * 常显：刷新 / 搜索 / 筛选 / 方向 / 模式切换 / 缩放 / 适配 / 更多。
+ * 「筛选」展开：触发器类型多选、只显异常、脚本位置、直接前置数量与重置。
+ * 「方向」明确展示当前关系流；筛选只改变可见集合，不覆盖选中节点的上下游高亮。
  * 所有计数来自真实 `stats`；卡片位置只存 session。
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { COMMAND_SERVICE } from '../../workbench/api/tokens.ts'
 import { usePanelContext } from '../../workbench/host/panelContext.ts'
-import { useGraphController } from './state.ts'
+import { triggerTypeLabel } from './labels.ts'
+import { useGraphController, type GraphFilterRole } from './state.ts'
 
 const ctx = usePanelContext()
 const controller = useGraphController()
@@ -17,7 +19,9 @@ const state = controller.state
 
 const searchInput = ref(state.search)
 const typeMenuOpen = ref(false)
+const filterOpen = ref(false)
 const moreOpen = ref(false)
+const filterButton = ref<HTMLButtonElement | null>(null)
 /** 卡片左上角（相对面板），拖动后更新；默认右上角。 */
 const cardPos = ref<{ x: number; y: number } | null>(null)
 const dragging = ref(false)
@@ -25,7 +29,9 @@ let dragStart: { px: number; py: number; ox: number; oy: number } | null = null
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 
 function toggleTypeMenu(): void {
-  typeMenuOpen.value = !typeMenuOpen.value
+  const next = !typeMenuOpen.value
+  filterOpen.value = true
+  typeMenuOpen.value = next
 }
 
 function typeFilterLabel(): string {
@@ -40,6 +46,99 @@ const statsVisible = computed(() => controller.statsText.value !== '')
 const warningCount = computed(() => controller.graph.value?.stats.warningCount ?? 0)
 const hasGraphNodes = computed(() => (controller.graph.value?.nodes.length ?? 0) > 0)
 const typeOptions = computed(() => controller.typeOptions.value)
+
+const filterActiveCount = computed(() => {
+  let count = state.filterTypes.length
+  if (state.onlyAnomalies) count += 1
+  if (state.filterRole !== 'all') count += 1
+  if (state.filterDependencyCount !== null) count += 1
+  return count
+})
+
+const filterActive = computed(() => filterActiveCount.value > 0)
+
+const roleOptions: ReadonlyArray<{ value: GraphFilterRole; label: string }> = [
+  { value: 'all', label: '不限' },
+  { value: 'entry', label: '起始' },
+  { value: 'terminal', label: '最终' },
+]
+
+const flowCenterLabel = computed(() =>
+  state.edgeFlow === 'forward' ? '默认以最终脚本为中心' : '反向以起始脚本为中心')
+
+function setFilterRole(value: GraphFilterRole): void {
+  controller.setFilterRole(value)
+}
+
+function roleValue(event: Event): GraphFilterRole {
+  const value = event.target instanceof HTMLSelectElement ? event.target.value : 'all'
+  return value === 'entry' || value === 'terminal' ? value : 'all'
+}
+
+function setDependencyCount(value: number | null): void {
+  controller.setFilterDependencyCount(value)
+}
+
+function setEdgeFlow(value: 'forward' | 'reverse'): void {
+  controller.setEdgeFlow(value)
+}
+
+function onEdgeFlowChange(event: Event): void {
+  const value = event.target instanceof HTMLSelectElement ? event.target.value : ''
+  if (value === 'forward' || value === 'reverse') setEdgeFlow(value)
+}
+
+function closeMenus(except?: 'filter' | 'flow' | 'type'): void {
+  if (except !== 'filter') filterOpen.value = false
+  if (except !== 'type') typeMenuOpen.value = false
+}
+
+/** 点工具栏外部关闭浮层；类型菜单仍由工具栏内部事件管理。 */
+function onDocumentPointerDown(event: PointerEvent): void {
+  const target = event.target instanceof Element ? event.target : null
+  const toolbar = target?.closest('.graph-toolbar')
+  if (toolbar !== null && toolbar !== undefined) return
+  closeMenus()
+}
+
+function toggleFilterMenu(): void {
+  const next = !filterOpen.value
+  filterOpen.value = next
+  if (next) {
+    typeMenuOpen.value = false
+  }
+}
+
+function closeFilterMenu(): void {
+  filterOpen.value = false
+  typeMenuOpen.value = false
+  filterButton.value?.focus()
+}
+
+function onToolbarKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  if (typeMenuOpen.value) {
+    event.preventDefault()
+    typeMenuOpen.value = false
+    return
+  }
+  if (!filterOpen.value) return
+  event.preventDefault()
+  closeFilterMenu()
+}
+
+/** 重置图筛选，但保留顶部搜索词，避免“重置筛选”意外清掉搜索。 */
+function resetFilters(): void {
+  controller.clearFilters({ keepSearch: true })
+  typeMenuOpen.value = false
+}
+
+function dependencyValue(event: Event): number | null {
+  const value = event.target instanceof HTMLSelectElement ? event.target.value : ''
+  if (value === '') return null
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
 
 watch(() => state.search, (value) => {
   if (value !== searchInput.value) {
@@ -186,7 +285,12 @@ const cardStyle = computed(() => {
   return { left: `${cardPos.value.x}px`, top: `${cardPos.value.y}px`, right: 'auto' }
 })
 
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
+})
+
 onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
   clearTimeout(searchTimer)
   searchTimer = undefined
 })
@@ -203,6 +307,7 @@ onBeforeUnmount(() => {
     @pointermove="onDragMove"
     @pointerup="onDragEnd"
     @pointercancel="onDragEnd"
+    @keydown="onToolbarKeydown"
   >
     <div class="graph-toolbar__handle" data-drag-handle="true" title="拖动移动工具栏">
       <span class="graph-toolbar__grip" aria-hidden="true">⠿</span>
@@ -211,6 +316,109 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="graph-toolbar__row">
+      <div class="toolbar-field toolbar-field--popover">
+        <button
+          ref="filterButton"
+          type="button"
+          class="tool-button"
+          :class="{ 'tool-button--active': filterOpen || filterActive }"
+          :aria-expanded="filterOpen"
+          aria-haspopup="dialog"
+          title="筛选脚本"
+          @click="toggleFilterMenu"
+        >筛选{{ filterActive ? ` · ${filterActiveCount}` : '' }}</button>
+
+        <section v-if="filterOpen" class="tool-popover filter-popover" role="dialog" aria-label="脚本筛选">
+          <div class="popover-head">
+            <strong>筛选脚本</strong>
+            <button type="button" class="popover-close" aria-label="关闭筛选" @click="closeFilterMenu">✕</button>
+          </div>
+
+          <div class="filter-section">
+            <span class="filter-label">触发器类型</span>
+            <div class="toolbar-field">
+              <button
+                type="button"
+                class="tool-select tool-select--menu"
+                aria-haspopup="true"
+                :aria-expanded="typeMenuOpen"
+                title="多选触发器类型"
+                @click="toggleTypeMenu"
+              >{{ typeFilterLabel() }}</button>
+              <div v-if="typeMenuOpen" class="type-menu" data-graph-overlay="true">
+                <label class="type-menu__all">
+                  <input
+                    type="checkbox"
+                    :checked="state.filterTypes.length === 0"
+                    @change="clearTypeFilter"
+                  >
+                  全部
+                </label>
+                <label v-for="type in typeOptions" :key="type" class="type-menu__item">
+                  <input
+                    type="checkbox"
+                    :checked="state.filterTypes.includes(type)"
+                    @change="controller.toggleFilterType(type)"
+                  >
+                  <span>{{ triggerTypeLabel(type) }}</span>
+                  <span v-if="triggerTypeLabel(type) !== type" class="type-menu__id">{{ type }}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <label class="toolbar-check filter-check">
+            <input
+              type="checkbox"
+              :checked="state.onlyAnomalies"
+              @change="controller.toggleOnlyAnomalies()"
+            >
+            只显异常
+          </label>
+
+          <label class="filter-section filter-field">
+            <span class="filter-label">脚本位置</span>
+            <select
+              class="tool-select filter-select"
+              :value="state.filterRole"
+              @change="setFilterRole(roleValue($event))"
+            >
+              <option v-for="option in roleOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+          </label>
+
+          <label class="filter-section filter-field">
+            <span class="filter-label">直接前置数量</span>
+            <select
+              class="tool-select filter-select"
+              :value="state.filterDependencyCount === null ? '' : String(state.filterDependencyCount)"
+              @change="setDependencyCount(dependencyValue($event))"
+            >
+              <option value="">不限</option>
+              <option v-for="count in controller.dependencyCountOptions.value" :key="count" :value="count">{{ count }} 个</option>
+            </select>
+          </label>
+
+          <div class="popover-foot">
+            <span class="filter-summary">{{ filterActive ? `${filterActiveCount} 项筛选生效` : '当前未筛选' }}</span>
+            <button type="button" class="tool-button" :disabled="!filterActive" @click="resetFilters">重置筛选</button>
+          </div>
+        </section>
+      </div>
+
+      <label class="toolbar-field direction-field" :title="flowCenterLabel">
+        <span class="sr-only">关系方向</span>
+        <select
+          class="tool-select direction-select"
+          :value="state.edgeFlow"
+          aria-label="关系方向"
+          @change="onEdgeFlowChange"
+        >
+          <option value="forward">前置 → 后续</option>
+          <option value="reverse">后续 → 前置</option>
+        </select>
+      </label>
+
       <button
         type="button"
         class="tool-button"
@@ -289,43 +497,6 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="graph-toolbar__row">
-        <div class="toolbar-field">
-          <button
-            type="button"
-            class="tool-select tool-select--menu"
-            aria-haspopup="true"
-            :aria-expanded="typeMenuOpen"
-            title="多选触发器类型"
-            @click="toggleTypeMenu"
-          >{{ typeFilterLabel() }}</button>
-          <div v-if="typeMenuOpen" class="type-menu" data-graph-overlay="true">
-            <label class="type-menu__all">
-              <input
-                type="checkbox"
-                :checked="state.filterTypes.length === 0"
-                @change="clearTypeFilter"
-              >
-              全部
-            </label>
-            <label v-for="type in typeOptions" :key="type" class="type-menu__item">
-              <input
-                type="checkbox"
-                :checked="state.filterTypes.includes(type)"
-                @change="controller.toggleFilterType(type)"
-              >
-              {{ type }}
-            </label>
-          </div>
-        </div>
-
-        <label class="toolbar-check">
-          <input
-            type="checkbox"
-            :checked="state.onlyAnomalies"
-            @change="controller.toggleOnlyAnomalies()"
-          >
-          只显异常
-        </label>
         <label class="toolbar-check">
           <input
             type="checkbox"
@@ -400,6 +571,7 @@ onBeforeUnmount(() => {
   max-width: 130px;
 }
 .graph-toolbar__row { display: flex; align-items: center; gap: 5px; }
+.graph-toolbar__row:has(.direction-field) { flex-wrap: wrap; }
 .graph-toolbar__row--meta { flex-wrap: wrap; }
 .graph-toolbar__more {
   display: flex;
@@ -453,6 +625,7 @@ onBeforeUnmount(() => {
   font-size: 10px;
 }
 .toolbar-field { position: relative; display: flex; align-items: center; gap: 4px; }
+.toolbar-field--popover { min-width: 0; }
 .tool-select {
   padding: 2px 6px;
   border: 1px solid var(--border-strong);
@@ -485,6 +658,56 @@ onBeforeUnmount(() => {
 }
 .type-menu__all, .type-menu__item { display: flex; align-items: center; gap: 4px; padding: 2px 4px; cursor: pointer; }
 .type-menu__all { border-bottom: 1px solid var(--border); margin-bottom: 2px; padding-bottom: 4px; }
+.type-menu__id { margin-left: auto; color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: 9.5px; }
+.tool-popover {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 264px;
+  max-width: calc(100vw - 24px);
+  padding: 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: 0 10px 26px var(--shadow);
+  color: var(--text);
+}
+.popover-head { display: flex; align-items: center; gap: 8px; }
+.popover-head strong { font-size: 12px; }
+.popover-close {
+  margin-left: auto;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.filter-section { display: flex; flex-direction: column; gap: 5px; margin: 0; }
+.filter-fieldset { padding: 0; border: 0; }
+.filter-label { color: var(--text-secondary); font-size: 10.5px; font-weight: 500; }
+.filter-check { padding: 1px 0; }
+.filter-field { gap: 4px; }
+.filter-select { max-width: none; width: 100%; }
+.popover-foot { display: flex; align-items: center; gap: 6px; padding-top: 7px; border-top: 1px solid var(--border); }
+.filter-summary { flex: 1 1 auto; color: var(--text-muted); font-size: 10.5px; }
+.direction-field { flex: 1 1 auto; min-width: 0; }
+.direction-select { width: 100%; max-width: 180px; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.popover-close:focus-visible, .filter-select:focus-visible, .direction-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
 .toolbar-check { display: flex; align-items: center; gap: 3px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
 .toolbar-chip {
   padding: 1px 5px;
