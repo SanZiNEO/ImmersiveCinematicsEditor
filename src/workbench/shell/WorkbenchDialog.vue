@@ -6,7 +6,7 @@
  * 未保存状态下的 close 请求，不重复实现遮罩、焦点陷阱和键盘穿透。
  */
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useDialogs } from './useWorkbench.ts'
+import { useDialogs, useI18n } from './useWorkbench.ts'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -23,6 +23,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 const dialogs = useDialogs()
+const i18n = useI18n()
 const dialogEl = ref<HTMLDialogElement | null>(null)
 const opened = ref(false)
 
@@ -85,7 +86,7 @@ onBeforeUnmount(() => {
           v-if="dismissible"
           type="button"
           class="workbench-dialog__close"
-          :aria-label="`关闭${title}`"
+          :aria-label="i18n.t('common.closeDialog', { title })"
           @click="requestClose"
         >✕</button>
       </header>

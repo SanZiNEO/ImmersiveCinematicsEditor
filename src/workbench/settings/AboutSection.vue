@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 设置 · 关于（04-08）：版本、宿主版本、日志/用户目录、复制诊断。
+ * 设置 · 关于（04-08）：版本、宿主平台、数据位置、复制诊断。
  *
  * 不联网、不拉取版本信息；全部取运行时真实值。
  */
@@ -32,16 +32,9 @@ onMounted(async () => {
   }
 })
 
-/** 从 UA 里取 Electron / Chromium 版本（Electron 会带 Electron/x.y.z）。 */
-const versions = computed(() => {
-  const ua = navigator.userAgent
-  const electron = /Electron\/([\d.]+)/.exec(ua)
-  const chrome = /Chrome\/([\d.]+)/.exec(ua)
-  return {
-    electron: electron?.[1] ?? '—',
-    chromium: chrome?.[1] ?? '—',
-    platform: host().platform,
-  }
+const platformLabel = computed(() => {
+  const platform = host().platform
+  return i18n.t(`about.platform.${platform}`)
 })
 
 const errorCount = computed(() => {
@@ -75,12 +68,10 @@ function revealUserData(): void {
     <h3>{{ i18n.t('settings.about') }}</h3>
     <dl class="facts">
       <dt>{{ i18n.t('about.version') }}</dt><dd>{{ version }}</dd>
-      <dt>{{ i18n.t('about.platform') }}</dt><dd>{{ versions.platform }}</dd>
-      <dt>Electron</dt><dd>{{ versions.electron }}</dd>
-      <dt>Chromium</dt><dd>{{ versions.chromium }}</dd>
+      <dt>{{ i18n.t('about.platform') }}</dt><dd>{{ platformLabel }}</dd>
       <dt>{{ i18n.t('about.diagnostics') }}</dt>
       <dd>{{ i18n.t('about.diagnosticsValue', { total: errorCount.total, errors: errorCount.errors, warnings: errorCount.warnings }) }}</dd>
-      <dt>{{ i18n.t('about.userData') }}</dt><dd>userData/preferences.json · layout.json · window-state.json · drafts/</dd>
+      <dt>{{ i18n.t('about.userData') }}</dt><dd>{{ i18n.t('about.userDataHint') }}</dd>
     </dl>
     <div class="row">
       <button type="button" class="ghost" @click="revealUserData">{{ i18n.t('workspace.openUserData') }}</button>

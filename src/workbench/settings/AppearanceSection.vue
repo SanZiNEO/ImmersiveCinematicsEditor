@@ -2,25 +2,23 @@
 /**
  * 设置 · 外观（04-07 / 04-08）。
  *
- * 主题选择（按 appearance 分组）、跟随系统三槽位、导入本地主题、核心 token 覆盖、密度。
+ * 主题选择（按 appearance 分组）、跟随系统三槽位、导入本地主题、密度。
  * 主题是数据：这里只调 `ThemeControllerPort`，不拼 CSS。
  */
 import { computed, onScopeDispose, ref } from 'vue'
 
-import type { ThemeAppearance, ThemeSummary, ThemeTokens } from '../api/theme.ts'
-import { CORE_THEME_TOKENS, OVERRIDABLE_TOKENS } from '../api/theme.ts'
+import type { ThemeAppearance, ThemeSummary } from '../api/theme.ts'
 import type { Density } from '../api/preferences.ts'
 import { FILE_DIALOG_PORT, PREFERENCES_SERVICE } from '../api/tokens.ts'
 import type { FileDialogPort } from '../api/host.ts'
 import type { PreferencesApi } from '../api/preferences.ts'
-import { useI18n, usePreferences, useServices, useStatus, useTheme, useThemeController, useThemeRegistry } from '../shell/useWorkbench.ts'
+import { useI18n, usePreferences, useServices, useStatus, useThemeController, useThemeRegistry } from '../shell/useWorkbench.ts'
 
 const services = useServices()
 const i18n = useI18n()
 const status = useStatus()
 const controller = useThemeController()
 const registry = useThemeRegistry()
-const theme = useTheme()
 const preferences = usePreferences()
 
 const tick = ref(0)
@@ -65,7 +63,6 @@ const grouped = computed<Array<{ appearance: ThemeAppearance; items: ThemeSummar
 const activeId = computed(() => preferenceFile().get().theme.themeId)
 const followSystem = computed(() => preferenceFile().get().theme.mode === 'system')
 const slots = computed(() => preferenceFile().get().theme.system)
-const overrides = computed(() => preferenceFile().get().theme.overrides)
 const density = computed(() => preferenceFile().get().density)
 
 /** 主题显示名：有 labelKey 走 i18n（04-07），否则用定义里的 label。 */
@@ -128,19 +125,6 @@ function removeUserTheme(themeId: string): void {
   void preferenceFile().flush()
 }
 
-function overrideValue(token: string): string {
-  return overrides.value[token] ?? ''
-}
-
-function setOverride(token: string, value: string): void {
-  if (value.trim() === '') {
-    controller.resetOverrides()
-    return
-  }
-  const applied = theme.tokens()[token as keyof ThemeTokens] as string | undefined
-  controller.setOverride(token, value.trim() === applied ? '' : value.trim())
-}
-
 function setDensity(next: Density): void {
   preferenceFile().setSection('density', next)
   void preferenceFile().flush()
@@ -155,8 +139,6 @@ function resetAppearance(): void {
   status.notify(i18n.t('theme.resetDone'))
 }
 
-void CORE_THEME_TOKENS
-void OVERRIDABLE_TOKENS
 </script>
 
 <template>
@@ -231,20 +213,6 @@ void OVERRIDABLE_TOKENS
       <label class="radio"><input type="radio" :checked="density === 'compact'" @change="setDensity('compact')" /> {{ i18n.t('settings.densityCompact') }}</label>
     </div>
 
-    <h4>{{ i18n.t('theme.overrides') }}</h4>
-    <p class="hint">{{ i18n.t('theme.overridesHint') }}</p>
-    <div class="override-grid">
-      <label v-for="token in OVERRIDABLE_TOKENS" :key="token" class="override-row">
-        <span class="token-name">{{ token }}</span>
-        <input
-          class="token-input"
-          type="text"
-          :value="overrideValue(token)"
-          :placeholder="theme.tokens()[token as keyof ThemeTokens] ?? ''"
-          @change="setOverride(token, ($event.target as HTMLInputElement).value)"
-        />
-      </label>
-    </div>
   </section>
 </template>
 
@@ -255,7 +223,7 @@ void OVERRIDABLE_TOKENS
 .toggle { display: flex; align-items: center; gap: 8px; }
 .slots { display: flex; gap: 12px; flex-wrap: wrap; }
 .slot { display: flex; flex-direction: column; gap: 4px; }
-.slot select, .token-input {
+.slot select {
   background: var(--bg-raised);
   color: var(--text);
   border: 1px solid var(--border);
@@ -298,9 +266,4 @@ void OVERRIDABLE_TOKENS
 }
 .ghost:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .radio { display: flex; align-items: center; gap: 6px; }
-.hint { color: var(--text-muted); margin: 0; }
-.override-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 12px; }
-.override-row { display: flex; align-items: center; gap: 8px; }
-.token-name { width: 150px; color: var(--text-secondary); font-family: var(--font-mono, ui-monospace, monospace); }
-.token-input { flex: 1; }
 </style>

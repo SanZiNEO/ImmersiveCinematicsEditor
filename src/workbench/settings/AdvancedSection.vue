@@ -2,29 +2,26 @@
 /**
  * 设置 · 高级（04-08）。
  *
- * 打开 `userData`、查看偏好 JSON、分项/全部重置（二次确认）、查看插件 / 布局 / 主题错误。
+ * 打开用户数据目录、打开只读偏好 JSON、主题 token 覆盖、分项/全部重置（二次确认）、
+ * 查看插件 / 布局 / 主题错误。
  * 危险操作二次确认，默认焦点在取消。
  */
-import { computed, onScopeDispose, ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import type { Diagnostic, DiagnosticSource } from '../api/diagnostics.ts'
-import { DIAGNOSTICS_SERVICE, FILE_DIALOG_PORT, HOST_SERVICE, PREFERENCES_SERVICE, STATUS_SERVICE, THEME_REGISTRY } from '../api/tokens.ts'
+import type { ShellActionsPort } from '../api/actions.ts'
+import { DIAGNOSTICS_SERVICE, FILE_DIALOG_PORT, HOST_SERVICE, PREFERENCES_SERVICE, SHELL_ACTIONS_SERVICE, STATUS_SERVICE, THEME_REGISTRY } from '../api/tokens.ts'
 import type { DiagnosticSink } from '../api/diagnostics.ts'
 import type { FileDialogPort, HostPort } from '../api/host.ts'
 import type { PreferencesApi } from '../api/preferences.ts'
 import type { StatusApi } from '../api/context.ts'
 import type { ThemeRegistryPort } from '../api/theme.ts'
 import { useI18n, useServices } from '../shell/useWorkbench.ts'
+import ThemeTokenOverrides from './ThemeTokenOverrides.vue'
 
 const services = useServices()
 const i18n = useI18n()
 
-const showPreferences = ref(false)
-const preferenceTick = ref(0)
-const unsubscribePreferences = preferences().subscribe(() => {
-  preferenceTick.value += 1
-})
-onScopeDispose(unsubscribePreferences)
 const pendingReset = ref<null | 'theme' | 'language' | 'density' | 'shortcuts' | 'recentProjects' | 'settings' | 'plugins' | 'all'>(null)
 
 function diagnostics(): DiagnosticSink {
@@ -47,6 +44,10 @@ function status(): StatusApi {
   return services.require(STATUS_SERVICE)
 }
 
+function actions(): ShellActionsPort {
+  return services.require(SHELL_ACTIONS_SERVICE)
+}
+
 function themes(): ThemeRegistryPort {
   return services.require(THEME_REGISTRY)
 }
@@ -55,6 +56,13 @@ const items = computed<Diagnostic[]>(() => [...diagnostics().list()])
 const pluginErrors = computed(() => items.value.filter((item) => item.source === 'plugin'))
 const layoutErrors = computed(() => items.value.filter((item) => item.source === 'layout'))
 const themeErrors = computed(() => items.value.filter((item) => item.source === 'theme'))
+const runtimeVersions = computed(() => {
+  const userAgent = navigator.userAgent
+  return {
+    electron: /Electron\/([\d.]+)/.exec(userAgent)?.[1] ?? '—',
+    chromium: /Chrome\/([\d.]+)/.exec(userAgent)?.[1] ?? '—',
+  }
+})
 
 const RESET_SECTIONS = [
   { key: 'theme', labelKey: 'settings.appearance' },
@@ -70,16 +78,20 @@ function reveal(): void {
   host().storage.revealUserData()
 }
 
-function togglePreferences(): void {
-  showPreferences.value = !showPreferences.value
-}
-
 function sourceLabel(source: DiagnosticSource): string {
   return i18n.t(`diagnostics.source.${source}`)
 }
 
 function askReset(key: typeof pendingReset.value): void {
   pendingReset.value = key
+}
+
+function resetLabel(key: NonNullable<typeof pendingReset.value>): string {
+  if (key === 'all') {
+    return i18n.t('prefs.reset')
+  }
+  const section = RESET_SECTIONS.find((entry) => entry.key === key)
+  return section === undefined ? key : i18n.t(section.labelKey)
 }
 
 async function confirmReset(): Promise<void> {
@@ -90,7 +102,7 @@ async function confirmReset(): Promise<void> {
   }
   const choice = await dialogs().confirm(
     i18n.t('advanced.resetTitle'),
-    i18n.t(key === 'all' ? 'advanced.resetAllDetail' : 'advanced.resetSectionDetail', { section: String(key) }),
+    i18n.t(key === 'all' ? 'advanced.resetAllDetail' : 'advanced.resetSectionDetail', { section: resetLabel(key) }),
     [i18n.t('advanced.reset'), i18n.t('common.cancel')],
   )
   if (choice !== 0) {
@@ -113,12 +125,19 @@ async function confirmReset(): Promise<void> {
 
     <div class="row">
       <button type="button" class="ghost" @click="reveal">{{ i18n.t('workspace.openUserData') }}</button>
-      <button type="button" class="ghost" @click="togglePreferences">
-        {{ showPreferences ? i18n.t('advanced.hidePreferences') : i18n.t('advanced.showPreferences') }}
+      <button type="button" class="ghost" @click="actions().openPreferencesJson()">
+        {{ i18n.t('advanced.openPreferences') }}
       </button>
     </div>
 
-    <pre v-if="showPreferences" class="json">{{ JSON.stringify(preferences().get(), null, 2) }}</pre>
+    <ThemeTokenOverrides />
+
+    <h4>{{ i18n.t('advanced.runtime') }}</h4>
+    <p class="hint">{{ i18n.t('advanced.runtimeHint') }}</p>
+    <dl class="runtime">
+      <dt>Electron</dt><dd>{{ runtimeVersions.electron }}</dd>
+      <dt>Chromium</dt><dd>{{ runtimeVersions.chromium }}</dd>
+    </dl>
 
     <h4>{{ i18n.t('advanced.reset') }}</h4>
     <div class="row wrap">
@@ -130,7 +149,7 @@ async function confirmReset(): Promise<void> {
 
     <div v-if="pendingReset !== null" class="confirm" role="alertdialog" aria-modal="false">
       <p>{{ i18n.t('advanced.resetTitle') }}</p>
-      <p class="hint">{{ i18n.t(pendingReset === 'all' ? 'advanced.resetAllDetail' : 'advanced.resetSectionDetail', { section: String(pendingReset) }) }}</p>
+      <p class="hint">{{ i18n.t(pendingReset === 'all' ? 'advanced.resetAllDetail' : 'advanced.resetSectionDetail', { section: resetLabel(pendingReset) }) }}</p>
       <div class="row">
         <button type="button" class="ghost" @click="pendingReset = null">{{ i18n.t('common.cancel') }}</button>
         <button type="button" class="ghost danger" @click="confirmReset">{{ i18n.t('advanced.reset') }}</button>
@@ -161,17 +180,9 @@ async function confirmReset(): Promise<void> {
 .hint { color: var(--text-muted); margin: 0; }
 .row { display: flex; align-items: center; gap: 8px; }
 .wrap { flex-wrap: wrap; }
-.json {
-  max-height: 240px;
-  overflow: auto;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-}
+.runtime { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+.runtime dt { color: var(--text-muted); }
+.runtime dd { margin: 0; }
 .ghost {
   background: var(--bg-raised);
   color: var(--text);

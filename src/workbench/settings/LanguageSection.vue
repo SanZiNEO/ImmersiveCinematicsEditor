@@ -38,7 +38,9 @@ const current = computed(() => {
 function setLanguage(language: Language): void {
   preferences().setSection('language', language)
   void preferences().flush()
-  status().notify(i18n.t('language.changed', { language }))
+  status().notify(i18n.t('language.changed', {
+    language: i18n.t(language === 'zh_cn' ? 'language.zhCn' : 'language.enUs'),
+  }))
 }
 </script>
 
@@ -48,13 +50,12 @@ function setLanguage(language: Language): void {
     <p class="hint">{{ i18n.t('language.hint') }}</p>
     <label class="row">
       <input type="radio" :checked="current === 'zh_cn'" @change="setLanguage('zh_cn')" />
-      <span>简体中文（zh_cn）</span>
+      <span>{{ i18n.t('language.zhCn') }}</span>
     </label>
     <label class="row">
       <input type="radio" :checked="current === 'en_us'" @change="setLanguage('en_us')" />
-      <span>English（en_us）</span>
+      <span>{{ i18n.t('language.enUs') }}</span>
     </label>
-    <p class="hint">{{ i18n.t('language.missingKeyHint') }}</p>
   </section>
 </template>
 
