@@ -10,3 +10,9 @@ declare module '*.vue' {
   const component: DefineComponent<Record<string, unknown>, Record<string, unknown>, unknown>
   export default component
 }
+
+/** 静态图片资源：Vite 会把导入解析成构建后的 URL 字符串。 */
+declare module '*.png' {
+  const url: string
+  export default url
+}

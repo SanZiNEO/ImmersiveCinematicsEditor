@@ -48,6 +48,8 @@ const MENU_GROUPS = ['file', 'edit', 'view', 'help']
 
 const DIST_ROOT = path.join(__dirname, '..', 'dist')
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs')
+/** 运行时窗口/任务栏图标（构建产物里随 electron/ 一起打包）。 */
+const WINDOW_ICON_PATH = path.join(__dirname, 'icon.png')
 // 可选：dev server URL（正常 `electron .` 加载 dist；开发时可指向 vite）。
 const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL || process.env.IC_EDITOR_DEV_URL || ''
 
@@ -1070,6 +1072,7 @@ function createWindow() {
     minHeight: MIN_HEIGHT,
     show: false,
     title: APP_TITLE,
+    icon: WINDOW_ICON_PATH,
     backgroundColor: background,
     webPreferences: {
       preload: PRELOAD_PATH,

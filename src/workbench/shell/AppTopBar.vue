@@ -14,6 +14,7 @@ import { DOCUMENT_COMMANDS, DOCUMENT_SERVICE, SCRIPT_MUTATION_SERVICE, SHELL_ACT
 import type { DocumentService } from '../api/documents.ts'
 import type { RefsApplyResult, RefsPreviewResult, ScriptMutationServicePort } from '../api/graph.ts'
 import WorkbenchDialog from './WorkbenchDialog.vue'
+import brandIcon from '../assets/brand-icon.png'
 
 const i18n = useI18n()
 const commands = useCommands()
@@ -176,7 +177,7 @@ defineExpose({ focusRegion: () => focus.focusRegion('topbar') })
 <template>
   <header class="topbar" data-focus-scope="topbar" @blur="onBlur">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">IC</span>
+      <img class="brand-mark" :src="brandIcon" alt="" aria-hidden="true" draggable="false" />
       <span class="brand-name">{{ i18n.t('app.title') }}</span>
     </div>
 
@@ -316,16 +317,13 @@ defineExpose({ focusRegion: () => focus.focusRegion('topbar') })
 }
 .brand { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 22px;
   height: 22px;
   border-radius: 4px;
-  background: var(--accent);
-  color: var(--bg-app);
-  font-size: 11px;
-  font-weight: 700;
+  display: block;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 .brand-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
 .menus { display: flex; align-items: center; gap: 2px; -webkit-app-region: no-drag; }

@@ -6,6 +6,7 @@
  *   node --experimental-strip-types e2e-system/src/cli.ts dry-run --suite <id> [--scenario <id>]
  *   node --experimental-strip-types e2e-system/src/cli.ts run --suite <id> [--scenario <id>]
  *   node --experimental-strip-types e2e-system/src/cli.ts review [--fixture <本地 JSON 路径>]
+ *   node --experimental-strip-types e2e-system/src/cli.ts smoke [--exe <已打包 exe>] [--hold <ms>]
  *
  * 退出码：0 全 PASS；1 任一 FAIL；2 BLOCKED 且无 FAIL。review 正常关闭为 0，启动或落盘失败为 1；
  * Ctrl+C 时 Playwright 可能以自己的 SIGINT 处理退出 130（本会话 Vite 已在信号处理里同步停止）。
@@ -18,10 +19,20 @@ import { collectEnvironment, createRegistry, runSuite, type RunReport } from './
 import { writeRunJson } from './report/json.ts'
 import { writeReportMarkdown } from './report/markdown.ts'
 import { runReview } from './review.ts'
+import { runSmoke } from './smoke.ts'
 
-function parseArgs(argv: string[]): { command: string; suite?: string; scenario?: string; fixture?: string } {
+interface ParsedArgs {
+  command: string
+  suite?: string
+  scenario?: string
+  fixture?: string
+  exe?: string
+  hold?: number
+}
+
+function parseArgs(argv: string[]): ParsedArgs {
   const [command, ...rest] = argv
-  const options: { suite?: string; scenario?: string; fixture?: string } = {}
+  const options: Omit<ParsedArgs, 'command'> = {}
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index]
     if (token === '--suite') options.suite = rest[++index]
@@ -32,6 +43,19 @@ function parseArgs(argv: string[]): { command: string; suite?: string; scenario?
         throw new ConfigError('E_CONFIG', '--fixture 需要本地 JSON 文件路径')
       }
       options.fixture = value
+    } else if (token === '--exe') {
+      const value = rest[++index]
+      if (value === undefined || value === '') {
+        throw new ConfigError('E_CONFIG', '--exe 需要已打包可执行文件路径')
+      }
+      options.exe = value
+    } else if (token === '--hold') {
+      const value = rest[++index]
+      const parsed = Number(value)
+      if (value === undefined || !Number.isFinite(parsed) || parsed < 0) {
+        throw new ConfigError('E_CONFIG', '--hold 需要非负毫秒数')
+      }
+      options.hold = parsed
     }
   }
   return { command: command ?? 'list', ...options }
@@ -134,7 +158,10 @@ async function main(): Promise<number> {
     if (args.command === 'review') {
       return await runReview(loader, { fixture: args.fixture })
     }
-    console.error(`未知命令: ${args.command}（可用: list / dry-run / run / review）`)
+    if (args.command === 'smoke') {
+      return await runSmoke(loader, { executablePath: args.exe, holdMs: args.hold })
+    }
+    console.error(`未知命令: ${args.command}（可用: list / dry-run / run / review / smoke）`)
     return 1
   } catch (error) {
     if (error instanceof ConfigError) {

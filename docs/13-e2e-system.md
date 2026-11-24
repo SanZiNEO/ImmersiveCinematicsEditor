@@ -159,12 +159,56 @@ node --experimental-strip-types e2e-system/src/cli.ts list
 node --experimental-strip-types e2e-system/src/cli.ts dry-run --suite offline
 node --experimental-strip-types e2e-system/src/cli.ts run --suite offline
 node --experimental-strip-types e2e-system/src/cli.ts run --suite live --scenario live-play-min-tracks
+node --experimental-strip-types e2e-system/src/cli.ts smoke
+node --experimental-strip-types e2e-system/src/cli.ts smoke --exe release/win-unpacked/ImmersiveCinematicsEditor.exe
 ```
 
 - `list`：打印套件、场景、模板、插件及其能力。
 - `dry-run`：完整展开但不执行，打印每个场景展开后的步骤（含解析到哪个插件）；有任何配置/能力/参数问题即非零退出。
 - `run`：执行并产出 `run.json` / `report.md`；退出码 `0` 全 PASS、`1` 有 FAIL、`2` 有 BLOCKED 且无 FAIL。
+- `smoke`：只验证"应用能不能起来"，不跑业务场景。退出码 `0` 通过、`1` 失败、`2` 环境不满足。
+- `review`：交互走查，启动隔离工作台后停住等人工操作；正常关窗口为 `0`。**不进 CI**。
 - 退出码与 `run.json` 的 `status` 必须一致，不允许"报告 PASS 但退出码 0 却含 FAIL"。
+
+### 6.1 三层职责（不要混）
+
+| 层 | 谁做 | 说明 |
+|---|---|---|
+| 构建 / 打包 | `electron-builder` | e2e **不**负责打包，只消费产物 |
+| 拉起 | `electron-host` 插件 | 唯一一份启动逻辑，三种模式共用 |
+| 验证 | `smoke` / `run` | 断言可观测信号，给退出码 |
+
+`smoke`、`run`、`review` 共用同一套启动代码，区别只在"启动后做什么"。
+
+### 6.2 smoke 的判据
+
+全部是可观测信号，不依赖窗口句柄、不依赖截图：
+
+1. `.workspace-shell` 出现 —— Vue 挂载完成、页面真的渲染了
+2. `pageerror` 为 0 —— 渲染进程没有抛异常
+3. `console.error` 为 0 —— 没有静默错误
+4. 主进程无 CDP 积压告警
+5. 观察窗口（默认 3s）内进程未退出 —— 抓"启动后几秒崩溃"
+
+**状态不是错误**：游戏未连接时客户端停在 `no-token`，这是正常状态。冒烟模式因此
+写入空 token 文件，让客户端不发起连接——写假 token 会让 Chromium 把连接失败记成
+`console.error`，把状态误报成故障。
+
+### 6.3 两种启动目标
+
+| 模式 | 命令 | 加载什么 |
+|---|---|---|
+| 未打包 | `smoke` | `dist/`（`loadFile`），**不**经过 Vite |
+| 已打包 | `smoke --exe <path>` | asar 内的 `dist/`，走 `app.isPackaged === true` |
+
+两者都要覆盖："能构建"和"打包后能运行"是两件事。
+
+参考实现：
+
+- `beekeeper-studio/apps/studio/e2e/tests/appLaunch.test.ts` —— smoke 是独立一档
+- `electron-fiddle/packages/app/e2e/smoke.e2e.ts` —— 启动 + 每项能力各一条
+- `vscode/test/smoke/src/areas/workbench/launch.test.ts` —— 最小启动断言
+- `vscode/test/smoke` 的 `--build <path>` —— 同一套测试跑打包产物
 
 ## 七、报告
 

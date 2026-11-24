@@ -24,6 +24,7 @@ export default defineConfig({
     watch: {
       ignored: [
         '**/e2e-system/artifacts/**',
+        '**/example/**',
         '**/dist/**',
         '**/build/**',
         '**/.gradle/**',

@@ -177,10 +177,29 @@ export interface ElectronHostPluginOptions {
   review?: boolean
   /** 走查模式 Vite 就绪后回报 loopback URL（供终端打印端口与生命周期）。 */
   onReviewUrl?: (url: string) => void
+  /**
+   * 已打包可执行文件路径（`release/win-unpacked/*.exe`）。
+   *
+   * 指定后不再起 Vite、不再走 `electron .`：直接拉起该 exe，走真实的
+   * `app.isPackaged === true` 路径（asar、资源路径、updater 初始化）。
+   * 这条路径用来验证"打包出来的东西能不能跑"，与构建是否成功是两件事。
+   */
+  executablePath?: string
+  /**
+   * 启动冒烟模式：不写占位 token。
+   *
+   * 游戏没连上只是「未连接」状态，不是错误。写入假 token 会让应用真的去连
+   * 8765，Chromium 再把连接失败记成 console.error，把状态误报成故障。
+   * 空 token 时客户端按设计停在 `no-token` 状态，不发起任何连接。
+   */
+  smoke?: boolean
 }
 
 export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}): E2ePlugin {
   const reviewMode = options.review === true
+  const smokeMode = options.smoke === true
+  const packagedExe = options.executablePath ?? null
+  const packagedMode = packagedExe !== null
   const state: HostState = {
     app: null,
     page: null,
@@ -198,6 +217,13 @@ export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}
     const missing: string[] = []
     const repo = ctx.config.paths.editorRepo
     if (!existsSync(repo)) missing.push(`编辑器仓库目录不存在: ${repo}`)
+    if (packagedMode) {
+      // 已打包模式只需 Playwright 与目标 exe；Vite/Electron 源码树都不参与。
+      const pwPkgPackaged = path.join(repo, 'node_modules', '@playwright', 'test', 'package.json')
+      if (!existsSync(pwPkgPackaged)) missing.push('@playwright/test 未安装（node_modules/@playwright/test）')
+      if (!existsSync(packagedExe)) missing.push(`已打包可执行文件不存在: ${packagedExe}`)
+      return missing
+    }
     const electronBin = path.join(repo, 'node_modules', 'electron', 'dist', 'electron.exe')
     if (!existsSync(electronBin)) missing.push(`Electron 可执行文件不存在: ${electronBin}`)
     const pwPkg = path.join(repo, 'node_modules', '@playwright', 'test', 'package.json')
@@ -268,6 +294,9 @@ export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}
       mkdirSync(state.userDataDir, { recursive: true })
 
       const viteBin = path.join(repo, 'node_modules', 'vite', 'bin', 'vite.js')
+      if (packagedMode && !existsSync(packagedExe)) {
+        throw new Error(`已打包可执行文件不存在: ${packagedExe}`)
+      }
       if (reviewMode) {
         if (!existsSync(viteBin)) throw new Error(`vite 未安装（${viteBin}），无法启动走查用的隔离 dev server`)
         const electronBin = path.join(repo, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -285,7 +314,14 @@ export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}
         }
       }
 
-      if (reviewMode || !(await probeHttp(port))) {
+      // 已打包/冒烟模式加载磁盘上的 dist/（或 asar 内的 dist/），不经过 dev server。
+      if (packagedMode || smokeMode) {
+        ctx.log(
+          packagedMode
+            ? '已打包模式：跳过 Vite（应用直接加载 asar 内的 dist/）'
+            : '冒烟模式：跳过 Vite（应用直接加载 dist/）',
+        )
+      } else if (reviewMode || !(await probeHttp(port))) {
         ctx.log(`启动${reviewMode ? '隔离 ' : ''}vite: node ${viteBin} --config ${e2eViteConfig} --port ${port} --strictPort`)
         state.viteStderr = []
         const child = spawn(process.execPath, [viteBin, '--config', e2eViteConfig, '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
@@ -303,7 +339,7 @@ export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}
         })
         if (reviewMode) await waitReviewViteReady(port, child, state, ctx.config.launchTimeoutMs)
         else await waitHttpReady(port, ctx.config.launchTimeoutMs)
-      } else {
+      } else if (!packagedMode && !smokeMode) {
         ctx.log(`vite 端口 ${port} 已在监听，复用现有 dev server`)
       }
 
@@ -313,16 +349,22 @@ export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}
       const devUrl = `http://127.0.0.1:${port}`
       const env: NodeJS.ProcessEnv = {
         ...process.env,
-        IC_EDITOR_DEV_URL: devUrl,
         IC_EDITOR_USER_DATA: state.userDataDir,
         IC_EDITOR_WORKSPACE: state.workspaceDir,
         IC_WEBUI_TOKEN_FILE: state.tokenFile,
       }
+      // 已打包/冒烟模式都不设 dev URL：让主进程走 loadFile(dist/index.html)。
+      // 冒烟必须验证"真正发出去的那份产物"，而不是 Vite 现编的源码——
+      // 否则破坏 dist 也测不出来（实测确认过这个漏洞）。
+      if (!packagedMode && !smokeMode) env.IC_EDITOR_DEV_URL = devUrl
       if (reviewMode) {
         // 外部 ELECTRON_RENDERER_URL 优先级高于 IC_EDITOR_DEV_URL；走查必须锁到隔离 Vite。
         options.onReviewUrl?.(devUrl)
         env.ELECTRON_RENDERER_URL = devUrl
         // 走查不尝试连真实游戏：空 token 文件，握手如实失败并保持离线。
+        writeFileSync(state.tokenFile, '', 'utf8')
+      } else if (smokeMode) {
+        // 冒烟不验证连接：空 token 让客户端停在 no-token，不发起无意义连接。
         writeFileSync(state.tokenFile, '', 'utf8')
       } else if (!isLive) {
         // 离线套件：写入一个占位 token，假 WebUI 场景才能走到握手；
@@ -330,13 +372,25 @@ export function createElectronHostPlugin(options: ElectronHostPluginOptions = {}
         writeFileSync(state.tokenFile, 'e2e-dummy-token', 'utf8')
       }
 
-      ctx.log(reviewMode ? '启动 Electron 编辑器（走查模式：独立 profile/工作区）' : '启动 Electron 编辑器')
-      state.app = await _electron.launch({
-        args: ['.'],
-        cwd: repo,
-        env,
-        timeout: ctx.config.launchTimeoutMs,
-      })
+      ctx.log(
+        packagedMode
+          ? `启动已打包应用: ${packagedExe}`
+          : reviewMode
+            ? '启动 Electron 编辑器（走查模式：独立 profile/工作区）'
+            : '启动 Electron 编辑器',
+      )
+      state.app = packagedMode
+        ? await _electron.launch({
+          executablePath: packagedExe,
+          env,
+          timeout: ctx.config.launchTimeoutMs,
+        })
+        : await _electron.launch({
+          args: ['.'],
+          cwd: repo,
+          env,
+          timeout: ctx.config.launchTimeoutMs,
+        })
       const launched = state.app
       launched.on('close', () => {
         if (state.app === launched) {
