@@ -6,6 +6,7 @@
  */
 import type { ThemeAppearance, SystemThemeState, ThemeCache } from './theme.ts'
 import type { MenuState } from './commands.ts'
+import type { UpdateState } from './updates.ts'
 
 /** 窗口端口。 */
 export interface WindowPort {
@@ -189,10 +190,30 @@ export interface WorkspacePort {
   scriptExists(path: string): Promise<boolean>
 }
 
+/** 应用信息端口：版本只来自主进程 `app.getVersion()`。 */
+export interface AppInfoPort {
+  /** 应用版本：dev 读 `package.json`，打包后读构建时注入值。 */
+  version(): Promise<string>
+}
+
+/** 更新端口：版本复用 `app:version` 通道；检查 / 安装 / 状态订阅走更新通道。 */
+export interface UpdatesPort {
+  /** 应用版本：走 01 的 `app:version`，不新开第二条版本通道。 */
+  version(): Promise<string>
+  /** 主动检查更新，返回最新状态；浏览器宿主 / 未打包恒为 `unavailable`。 */
+  check(): Promise<UpdateState>
+  /** 安装已下载的更新；非 `downloaded` 返回 `{ ok: false, reason }`。 */
+  install(): Promise<{ ok: boolean; reason?: string }>
+  /** 订阅状态推送；返回取消函数。 */
+  onState(listener: (state: UpdateState) => void): () => void
+}
+
 /** 宿主能力集合。 */
 export interface HostPort {
   readonly kind: 'electron' | 'browser'
   readonly platform: 'win32' | 'darwin' | 'linux' | 'web'
+  readonly app: AppInfoPort
+  readonly updates: UpdatesPort
   readonly window: WindowPort
   readonly files: FileDialogPort
   readonly shell: ShellPort

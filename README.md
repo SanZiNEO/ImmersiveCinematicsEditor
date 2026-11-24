@@ -63,9 +63,14 @@ npm run e2e:system:review -- --fixture "D:\path\script.json" # 可选本地 JSON
 
 ## 注意事项
 
-- `electron-builder.yml` 的 `electronDist` 写死了本机绝对路径（`E:\Documents\GitHub\liveget\...`），换机器打包前需要按环境调整或删掉该行。
 - 握手 `hello_ack` 携带主模组上报的 `version`，但当前协议不做兼容校验：编辑器与模组版本错配时不会报错，需要人工确认。
 - 离线演示用的 `src/demo.ts` schema 与 `src/types.ts` 类型是手工维护的，主模组字段变更时需要同步。
+
+## 发布
+
+- 版本号来自 tag（`vX.Y.Z`）：`package.json` 的 `version` 恒为 `0.1.0`，真实版本在构建时用 `--c.extraMetadata.version` 注入；关于页显示的版本取自主进程 `app.getVersion()`。
+- 安装包由构建流水线（CI）产出；本地 `npm run release:local` 只做自测（构建 → 打包 → 资产校验 → 打包产物冒烟）。
+- 本地 `0.1.0` 包仅作机器自测，是否对外分发不在本轮决定。
 
 ## 许可证
 

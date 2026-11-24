@@ -13,6 +13,8 @@ export function createElectronHost(bridge: WorkbenchBridge): HostPort {
   return {
     kind: 'electron',
     platform: bridge.platform,
+    app: bridge.app,
+    updates: bridge.updates,
     window: bridge.window,
     files: bridge.files,
     shell: bridge.shell,

@@ -1,7 +1,13 @@
 appId: com.immersivecinematics.editor
 productName: ImmersiveCinematicsEditor
+artifactName: ${productName}-Setup-${version}-${arch}.${ext}
 directories:
   output: release
+# 更新源：只用于生成 app-update.yml；本地构建固定带 --publish never，不上传任何 Release。
+publish:
+  provider: github
+  owner: SanZiNEO
+  repo: ImmersiveCinematicsEditor
 files:
   - dist/**/*
   - electron/**/*
@@ -14,9 +20,12 @@ electronLanguages:
   - zh-CN
   - en-US
 win:
-  target: nsis
+  target:
+    - target: nsis
+      arch: [x64]
   icon: build/icon.ico
 nsis:
   oneClick: false
+  perMachine: false
   allowToChangeInstallationDirectory: true
   shortcutName: ImmersiveCinematics Editor

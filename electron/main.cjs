@@ -1161,6 +1161,9 @@ function registerIpcHandlers() {
     return readWebuiToken()
   })
 
+  // 版本：唯一版本 IPC 通道；后续 updates.version() 复用本通道，不另开第二条。
+  handleMain('app:version', () => app.getVersion())
+
   // 启动主题缓存：**这是全主进程唯一保留的同步 IPC**。
   // 理由（04-09 合同）：preload 在页面脚本执行前同步取一次主题缓存，
   // 让首屏底色在窗口显示前就应用上，避免白闪；只读一个小 JSON 文件，仅启动一次，

@@ -4,7 +4,7 @@
  *
  * 不联网、不拉取版本信息；全部取运行时真实值。
  */
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { DIAGNOSTICS_SERVICE, HOST_SERVICE } from '../api/tokens.ts'
 import type { DiagnosticSink } from '../api/diagnostics.ts'
@@ -21,6 +21,16 @@ function diagnostics(): DiagnosticSink {
 function host(): HostPort {
   return services.require(HOST_SERVICE)
 }
+
+/** 版本只来自主进程 `app.getVersion()`（经 updates.version() 复用 app:version）；取不到显示 `—`。 */
+const version = ref('—')
+onMounted(async () => {
+  try {
+    version.value = await host().updates.version()
+  } catch {
+    version.value = '—'
+  }
+})
 
 /** 从 UA 里取 Electron / Chromium 版本（Electron 会带 Electron/x.y.z）。 */
 const versions = computed(() => {
@@ -64,7 +74,7 @@ function revealUserData(): void {
   <section class="section">
     <h3>{{ i18n.t('settings.about') }}</h3>
     <dl class="facts">
-      <dt>{{ i18n.t('about.version') }}</dt><dd>0.1.0</dd>
+      <dt>{{ i18n.t('about.version') }}</dt><dd>{{ version }}</dd>
       <dt>{{ i18n.t('about.platform') }}</dt><dd>{{ versions.platform }}</dd>
       <dt>Electron</dt><dd>{{ versions.electron }}</dd>
       <dt>Chromium</dt><dd>{{ versions.chromium }}</dd>

@@ -20,6 +20,11 @@ const workbench = {
   kind: 'electron',
   platform: PLATFORM,
 
+  // 应用信息：版本只来自主进程 app.getVersion()（dev 读 package.json，打包后读注入值）。
+  app: {
+    version: () => ipcRenderer.invoke('app:version'),
+  },
+
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),

@@ -20,10 +20,12 @@ import type {
   ShellPort,
   StoragePort,
   ThemeHostPort,
+  UpdatesPort,
   WindowPort,
   WorkspacePort,
 } from '../../api/host.ts'
 import type { SystemThemeState, ThemeAppearance, ThemeCache } from '../../api/theme.ts'
+import type { UpdateState } from '../../api/updates.ts'
 
 class MemoryWindow implements WindowPort {
   private maximized = false
@@ -246,9 +248,37 @@ class MemoryWorkspace implements WorkspacePort {
   }
 }
 
+/** 浏览器 dev 的更新端口：没有 updater，明确返回 `unavailable`，不请求网络、不假装成功。 */
+class BrowserUpdates implements UpdatesPort {
+  // 版本沿用 01 的约定：浏览器宿主没有真实发布版本，返回 'dev'。
+  async version(): Promise<string> {
+    return 'dev'
+  }
+
+  async check(): Promise<UpdateState> {
+    return { status: 'unavailable' }
+  }
+
+  async install(): Promise<{ ok: boolean; reason?: string }> {
+    return { ok: false, reason: 'unavailable' }
+  }
+
+  onState(listener: (state: UpdateState) => void): () => void {
+    // 订阅时如实告知"本宿主没有更新能力"，避免界面停在 idle 让人误以为可以点。
+    // 异步推送：与 Electron 的 IPC 推送口径一致，也允许调用方先拿到取消函数（`const off = onState(...)`）。
+    queueMicrotask(() => {
+      listener({ status: 'unavailable' })
+    })
+    return () => undefined
+  }
+}
+
 export class BrowserHost implements HostPort {
   readonly kind = 'browser' as const
   readonly platform = 'web' as const
+  // 浏览器宿主没有真实版本：返回 'dev'，不假装读出发布版本号。
+  readonly app = { version: async (): Promise<string> => 'dev' }
+  readonly updates = new BrowserUpdates()
   readonly window = new MemoryWindow()
   readonly files = new BrowserFiles()
   readonly shell = new BrowserShell()
