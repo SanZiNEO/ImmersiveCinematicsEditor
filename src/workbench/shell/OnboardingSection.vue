@@ -2,14 +2,13 @@
 /**
  * 引导分区（首次启动）。
  *
- * 四步：语言 → 外观 → 工作区 → 常用操作速览。只写偏好，不读文档、不改脚本。
- * 「开始使用」与「跳过」都会把 `onboardingVersion` 记为当前版本，避免下次再弹。
+ * 四步：语言 → 外观 → 工作区 → 常用操作速览。只写语言/主题偏好，不读文档、不改脚本。
+ * 完成与跳过由外层 `OnboardingDialog` 记录引导状态。
  */
 import { computed, onMounted, onScopeDispose, ref } from 'vue'
 
 import type { ShellActionsPort } from '../api/actions.ts'
 import type { Language } from '../api/preferences.ts'
-import { ONBOARDING_VERSION } from '../api/preferences.ts'
 import { SHELL_ACTIONS_SERVICE } from '../api/tokens.ts'
 import { BUILTIN_THEME_IDS } from '../theme/builtinThemes.ts'
 import {
@@ -20,7 +19,10 @@ import {
   useThemeController,
 } from './useWorkbench.ts'
 
-const emit = defineEmits<{ done: [] }>()
+const emit = defineEmits<{
+  complete: []
+  skip: []
+}>()
 
 const i18n = useI18n()
 const host = useHost()
@@ -121,22 +123,9 @@ async function chooseWorkspace(): Promise<void> {
   }
 }
 
-function finish(dismissed: boolean): void {
-  const current = preferences.get().settings
-  preferences.patch({
-    settings: {
-      ...current,
-      onboardingVersion: ONBOARDING_VERSION,
-      ...(dismissed ? { onboardingDismissed: true } : {}),
-    },
-  })
-  void preferences.flush()
-  emit('done')
-}
-
 function next(): void {
   if (isLast.value) {
-    finish(false)
+    emit('complete')
     return
   }
   step.value += 1
@@ -149,7 +138,7 @@ function back(): void {
 }
 
 function skip(): void {
-  finish(true)
+  emit('skip')
 }
 </script>
 

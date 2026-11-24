@@ -15,6 +15,7 @@ export type Density = 'comfortable' | 'compact'
 /** 快捷键覆盖：只存 commandId + chord（scope 由命令定义固定）。 */
 export interface KeybindingOverride {
   commandId: string
+  /** `''` 表示显式解绑；缺省 / 空数组表示没有覆盖。 */
   chord: string
 }
 
@@ -35,9 +36,9 @@ export interface PreferencesSettingsState {
   lastSectionId?: string
   showStatusBar?: boolean
   confirmOnClose?: boolean
-  /** 已完成的引导版本；缺省表示从未完成。 */
+  /** 最近一次完整完成的引导版本；缺省 / 0 表示从未完成。 */
   onboardingVersion?: number
-  /** 用户主动关闭过引导（只记录选择，不阻塞下次启动判断）。 */
+  /** 用户跳过或直接关闭过自动引导；true 时不再自动打开，命令仍可重开。 */
   onboardingDismissed?: boolean
 }
 

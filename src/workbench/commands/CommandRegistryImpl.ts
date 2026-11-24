@@ -172,7 +172,9 @@ export class CommandRegistryImpl implements CommandRegistryPort {
     const entries: Array<{ record: RegisteredCommand; index: number }> = []
     let index = 0
     for (const record of this.records.values()) {
-      if (record.definition.menu !== undefined) entries.push({ record, index })
+      if (record.definition.menu !== undefined || record.definition.commandPaletteOnly === true) {
+        entries.push({ record, index })
+      }
       index += 1
     }
 

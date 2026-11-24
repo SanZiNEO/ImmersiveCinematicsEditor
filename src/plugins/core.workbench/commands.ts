@@ -46,6 +46,10 @@ export interface ShellCommandDeps {
   openPalette(): void
   /** 打开设置弹窗指定分区。 */
   openSettings(sectionId?: string): void
+  /** 打开独立首启引导 surface。 */
+  openOnboarding(): void
+  /** 打开独立只读 preferences JSON 查看器。 */
+  openPreferencesJson(): void
   /** 打开主题选择器（设置弹窗外观分区）。 */
   openThemePicker(): void
   /** 打开「显示面板」对话框。 */
@@ -297,6 +301,15 @@ export function registerCoreCommands(ctx: PluginContext): void {
     },
   })
 
+  register('app.openPreferencesJson', {
+    titleKey: 'cmd.app.openPreferencesJson',
+    category: '视图',
+    commandPaletteOnly: true,
+    run: () => {
+      requireDeps().openPreferencesJson()
+    },
+  })
+
   register('workspace.focusNext', {
     titleKey: 'cmd.workspace.focusNext',
     category: '视图',
@@ -395,6 +408,15 @@ export function registerCoreCommands(ctx: PluginContext): void {
     menu: { menu: 'help', group: '1_help', order: 10 },
     run: () => {
       requireDeps().openShortcutsHelp()
+    },
+  })
+
+  register('help.onboarding', {
+    titleKey: 'cmd.help.onboarding',
+    category: '帮助',
+    menu: { menu: 'help', group: '1_help', order: 5 },
+    run: () => {
+      requireDeps().openOnboarding()
     },
   })
 

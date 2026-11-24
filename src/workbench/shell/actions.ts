@@ -46,6 +46,8 @@ export class ShellActions {
   private readonly deps: ShellActionsDeps
   private documentRenameHandler: (() => void) | null = null
   private settingsHandler: ((sectionId?: string) => void) | null = null
+  private onboardingHandler: (() => void) | null = null
+  private preferencesJsonHandler: (() => void) | null = null
 
   constructor(deps: ShellActionsDeps) {
     this.deps = deps
@@ -170,6 +172,32 @@ export class ShellActions {
 
   setSettingsHandler(handler: ((sectionId?: string) => void) | null): void {
     this.settingsHandler = handler
+  }
+
+  /** 打开独立引导 surface；首启与 help.onboarding 共用。 */
+  openOnboarding(): void {
+    if (this.onboardingHandler === null) {
+      this.deps.status.notify(this.deps.i18n.t('onboarding.unavailable'), 'warning')
+      return
+    }
+    this.onboardingHandler()
+  }
+
+  setOnboardingHandler(handler: (() => void) | null): void {
+    this.onboardingHandler = handler
+  }
+
+  /** 打开独立只读 preferences JSON 查看器。 */
+  openPreferencesJson(): void {
+    if (this.preferencesJsonHandler === null) {
+      this.deps.status.notify(this.deps.i18n.t('preferencesJson.unavailable'), 'warning')
+      return
+    }
+    this.preferencesJsonHandler()
+  }
+
+  setPreferencesJsonHandler(handler: (() => void) | null): void {
+    this.preferencesJsonHandler = handler
   }
 
   /** 提示。 */

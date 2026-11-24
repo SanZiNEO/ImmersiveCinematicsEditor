@@ -74,7 +74,7 @@ export function buildMenuSnapshot(
   const commands = split.commands
   const keybindings = keybindingsOverride ?? split.keybindings
 
-  const items = commands.menuItems(ctx).map((item) => {
+  const items = commands.menuItems(ctx).filter((item) => item.menu !== undefined).map((item) => {
     const accelerator =
       keybindings === undefined ? item.accelerator : keybindings.chordOf(item.commandId) ?? undefined
     return {

@@ -27,5 +27,13 @@ export interface ShellActionsPort {
   openSettings(sectionId?: string): void
   /** 外壳注册自身提供的设置弹窗；未注册时 `openSettings` 回退到设置页路由。 */
   setSettingsHandler?(handler: ((sectionId?: string) => void) | null): void
+  /** 打开独立首启引导 surface。 */
+  openOnboarding(): void
+  /** 外壳注册引导 surface。 */
+  setOnboardingHandler?(handler: (() => void) | null): void
+  /** 打开独立只读 preferences JSON 查看器。 */
+  openPreferencesJson(): void
+  /** 外壳注册 JSON 查看器。 */
+  setPreferencesJsonHandler?(handler: (() => void) | null): void
   notify(message: string, severity?: 'info' | 'warning' | 'error'): void
 }

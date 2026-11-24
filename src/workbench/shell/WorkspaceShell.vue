@@ -26,10 +26,12 @@ import AppTopBar from './AppTopBar.vue'
 import CommandPalette from './CommandPalette.vue'
 import PageHost from './PageHost.vue'
 import SettingsDialog from './SettingsDialog.vue'
+import OnboardingDialog from './OnboardingDialog.vue'
+import PreferencesJsonDialog from './PreferencesJsonDialog.vue'
 import ShowPanelDialog from './ShowPanelDialog.vue'
 import type { ShellActionsPort } from '../api/actions.ts'
 import { SHELL_ACTIONS_SERVICE } from '../api/tokens.ts'
-import { ONBOARDING_VERSION } from '../api/preferences.ts'
+import { shouldOpenOnboarding } from '../preferences/onboarding.ts'
 import { registerShellFocusRegions } from './focusRegions.ts'
 import {
   PREVIEW_RENDER_STATUS_KEY,
@@ -49,6 +51,8 @@ let unregisterFocus: (() => void) | null = null
 const paletteOpen = ref(false)
 const showPanelOpen = ref(false)
 const settingsOpen = ref(false)
+const onboardingOpen = ref(false)
+const preferencesJsonOpen = ref(false)
 const settingsSection = ref<string | undefined>(undefined)
 const announcement = ref('')
 
@@ -79,7 +83,11 @@ function keyContext(editable: boolean): KeyContext {
     region: focus().currentRegion(),
     editable,
     composing: false,
-    dialogOpen: paletteOpen.value || showPanelOpen.value || settingsOpen.value,
+    dialogOpen: paletteOpen.value
+      || showPanelOpen.value
+      || settingsOpen.value
+      || onboardingOpen.value
+      || preferencesJsonOpen.value,
   }
 }
 
@@ -122,6 +130,12 @@ onMounted(() => {
     settingsSection.value = sectionId
     settingsOpen.value = true
   })
+  actions().setOnboardingHandler?.(() => {
+    onboardingOpen.value = true
+  })
+  actions().setPreferencesJsonHandler?.(() => {
+    preferencesJsonOpen.value = true
+  })
 
   bindShellCommandDeps({
     notify: (message, severity) => actions().notify(message, severity),
@@ -134,6 +148,8 @@ onMounted(() => {
       paletteOpen.value = true
     },
     openSettings: (sectionId) => actions().openSettings(sectionId),
+    openOnboarding: () => actions().openOnboarding(),
+    openPreferencesJson: () => actions().openPreferencesJson(),
     openThemePicker: () => actions().openSettings('appearance'),
     openShowPanel: () => {
       showPanelOpen.value = true
@@ -173,21 +189,19 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   unregisterFocus = registerShellFocusRegions(focus())
 
-  // 首次启动（或引导版本升级）：自动打开设置弹窗的引导分区。
-  // 偏好已在 WorkbenchApp.start() 里加载完成，这里只读快照。
+  // 首次启动（或引导版本升级）：自动打开独立引导 surface。
   const onboarding = props.services.require(PREFERENCES_SERVICE).get().settings
-  const needsOnboarding =
-    (onboarding.onboardingVersion ?? 0) < ONBOARDING_VERSION && onboarding.onboardingDismissed !== true
-  if (needsOnboarding) {
+  if (shouldOpenOnboarding(onboarding)) {
     void nextTick(() => {
-      settingsSection.value = 'onboarding'
-      settingsOpen.value = true
+      actions().openOnboarding()
     })
   }
 })
 
 onBeforeUnmount(() => {
   actions().setSettingsHandler?.(null)
+  actions().setOnboardingHandler?.(null)
+  actions().setPreferencesJsonHandler?.(null)
   window.removeEventListener('keydown', onKeydown)
   unregisterFocus?.()
   unregisterFocus = null
@@ -201,6 +215,8 @@ onBeforeUnmount(() => {
     <AppStatusBar />
     <CommandPalette v-if="paletteOpen" :page-id="pageId" @close="paletteOpen = false" />
     <SettingsDialog v-if="settingsOpen" :section-id="settingsSection" @close="settingsOpen = false" />
+    <OnboardingDialog v-if="onboardingOpen" @close="onboardingOpen = false" />
+    <PreferencesJsonDialog v-if="preferencesJsonOpen" @close="preferencesJsonOpen = false" />
     <ShowPanelDialog v-if="showPanelOpen" :page-id="pageId" @close="showPanelOpen = false" />
     <p class="sr-only" aria-live="polite" @keydown.esc="announcement = ''">{{ announcement }}</p>
   </div>
