@@ -33,6 +33,7 @@
     "release:local": "npm run build && npm run electron:build && node scripts/verify-release-assets.mjs && npm run e2e:system:smoke -- --exe release/win-unpacked/ImmersiveCinematicsEditor.exe --hold 3000"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "vue": "^3.5.0"
   },
   "devDependencies": {

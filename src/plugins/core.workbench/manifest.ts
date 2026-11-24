@@ -15,13 +15,14 @@ import { registerCoreCommands } from './commands.ts'
 /** 内置插件 ID。 */
 export const CORE_WORKBENCH_ID = 'core.workbench'
 
-/** 六个核心设置分区。 */
+/** 七个核心设置分区（03 追加 updates，order 55）。 */
 export const CORE_SETTINGS_SECTIONS = [
   { sectionId: 'appearance', titleKey: 'settings.appearance', order: 10, component: () => import('../../workbench/settings/AppearanceSection.vue').then((module) => module.default) },
   { sectionId: 'workspace', titleKey: 'settings.workspace', order: 20, component: () => import('../../workbench/settings/WorkspaceSection.vue').then((module) => module.default) },
   { sectionId: 'shortcuts', titleKey: 'settings.shortcuts', order: 30, component: () => import('../../workbench/settings/ShortcutsSection.vue').then((module) => module.default) },
   { sectionId: 'language', titleKey: 'settings.language', order: 40, component: () => import('../../workbench/settings/LanguageSection.vue').then((module) => module.default) },
   { sectionId: 'about', titleKey: 'settings.about', order: 50, component: () => import('../../workbench/settings/AboutSection.vue').then((module) => module.default) },
+  { sectionId: 'updates', titleKey: 'settings.updates', order: 55, component: () => import('../../workbench/settings/UpdateSection.vue').then((module) => module.default) },
   { sectionId: 'advanced', titleKey: 'settings.advanced', order: 60, component: () => import('../../workbench/settings/AdvancedSection.vue').then((module) => module.default) },
 ]
 

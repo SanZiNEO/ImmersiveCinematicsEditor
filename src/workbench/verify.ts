@@ -1156,7 +1156,7 @@ async function main(): Promise<void> {
     const core = coreManifest.coreWorkbench
     check('11 core.workbench 贡献三核心页', (core.contributes.pages ?? []).map((page) => page.pageId).join(',') === 'project,document,settings', (core.contributes.pages ?? []).map((page) => page.pageId))
     check('11 core.workbench 注册 diagnostics 抽屉', (core.contributes.drawerTabs ?? []).some((tab) => tab.tabId === 'diagnostics'))
-    check('11 core.workbench 六设置分区齐全', (core.contributes.settings ?? []).length === 6, (core.contributes.settings ?? []).map((section) => section.sectionId))
+    check('11 core.workbench 七设置分区齐全（含 updates）', (core.contributes.settings ?? []).length === 7, (core.contributes.settings ?? []).map((section) => section.sectionId))
     check('11 core.workbench 不注册 clip.effects / selection.properties 业务面板', !(core.contributes.panels ?? []).some((panel) => panel.panelId === 'clip.effects' || panel.panelId === 'selection.properties'), (core.contributes.panels ?? []).map((panel) => panel.panelId))
     check('11 core.workbench 不 import 业务组件', !/plugins\/.*\/(panels|pages|drawers)/.test(await readWorkbench('../plugins/core.workbench/manifest.ts')))
 
@@ -1223,7 +1223,7 @@ async function main(): Promise<void> {
     check('11 激活后页面/面板/抽屉/设置/状态项/命令全部进入注册表', registries.pages.list().length === 3
       && registries.panels.list().length >= 1
       && registries.drawerTabs.list().some((tab) => tab.contribution.tabId === 'diagnostics')
-      && registries.settings.list().length === 6
+      && registries.settings.list().length === 7
       && registries.statusItems.list().length >= 4
       && registries.commands.list().length >= 15, {
       pages: registries.pages.list().length,

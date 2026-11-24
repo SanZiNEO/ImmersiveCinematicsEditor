@@ -20,11 +20,6 @@ const workbench = {
   kind: 'electron',
   platform: PLATFORM,
 
-  // 应用信息：版本只来自主进程 app.getVersion()（dev 读 package.json，打包后读注入值）。
-  app: {
-    version: () => ipcRenderer.invoke('app:version'),
-  },
-
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),
@@ -91,6 +86,25 @@ const workbench = {
     removeScript: (path) => ipcRenderer.invoke('workspace:remove-script', path),
     scriptStamps: () => ipcRenderer.invoke('workspace:script-stamps'),
     scriptExists: (path) => ipcRenderer.invoke('workspace:script-exists', path),
+  },
+
+  // 应用信息：版本只来自主进程 app.getVersion()（dev 读 package.json，打包后读注入值）。
+  app: {
+    version: () => ipcRenderer.invoke('app:version'),
+  },
+
+  // 自动更新（03）：版本复用 app:version；检查 / 安装 / 状态订阅走三条更新通道。
+  // 只暴露这四个方法，不暴露 ipcRenderer，也不允许任意通道名。
+  updates: {
+    version: () => ipcRenderer.invoke('app:version'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    onState: (listener) => {
+      const off = subscribe('updates:state', listener)
+      // 订阅时拉一次当前态：打开设置页能看到上一次检查的结果（不触发新的检查）。
+      void ipcRenderer.invoke('updates:state').then((state) => listener(state)).catch(() => {})
+      return off
+    },
   },
 
   // WebUI 握手 token：异步取（主进程每次重读 token 文件，支持令牌轮换）；返回 Promise。

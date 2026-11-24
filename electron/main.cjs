@@ -5,6 +5,7 @@ const fsp = require('node:fs/promises')
 const os = require('os')
 const path = require('path')
 const { fileURLToPath } = require('url')
+const { createUpdater } = require('./updater.cjs')
 
 const APP_TITLE = 'Immersive Cinematics Editor'
 
@@ -59,6 +60,10 @@ let quitRequested = false
 let lastMenuState = []
 let lastWindowBackground = DEFAULT_BACKGROUND
 let windowStateAdapter = null
+/** 03：更新实例（registerIpcHandlers 里创建，whenReady 里 start）。 */
+let updater = null
+/** 03：安装前守卫的挂起请求（等渲染层 UnsavedGuard 走完 close 流程）。 */
+let pendingInstall = null
 
 /** 经 file 对话框 / 最近项目批准过的路径（shell 端口白名单）。 */
 const approvedShellPaths = new Set()
@@ -933,6 +938,41 @@ function handleMain(channel, handler) {
   })
 }
 
+// ── 更新安装守卫（03） ──────────────────────────────────────
+
+/** 结束挂起的安装请求；没有挂起时返回 false。 */
+function finishInstallGuard(result) {
+  const pending = pendingInstall
+  if (pending === null) return false
+  pendingInstall = null
+  clearTimeout(pending.timer)
+  pending.resolve(result)
+  return true
+}
+
+/**
+ * 安装前走现有未保存守卫：复用关闭窗口的 close 流程
+ * （`window:close-requested` → 渲染层 `UnsavedGuard` → `window:confirm-close`）。
+ * 渲染层确认后才真正 quitAndInstall；取消 / 超时如实返回，不假装成功。
+ */
+async function requestInstallFromRenderer() {
+  if (updater === null) return { ok: false, reason: 'unavailable' }
+  if (updater.state().status !== 'downloaded') return { ok: false, reason: 'not-downloaded' }
+  const win = mainWindow
+  if (win === null || win.isDestroyed()) {
+    updater.install()
+    return { ok: true }
+  }
+  if (pendingInstall !== null) return { ok: false, reason: 'guard-pending' }
+  return await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      finishInstallGuard({ ok: false, reason: 'guard-timeout' })
+    }, 180_000)
+    pendingInstall = { resolve, timer }
+    sendToMain('window:close-requested', {})
+  })
+}
+
 // ── 菜单 ────────────────────────────────────────────────────
 
 function menuGroupLabels() {
@@ -1161,8 +1201,18 @@ function registerIpcHandlers() {
     return readWebuiToken()
   })
 
-  // 版本：唯一版本 IPC 通道；后续 updates.version() 复用本通道，不另开第二条。
+  // 版本：唯一版本 IPC 通道；03 的 updates.version() 复用本通道，不另开第二条。
   handleMain('app:version', () => app.getVersion())
+
+  // ── 自动更新（03） ────────────────────────────────────────
+  // 状态推送走 sendToMain；渲染层订阅时再用 updates:state 拉一次当前态。
+  updater = createUpdater({
+    onState: (state) => sendToMain('updates:state', state),
+    requestInstall: () => requestInstallFromRenderer(),
+  })
+  handleMain('updates:state', () => updater.state())
+  handleMain('updates:check', () => updater.check())
+  handleMain('updates:install', () => requestInstallFromRenderer())
 
   // 启动主题缓存：**这是全主进程唯一保留的同步 IPC**。
   // 理由（04-09 合同）：preload 在页面脚本执行前同步取一次主题缓存，
@@ -1197,6 +1247,13 @@ function registerIpcHandlers() {
   onMain('window:confirm-close', () => {
     const win = mainWindow
     if (win === null || win.isDestroyed()) return
+    if (pendingInstall !== null) {
+      // 安装路径：渲染层的 UnsavedGuard 已放行；不关窗口，直接退出并安装。
+      finishInstallGuard({ ok: true })
+      closeConfirmed = true
+      updater?.install()
+      return
+    }
     closeConfirmed = true
     const quitAfterClose = quitRequested
     quitRequested = false
@@ -1375,6 +1432,10 @@ function registerIpcHandlers() {
       cancelId: labels.length - 1,
       noLink: true,
     })
+    // 安装前的守卫对话框：选「取消」（或关闭对话框）就终止这次安装，不留下挂起 Promise。
+    if (pendingInstall !== null && result.response !== 0 && result.response !== 1) {
+      finishInstallGuard({ ok: false, reason: 'guard-cancelled' })
+    }
     return result.response
   })
 
@@ -1566,13 +1627,34 @@ function registerIpcHandlers() {
 
 // ── 生命周期 ────────────────────────────────────────────────
 
+// 单实例锁（03-01）：更新安装会 relaunch，没有锁会出现两份实例。
+// 拿不到锁的进程立即退出，不建窗口；拿到锁的进程在 second-instance 里恢复并聚焦已有窗口。
+const singleInstanceLock = app.requestSingleInstanceLock()
+if (!singleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = mainWindow
+    if (win === null || win.isDestroyed()) {
+      createWindow()
+      return
+    }
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+  })
+}
+
 app.whenReady().then(() => {
+  if (!singleInstanceLock) return
   Menu.setApplicationMenu(null)
   installSecurity()
   registerIpcHandlers()
   approveRecentProjectPaths()
   applyApplicationMenu()
   createWindow()
+  // 更新：启动后 5 s 首查、之后每 4 小时一次；未打包时 start() 直接落 unavailable。
+  if (updater !== null) updater.start()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -1585,6 +1667,10 @@ app.on('before-quit', () => {
 })
 
 app.on('will-quit', () => {
+  if (updater !== null) {
+    updater.dispose()
+    updater = null
+  }
   if (windowStateAdapter !== null) {
     windowStateAdapter.flush()
     windowStateAdapter.dispose()
