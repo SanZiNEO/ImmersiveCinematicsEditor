@@ -21,8 +21,16 @@
     "verify": "node --experimental-strip-types src/workbench/verify.ts",
     "verify:08": "node --experimental-strip-types src/workbench/verify-08.ts",
     "verify:12": "node --experimental-strip-types src/workbench/verify-12.ts",
+    "verify:05": "node --experimental-strip-types src/workbench/verify-05.ts",
+    "verify:06": "node --experimental-strip-types src/workbench/verify-06.ts",
+    "verify:07": "node --experimental-strip-types src/workbench/verify-07.ts",
+    "verify:09": "node --experimental-strip-types src/workbench/verify-09.ts",
+    "verify:10": "node --experimental-strip-types src/workbench/verify-10.ts",
+    "verify:11": "node --experimental-strip-types src/workbench/verify-11.ts",
+    "verify:all": "node scripts/verify-all.mjs",
     "typecheck": "vue-tsc --noEmit",
-    "fixtures:12": "node --experimental-strip-types src/workbench/emit-fixtures-12.ts"
+    "fixtures:12": "node --experimental-strip-types src/workbench/emit-fixtures-12.ts",
+    "release:local": "npm run build && npm run electron:build && node scripts/verify-release-assets.mjs && npm run e2e:system:smoke -- --exe release/win-unpacked/ImmersiveCinematicsEditor.exe --hold 3000"
   },
   "dependencies": {
     "vue": "^3.5.0"

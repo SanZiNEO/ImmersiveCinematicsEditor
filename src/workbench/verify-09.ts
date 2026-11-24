@@ -7,7 +7,8 @@
  * 画面观感与真游戏冒烟不在这里伪装通过：那些只能由人进游戏确认，输出里明确标注。
  */
 import { execFileSync } from 'node:child_process'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CatalogIndex } from '../core/schema/index.ts'
 import { buildCatalog, indexCatalog } from '../core/schema/index.ts'
@@ -100,30 +101,11 @@ import { propertyRowsFor } from '../features/effects/clipContext.ts'
 import { customFieldFor } from '../features/effects/customFields.ts'
 import activate from '../plugins/core.overlay/index.ts'
 import { ensureExplicitLayerTypeCommands } from '../plugins/core.overlay/commit.ts'
+import { check, counts, exitCode, format, notRun } from './verify-kit.ts'
 
-let ok = 0
-let fail = 0
-
-function check(label: string, condition: boolean, actual?: unknown): void {
-  if (condition) {
-    ok += 1
-    console.log(`ok   ${label}`)
-    return
-  }
-  fail += 1
-  console.log(`FAIL ${label}: ${format(actual)}`)
-}
-
-function format(value: unknown): string {
-  if (value === undefined) return 'undefined'
-  if (typeof value === 'string') return value
-  try {
-    const text = JSON.stringify(value)
-    return text === undefined ? String(value) : text.length > 300 ? `${text.slice(0, 300)}...` : text
-  } catch {
-    return String(value)
-  }
-}
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
+const MODULE_ROOT_ENV = (process.env.IC_MODULE_ROOT ?? '').trim()
+const MODULE_ROOT = MODULE_ROOT_ENV !== '' ? MODULE_ROOT_ENV : join(dirname(REPO_ROOT), 'ImmersiveCinematics')
 
 function near(actual: number, expected: number, epsilon = 1e-9): boolean {
   return Math.abs(actual - expected) <= epsilon
@@ -853,11 +835,26 @@ function messageAndModSection(): void {
   const builtin = readFileSync(fileURLToPath(new URL('../plugins/builtin.ts', import.meta.url)), 'utf8')
   check('09 core.overlay 已登记进 builtin 清单', builtin.includes('core.overlay'))
 
+  if (MODULE_ROOT_ENV === '') {
+    notRun('09 模组仓库零改动', `未设置 IC_MODULE_ROOT；默认候选 ${MODULE_ROOT} ${existsSync(MODULE_ROOT) ? '存在' : '不存在'}，未显式指定的环境不计入 ok`)
+    return
+  }
+  if (!existsSync(MODULE_ROOT)) {
+    notRun('09 模组仓库零改动', `模组仓库目录不存在: ${MODULE_ROOT}`)
+    return
+  }
+  try {
+    execFileSync('git', ['--version'], { encoding: 'utf8' })
+  } catch (error) {
+    notRun('09 模组仓库零改动', `git 不可用: ${error instanceof Error ? error.message : String(error)}`)
+    return
+  }
   let modStatus = ''
   try {
-    modStatus = execFileSync('git', ['-C', 'E:\\Documents\\GitHub\\ImmersiveCinematics', 'status', '--porcelain'], { encoding: 'utf8' })
+    modStatus = execFileSync('git', ['-C', MODULE_ROOT, 'status', '--porcelain'], { encoding: 'utf8' })
   } catch (error) {
-    modStatus = `git 不可用: ${error instanceof Error ? error.message : String(error)}`
+    notRun('09 模组仓库零改动', `git status 失败: ${error instanceof Error ? error.message : String(error)}`)
+    return
   }
   check('09 模组仓库零改动', modStatus.trim() === '', modStatus)
 }
@@ -880,11 +877,10 @@ async function main(): Promise<void> {
   docsSection()
   messageAndModSection()
 
+  const { ok, fail } = counts()
   console.log(`\n09 自检: ${ok} ok, ${fail} fail`)
   console.log('未自动验收（需人进游戏确认）：真游戏冒烟的五层时序、黑边与渐变观感、拖动 / 缩放手感、编辑器像素预览。')
-  if (fail > 0) {
-    process.exitCode = 1
-  }
+  process.exitCode = exitCode()
 }
 
 void main().catch((error) => {

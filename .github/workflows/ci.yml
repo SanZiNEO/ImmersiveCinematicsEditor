@@ -1,0 +1,85 @@
+# 02 · 质量闸门（PR / 手动触发）
+#
+# 只跑 windows-latest：e2e-system/plugins/electron-host/index.ts 硬编码
+# node_modules/electron/dist/electron.exe，Linux runner 上 offline 套件必 BLOCKED。
+# 打包产物里没有 __workbench（仅在 DEV 暴露），所以产物上只跑 smoke --exe，
+# 不在 exe 上跑 offline 业务套件。
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # webui 上的 run 必须跑完：04 的发布要“等绿”，被下一次 push 取消的 run 不算通过。
+  cancel-in-progress: ${{ github.ref != 'refs/heads/webui' }}
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 1. checkout
+        uses: actions/checkout@v4
+
+      - name: 2. node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 3. Electron 下载缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron
+            ~\AppData\Local\electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('**/package-lock.json') }}
+
+      - name: 4. 依赖
+        run: npm ci
+        timeout-minutes: 10
+
+      - name: 5. 类型
+        run: npm run typecheck
+        timeout-minutes: 10
+
+      - name: 6. 自检（9 个 verify + 6 个守卫）
+        env:
+          # verify-09 需要本机模组仓库；CI 跑不到，只能记 NOT RUN。
+          # 与 release.yml 保持一致：显式允许 NOT RUN 不拉红整步，FAIL / BLOCKED 仍照常失败。
+          VERIFY_ALLOW_NOT_RUN: '1'
+        run: npm run verify:all
+        timeout-minutes: 20
+
+      - name: 7. 离线 e2e
+        run: npm run e2e:system:run -- --suite offline
+        timeout-minutes: 15
+
+      - name: 8. 构建
+        run: npm run build
+        timeout-minutes: 10
+
+      - name: 9. 打包（只产出，不上传）
+        run: npx electron-builder --win --publish never
+        timeout-minutes: 20
+
+      - name: 10. 打包产物冒烟
+        run: npm run e2e:system:smoke -- --exe release/win-unpacked/ImmersiveCinematicsEditor.exe --hold 3000
+        timeout-minutes: 10
+
+      - name: 11. 失败留证
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts-${{ github.run_number }}
+          path: |
+            e2e-system/artifacts/**
+            release/builder-debug.yml
+          if-no-files-found: warn
+          retention-days: 14
