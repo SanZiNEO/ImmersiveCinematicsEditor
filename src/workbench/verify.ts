@@ -704,6 +704,19 @@ async function main(): Promise<void> {
       && wrongType.preferences.shortcuts.length === 0
       && wrongType.issues.length >= 2, wrongType.issues)
 
+    const unboundShortcut = defaultsModule.normalizePreferences({
+      version: 1,
+      shortcuts: [
+        { commandId: 'file.saveDoc', chord: '' },
+        { commandId: 'missing.chord' },
+      ],
+    })
+    check('08 显式解绑 chord="" 保留，缺 chord 仍忽略',
+      unboundShortcut.preferences.shortcuts.length === 1
+      && unboundShortcut.preferences.shortcuts[0]?.commandId === 'file.saveDoc'
+      && unboundShortcut.preferences.shortcuts[0]?.chord === ''
+      && unboundShortcut.issues.some((issue) => issue.includes('commandId/chord')), unboundShortcut)
+
     const pluginsPreserved = defaultsModule.normalizePreferences({ version: 1, plugins: { 'demo.kitchen-sink': { enabled: true, bad: { nested: 1 } } } })
     const demoValues = pluginsPreserved.preferences.plugins?.['demo.kitchen-sink'] ?? {}
     check('08 插件段保留合法标量、丢弃非法值', demoValues.enabled === true && !('bad' in demoValues), demoValues)
@@ -754,6 +767,169 @@ async function main(): Promise<void> {
     check('08 坏 JSON → 备份 + 默认', brokenResult.issues.length > 0
       && broken.get().version === 1
       && storage.order.some((name) => name.includes('preferences.corrupt.')), brokenResult.issues)
+  }
+
+  // ── 4b. 设置可见性 / 作用域 / 已修改 / 快捷键投影（设置重构） ───────
+  {
+    const visibility = await import('./settings/settingsVisibility.ts')
+    const modified = await import('./settings/settingsModified.ts')
+    const shortcuts = await import('./settings/shortcutRows.ts')
+    const onboarding = await import('./preferences/onboarding.ts')
+    const defaults = await import('./preferences/defaults.ts')
+    const { MESSAGES } = await import('./i18n/index.ts')
+    type SettingsSectionView = import('./settings/settingsVisibility.ts').SettingsSectionView
+
+    const makeView = (
+      sectionId: string,
+      level: 'standard' | 'advanced' | 'experimental',
+      scope: 'application' | 'project',
+      keywords: string[] = [],
+    ): SettingsSectionView => ({
+      sectionId,
+      titleKey: `settings.${sectionId}`,
+      title: sectionId,
+      pluginId: 'core.workbench',
+      order: 1,
+      visibility: level,
+      scope,
+      searchKeywords: keywords,
+      source: 'registry',
+      load: async () => ({}) as never,
+    })
+
+    const sections = [
+      makeView('appearance', 'standard', 'application', ['theme']),
+      makeView('workspace', 'standard', 'project', ['layout']),
+      makeView('advanced', 'advanced', 'application', ['token', 'JSON']),
+      makeView('demo', 'experimental', 'application', ['偏航', 'yaw']),
+    ]
+
+    check('设置可见性：缺省 / 未知值回 standard', visibility.readSettingsVisibility(undefined) === 'standard'
+      && visibility.readSettingsVisibility('bogus') === 'standard')
+    check('设置作用域：缺省 / 未知值回 application', visibility.readSettingsScope(undefined) === 'application'
+      && visibility.readSettingsScope('bogus') === 'application')
+    check('设置关键词：过滤非字符串与空串', visibility.readSettingsKeywords(['token', 3, '', ' JSON ']).join(',') === 'token,JSON')
+
+    const defaultVisible = visibility.filterSettingsSections(sections, {
+      query: '',
+      showAdvanced: false,
+      showExperimental: false,
+    }).map((section) => section.sectionId)
+    check('设置默认只显示 standard', defaultVisible.join(',') === 'appearance,workspace', defaultVisible)
+
+    const advancedVisible = visibility.filterSettingsSections(sections, {
+      query: '',
+      showAdvanced: true,
+      showExperimental: false,
+    }).map((section) => section.sectionId)
+    check('设置高级开关显示 advanced', advancedVisible.includes('advanced') && !advancedVisible.includes('demo'), advancedVisible)
+
+    const searchAdvanced = visibility.filterSettingsSections(sections, {
+      query: 'TOKEN',
+      showAdvanced: false,
+      showExperimental: false,
+    }).map((section) => section.sectionId)
+    check('设置搜索穿透隐藏级别（大小写无关）', searchAdvanced.join(',') === 'advanced', searchAdvanced)
+
+    const searchExperimental = visibility.filterSettingsSections(sections, {
+      query: '偏航',
+      showAdvanced: false,
+      showExperimental: false,
+    }).map((section) => section.sectionId)
+    check('设置搜索命中实验分区', searchExperimental.join(',') === 'demo', searchExperimental)
+
+    const modifiedOnly = visibility.filterSettingsSections(sections, {
+      query: '',
+      showAdvanced: false,
+      showExperimental: false,
+      onlyModified: true,
+    }, new Set(['advanced']))
+    check('已修改过滤可揭示隐藏分区', modifiedOnly.map((section) => section.sectionId).join(',') === 'advanced',
+      modifiedOnly.map((section) => section.sectionId))
+
+    check('设置 active 收敛：selected → fallback → 首个',
+      visibility.resolveActiveSettingsSection(sections, 'advanced', ['workspace']) === 'advanced'
+      && visibility.resolveActiveSettingsSection(sections, 'missing', ['workspace']) === 'workspace'
+      && visibility.resolveActiveSettingsSection(sections, 'missing', []) === 'appearance')
+    check('设置初始请求隐藏分区时要求揭示',
+      visibility.pickInitialSettingsSection(sections, { requestedSectionId: 'advanced' }).reveal === 'advanced')
+    check('设置 lastSection 指向隐藏分区时被忽略',
+      visibility.pickInitialSettingsSection(sections, { lastSectionId: 'advanced' }).sectionId === 'appearance')
+    check('设置空态分类',
+      visibility.settingsEmptyStateOf(0, 0, { query: '', onlyModified: false }) === 'noSections'
+      && visibility.settingsEmptyStateOf(0, 2, { query: 'x', onlyModified: false }) === 'search'
+      && visibility.settingsEmptyStateOf(0, 2, { query: '', onlyModified: true }) === 'modified')
+
+    const basePreferences = JSON.parse(JSON.stringify(defaults.DEFAULT_PREFERENCES)) as PreferencesFile
+    const baseSnapshot = { preferences: basePreferences, workspacePresetId: 'default' }
+    const baseFlags = modified.settingsModifiedFlagsOf(baseSnapshot)
+    check('已修改：默认偏好全 false', !baseFlags.theme && !baseFlags.themeOverrides && !baseFlags.density
+      && !baseFlags.language && !baseFlags.shortcuts && !baseFlags.settings && !baseFlags.workspaceLayout)
+
+    const changedPreferences = JSON.parse(JSON.stringify(basePreferences)) as PreferencesFile
+    changedPreferences.language = 'en_us'
+    changedPreferences.theme.overrides.accent = '#ff00aa'
+    changedPreferences.shortcuts = [{ commandId: 'file.saveDoc', chord: '' }]
+    changedPreferences.settings.lastSectionId = 'advanced'
+    changedPreferences.settings.onboardingVersion = 1
+    const changedFlags = modified.settingsModifiedFlagsOf({
+      preferences: changedPreferences,
+      workspacePresetId: 'camera',
+    })
+    check('已修改：语言 / 覆盖 / 快捷键 / 布局分别命中', changedFlags.language
+      && changedFlags.themeOverrides && changedFlags.shortcuts && changedFlags.workspaceLayout)
+    check('已修改：lastSection / onboarding 不算修改', !changedFlags.settings && !changedFlags.theme)
+    check('已修改：分区归属', modified.isSettingsSectionModified(
+      { sectionId: 'advanced', pluginId: 'core.workbench', source: 'registry' },
+      { preferences: changedPreferences, workspacePresetId: 'camera' },
+    ) && modified.isSettingsSectionModified(
+      { sectionId: 'workspace', pluginId: 'core.workbench', source: 'registry' },
+      { preferences: changedPreferences, workspacePresetId: 'camera' },
+    ))
+    check('已修改：settings 页布局映射到 document', modified.settingsWorkspacePageId('settings') === 'document'
+      && modified.settingsWorkspacePageId('project') === 'project')
+
+    const shortcutRows = shortcuts.shortcutRows({
+      commands: [
+        { pluginId: 'test', definition: { commandId: 'file.saveDoc', titleKey: 'doc.save', category: '文件', keybinding: 'Mod+S', run: () => undefined } },
+        { pluginId: 'test', definition: { commandId: 'script.refresh', titleKey: 'refresh', category: '脚本', run: () => undefined } },
+        { pluginId: 'test', definition: { commandId: 'window.maximize', titleKey: 'maximize', category: '窗口', run: () => undefined } },
+        { pluginId: 'test', definition: { commandId: 'custom.override', titleKey: 'custom', category: '测试', run: () => undefined } },
+      ],
+      rules: [
+        { chord: 'Mod+S', commandId: 'file.saveDoc', scope: 'global' },
+        { chord: 'Mod+Shift+R', commandId: 'script.refresh', scope: 'page' },
+        { chord: 'Mod+Alt+T', commandId: 'custom.override', scope: 'global' },
+      ],
+      overrides: [
+        { commandId: 'file.saveDoc', chord: '' },
+        { commandId: 'custom.override', chord: 'Mod+Alt+T' },
+      ],
+    })
+    const rowsById = new Map(shortcutRows.map((row) => [row.commandId, row]))
+    check('快捷键投影：无键位命令隐藏', !rowsById.has('window.maximize'), [...rowsById.keys()])
+    check('快捷键投影：清空默认键位仍显示', rowsById.get('file.saveDoc')?.state === 'cleared'
+      && rowsById.get('file.saveDoc')?.chord === null)
+    check('快捷键投影：动态规则 scope 正确', rowsById.get('script.refresh')?.state === 'dynamic'
+      && rowsById.get('script.refresh')?.scope === 'page')
+    check('快捷键投影：纯用户覆盖可见', rowsById.get('custom.override')?.state === 'overridden')
+    check('快捷键冲突预检使用投影行', shortcuts.findShortcutConflict(shortcutRows, 'script.refresh', 'mod+s', 'global') === null
+      && shortcuts.findShortcutConflict(shortcutRows, 'script.refresh', 'Mod+Alt+T', 'global') === 'custom.override')
+
+    check('引导完成 / 跳过语义',
+      onboarding.shouldOpenOnboarding({})
+      && !onboarding.shouldOpenOnboarding({ onboardingVersion: 1 })
+      && !onboarding.shouldOpenOnboarding({ onboardingDismissed: true })
+      && onboarding.applyOnboardingOutcome({}, 'complete').onboardingVersion === 1
+      && onboarding.applyOnboardingOutcome({}, 'dismiss').onboardingDismissed === true)
+
+    const zhKeys = Object.keys(MESSAGES.zh_cn).sort()
+    const enKeys = Object.keys(MESSAGES.en_us).sort()
+    check('i18n 中英键集一致且无空值',
+      zhKeys.length === enKeys.length
+      && zhKeys.every((key) => key in MESSAGES.en_us)
+      && [...Object.values(MESSAGES.zh_cn), ...Object.values(MESSAGES.en_us)]
+        .every((value) => typeof value === 'string' && value.trim().length > 0))
   }
 
   // ── 5. 命令 / 快捷键 / 焦点（04-10） ─────────────────────────────────
@@ -869,6 +1045,12 @@ async function main(): Promise<void> {
       overrideConflict = true
     }
     check('10 覆盖冲突 → 拒绝保存', overrideConflict)
+    keybindings.setOverride('file.saveDoc', null)
+    check('10 清空默认键位保留空串哨兵且可重录',
+      keybindings.overrides().some((entry) => entry.commandId === 'file.saveDoc' && entry.chord === '')
+      && keybindings.chordOf('file.saveDoc') === null)
+    keybindings.setOverride('file.saveDoc', 'F2')
+    check('10 清空后可重新录制', (keybindings.chordOf('file.saveDoc') ?? '').toLowerCase() === 'f2')
     keybindings.clearOverrides()
 
     const baseContext = { pageId: 'document', region: null, editable: false, composing: false, dialogOpen: false }
@@ -1068,6 +1250,9 @@ async function main(): Promise<void> {
       readWorkbench('shell/DocumentHeader.vue'),
       readWorkbench('shell/ProjectPage.vue'),
       readWorkbench('shell/SettingsPage.vue'),
+      readWorkbench('shell/SettingsDialog.vue'),
+      readWorkbench('shell/OnboardingDialog.vue'),
+      readWorkbench('shell/PreferencesJsonDialog.vue'),
     ])
     const joined = shellSources.join('\n')
     check('04 外壳无旧尺寸 ref', !/jsonColWidth|leftPanelWidth|rightPanelWidth|timelineHeight/.test(joined))
@@ -1075,6 +1260,62 @@ async function main(): Promise<void> {
     check('04 外壳无 localStorage 直写', !/localStorage/.test(joined))
     check('04 外壳无常驻校验横幅', !/validation-banner/.test(joined))
     check('04 外壳不 import 业务面板', !/plugins\/.*panels/.test(joined))
+
+    const settingsDialogSource = await readWorkbench('shell/SettingsDialog.vue')
+    const settingsPageSource = await readWorkbench('shell/SettingsPage.vue')
+    const onboardingDialogSource = await readWorkbench('shell/OnboardingDialog.vue')
+    const onboardingSectionSource = await readWorkbench('shell/OnboardingSection.vue')
+    const preferencesJsonSource = await readWorkbench('shell/PreferencesJsonDialog.vue')
+    const advancedSource = await readWorkbench('settings/AdvancedSection.vue')
+    const appearanceSource = await readWorkbench('settings/AppearanceSection.vue')
+    const shortcutsSource = await readWorkbench('settings/ShortcutsSection.vue')
+    const browserSource = await readWorkbench('settings/useSettingsBrowser.ts')
+    const filterBarSource = await readWorkbench('settings/SettingsFilterBar.vue')
+    const visibilitySource = await readWorkbench('settings/settingsVisibility.ts')
+    const modifiedSource = await readWorkbench('settings/settingsModified.ts')
+    const shortcutRowsSource = await readWorkbench('settings/shortcutRows.ts')
+
+    check('设置：两个 surface 共用浏览器与过滤条',
+      settingsDialogSource.includes('useSettingsBrowser')
+      && settingsDialogSource.includes('SettingsFilterBar')
+      && settingsPageSource.includes('useSettingsBrowser')
+      && settingsPageSource.includes('SettingsFilterBar'))
+    check('设置：引导不再是设置分区',
+      !settingsDialogSource.includes('OnboardingSection')
+      && !settingsDialogSource.includes("'onboarding'")
+      && onboardingDialogSource.includes('OnboardingSection')
+      && !onboardingSectionSource.includes('ONBOARDING_VERSION')
+      && !onboardingSectionSource.includes('preferences.patch'))
+    check('设置：浏览器独占过滤、搜索与 lastSection 写入',
+      browserSource.includes('settingsModifiedSectionIds')
+      && browserSource.includes('filterSettingsSections')
+      && browserSource.includes('preferences.patch')
+      && filterBarSource.includes('update:onlyModified'))
+    check('设置：已修改与可见性纯模块不依赖 Vue/DOM',
+      !visibilitySource.includes("from 'vue'")
+      && !visibilitySource.includes('.vue')
+      && !modifiedSource.includes("from 'vue'")
+      && !modifiedSource.includes('.vue'))
+    check('设置：外观页不再铺 token，高级页承载覆盖与 JSON 入口',
+      !appearanceSource.includes('OVERRIDABLE_TOKENS')
+      && !appearanceSource.includes('override-grid')
+      && advancedSource.includes('ThemeTokenOverrides')
+      && advancedSource.includes('openPreferencesJson')
+      && !advancedSource.includes('JSON.stringify')
+      && !advancedSource.includes('showPreferences'))
+    check('设置：JSON 查看器只读并订阅内存偏好',
+      preferencesJsonSource.includes('dialog-id="preferences-json-dialog"')
+      && preferencesJsonSource.includes('v-text="text"')
+      && preferencesJsonSource.includes('role="region"')
+      && !preferencesJsonSource.includes('<textarea')
+      && !preferencesJsonSource.includes('contenteditable')
+      && !/preferences\.(patch|setSection|resetSection|resetAll|flush)\s*\(/.test(preferencesJsonSource))
+    check('设置：快捷键表只投影真实键位',
+      shortcutsSource.includes('shortcutRows')
+      && shortcutsSource.includes('findShortcutConflict')
+      && !shortcutsSource.includes('preferences().get().shortcuts.find')
+      && shortcutRowsSource.includes('export function shortcutRows')
+      && !shortcutRowsSource.includes("commandId: '"))
 
     const kernelSources = await Promise.all((await listFiles('kernel/', (name) => name.endsWith('.ts'))).map((file) => readWorkbench(file)))
     const kernelJoined = kernelSources.join('\n')
@@ -1157,6 +1398,21 @@ async function main(): Promise<void> {
     check('11 core.workbench 贡献三核心页', (core.contributes.pages ?? []).map((page) => page.pageId).join(',') === 'project,document,settings', (core.contributes.pages ?? []).map((page) => page.pageId))
     check('11 core.workbench 注册 diagnostics 抽屉', (core.contributes.drawerTabs ?? []).some((tab) => tab.tabId === 'diagnostics'))
     check('11 core.workbench 七设置分区齐全（含 updates）', (core.contributes.settings ?? []).length === 7, (core.contributes.settings ?? []).map((section) => section.sectionId))
+    const coreSettings = core.contributes.settings ?? []
+    const advancedSetting = coreSettings.find((section) => section.sectionId === 'advanced')
+    const workspaceSetting = coreSettings.find((section) => section.sectionId === 'workspace')
+    check('设置 manifest：advanced 默认隐藏且可搜索穿透',
+      advancedSetting?.visibility === 'advanced'
+      && (advancedSetting.searchKeywords ?? []).includes('token')
+      && (advancedSetting.searchKeywords ?? []).includes('JSON'))
+    check('设置 manifest：workspace 标为项目级，其余默认应用级',
+      workspaceSetting?.scope === 'project'
+      && coreSettings.filter((section) => section.sectionId !== 'workspace')
+        .every((section) => (section.scope ?? 'application') === 'application'))
+    const demoManifestText = await readWorkbench('../plugins/demo.kitchen-sink/manifest.ts')
+    check('设置 manifest：demo 分区标为实验级',
+      demoManifestText.includes("visibility: 'experimental'")
+      && demoManifestText.includes('demo.settings.section'))
     check('11 core.workbench 不注册 clip.effects / selection.properties 业务面板', !(core.contributes.panels ?? []).some((panel) => panel.panelId === 'clip.effects' || panel.panelId === 'selection.properties'), (core.contributes.panels ?? []).map((panel) => panel.panelId))
     check('11 core.workbench 不 import 业务组件', !/plugins\/.*\/(panels|pages|drawers)/.test(await readWorkbench('../plugins/core.workbench/manifest.ts')))
 
@@ -1234,6 +1490,13 @@ async function main(): Promise<void> {
     })
     check('11 core 命令已注册（file.saveDoc + layout.reset）', registries.commands.get('file.saveDoc') !== undefined
       && registries.commands.get('layout.reset') !== undefined)
+    check('设置命令：help.onboarding 与 JSON 查看器已注册',
+      registries.commands.get('help.onboarding') !== undefined
+      && registries.commands.get('app.openPreferencesJson')?.definition.commandPaletteOnly === true)
+    const paletteCommands = registries.commands.menuItems({ pageId: 'document', services })
+    check('设置命令：引导进帮助菜单，JSON 查看器只进命令面板',
+      paletteCommands.some((item) => item.commandId === 'help.onboarding' && item.menu === 'help')
+      && paletteCommands.some((item) => item.commandId === 'app.openPreferencesJson' && item.menu === undefined))
     check('11 菜单可从同一注册表生成', registries.commands.menuItems({ pageId: 'document', services }).some((item) => item.commandId === 'file.saveDoc'), registries.commands.menuItems({ pageId: 'document', services }).map((item) => item.commandId))
     check('11 状态项求值不抛错', registries.statusItems.list().every((item) => typeof item.contribution.text !== 'function'
       || typeof item.contribution.text({
