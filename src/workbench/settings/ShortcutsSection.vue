@@ -7,13 +7,14 @@
  */
 import { computed, onScopeDispose, ref } from 'vue'
 
-import type { RegisteredCommand } from '../api/commands.ts'
-import { KEY_SCOPE_PRIORITY } from '../api/commands.ts'
+import type { KeyScope } from '../api/commands.ts'
 import { COMMAND_SERVICE, KEYBINDING_SERVICE, PREFERENCES_SERVICE, STATUS_SERVICE } from '../api/tokens.ts'
 import type { CommandRegistryPort, KeybindingRegistryPort } from '../api/commands.ts'
 import type { PreferencesApi } from '../api/preferences.ts'
 import type { StatusApi } from '../api/context.ts'
 import { useI18n, useServices } from '../shell/useWorkbench.ts'
+import { findShortcutConflict, shortcutRows } from './shortcutRows.ts'
+import type { ShortcutRow } from './shortcutRows.ts'
 
 const services = useServices()
 const i18n = useI18n()
@@ -37,37 +38,31 @@ function status(): StatusApi {
   return services.require(STATUS_SERVICE)
 }
 
-const unsubscribe = commands().subscribe(() => {
+const unsubscribeCommands = commands().subscribe(() => {
   tick.value += 1
 })
-onScopeDispose(unsubscribe)
+onScopeDispose(unsubscribeCommands)
 
-const rows = computed(() => {
+const unsubscribePreferences = preferences().subscribe(() => {
+  tick.value += 1
+})
+onScopeDispose(unsubscribePreferences)
+
+const rows = computed<ShortcutRow[]>(() => {
   void tick.value
-  return commands().list().map((entry: RegisteredCommand) => ({
-    commandId: entry.definition.commandId,
-    title: i18n.t(entry.definition.titleKey),
-    category: entry.definition.category,
-    scope: entry.definition.keybindingScope ?? 'global',
-    chord: keybindings().chordOf(entry.definition.commandId) ?? '',
-    override: preferences().get().shortcuts.find((item) => item.commandId === entry.definition.commandId)?.chord ?? '',
-  }))
+  return shortcutRows({
+    commands: commands().list(),
+    rules: keybindings().rules(),
+    overrides: keybindings().overrides(),
+  })
 })
 
-function conflicts(commandId: string, chord: string, scope: string): string | null {
-  const normalized = chord.replace(/\s+/g, '')
-  for (const rule of keybindings().rules()) {
-    if (rule.commandId === commandId) {
-      continue
-    }
-    if (rule.scope !== scope) {
-      continue
-    }
-    if (rule.chord.replace(/\s+/g, '') === normalized) {
-      return rule.commandId
-    }
-  }
-  return null
+function titleOf(commandId: string): string {
+  return i18n.t(commands().get(commandId)?.definition.titleKey ?? commandId)
+}
+
+function scopeLabel(scope: KeyScope): string {
+  return i18n.t(`shortcuts.scope.${scope}`)
 }
 
 function beginRecord(commandId: string): void {
@@ -88,16 +83,20 @@ function capture(chord: string): void {
     recording.value = null
     return
   }
-  const conflict = conflicts(commandId, chord, row.scope)
+  const conflict = findShortcutConflict(rows.value, commandId, chord, row.scope)
   if (conflict !== null) {
-    status().notify(i18n.t('shortcuts.conflict', { chord, command: conflict }), 'error')
+    status().notify(i18n.t('shortcuts.conflict', { chord, command: titleOf(conflict) }), 'error')
     recording.value = null
     return
   }
   try {
     keybindings().setOverride(commandId, chord)
     const rest = preferences().get().shortcuts.filter((item) => item.commandId !== commandId)
-    preferences().setSection('shortcuts', [...rest, { commandId, chord }])
+    const override = keybindings().overrides().find((item) => item.commandId === commandId)
+    preferences().setSection(
+      'shortcuts',
+      override === undefined ? rest : [...rest, { commandId, chord: override.chord }],
+    )
     void preferences().flush()
     status().notify(i18n.t('shortcuts.saved', { chord }))
   } catch (error) {
@@ -108,14 +107,17 @@ function capture(chord: string): void {
 
 function clearBinding(commandId: string): void {
   keybindings().setOverride(commandId, null)
+  const rest = preferences().get().shortcuts.filter((item) => item.commandId !== commandId)
+  const override = keybindings().overrides().find((item) => item.commandId === commandId)
   preferences().setSection(
     'shortcuts',
-    preferences().get().shortcuts.filter((item) => item.commandId !== commandId),
+    override === undefined ? rest : [...rest, { commandId, chord: override.chord }],
   )
   void preferences().flush()
 }
 
 function resetAll(): void {
+  recording.value = null
   keybindings().clearOverrides()
   preferences().resetSection('shortcuts')
   void preferences().flush()
@@ -154,14 +156,13 @@ function onRecordKey(event: KeyboardEvent): void {
   capture(parts.join('+'))
 }
 
-void KEY_SCOPE_PRIORITY
 </script>
 
 <template>
   <section class="section" @keydown="onRecordKey">
     <h3>{{ i18n.t('settings.shortcuts') }}</h3>
     <p class="hint">{{ i18n.t('shortcuts.hint') }}</p>
-    <table class="table">
+    <table v-if="rows.length > 0" class="table">
       <thead>
         <tr>
           <th>{{ i18n.t('shortcuts.command') }}</th>
@@ -173,13 +174,14 @@ void KEY_SCOPE_PRIORITY
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="row.commandId">
-          <td>{{ row.title }}</td>
+          <td>{{ i18n.t(row.titleKey) }}</td>
           <td class="muted">{{ row.category }}</td>
-          <td class="muted">{{ row.scope }}</td>
+          <td class="muted">{{ scopeLabel(row.scope) }}</td>
           <td>
             <span v-if="recording === row.commandId" class="recording">{{ i18n.t('shortcuts.recording') }}</span>
             <span v-else class="chord">{{ row.chord || i18n.t('shortcuts.unbound') }}</span>
-            <span v-if="row.override" class="override">{{ i18n.t('shortcuts.overridden') }}</span>
+            <span v-if="row.state === 'overridden'" class="override">{{ i18n.t('shortcuts.overridden') }}</span>
+            <span v-else-if="row.state === 'cleared'" class="cleared">{{ i18n.t('shortcuts.cleared') }}</span>
           </td>
           <td class="actions">
             <button type="button" class="link" @click="beginRecord(row.commandId)">{{ i18n.t('shortcuts.record') }}</button>
@@ -188,6 +190,10 @@ void KEY_SCOPE_PRIORITY
         </tr>
       </tbody>
     </table>
+    <div v-else class="empty" role="status">
+      <p>{{ i18n.t('shortcuts.empty') }}</p>
+      <p class="hint">{{ i18n.t('shortcuts.emptyHint') }}</p>
+    </div>
     <div class="row">
       <button type="button" class="ghost" @click="resetAll">{{ i18n.t('shortcuts.resetAll') }}</button>
       <button v-if="recording" type="button" class="ghost" @click="cancelRecord">{{ i18n.t('common.cancel') }}</button>
@@ -206,6 +212,9 @@ void KEY_SCOPE_PRIORITY
 .chord { font-family: var(--font-mono, ui-monospace, monospace); }
 .recording { color: var(--accent); }
 .override { margin-left: 6px; color: var(--warning); font-size: 11px; }
+.cleared { margin-left: 6px; color: var(--text-muted); font-size: 11px; }
+.empty { padding: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
+.empty p { margin: 0; }
 .actions { display: flex; gap: 6px; }
 .link { background: transparent; border: 0; color: var(--accent); font-size: 11px; cursor: pointer; }
 .link.danger { color: var(--error); }

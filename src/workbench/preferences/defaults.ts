@@ -358,7 +358,7 @@ function normalizeShortcuts(value: unknown, issues: string[]): KeybindingOverrid
     const record = raw as Record<string, unknown>
     const commandId = typeof record.commandId === 'string' ? record.commandId.trim() : ''
     const chord = typeof record.chord === 'string' ? record.chord.trim() : ''
-    if (commandId.length === 0 || chord.length === 0) {
+    if (commandId.length === 0 || typeof record.chord !== 'string') {
       issues.push('shortcuts 条目缺少 commandId/chord，已忽略')
       continue
     }

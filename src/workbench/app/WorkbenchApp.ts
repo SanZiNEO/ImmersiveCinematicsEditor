@@ -498,7 +498,10 @@ export class WorkbenchApp {
     }
     for (const override of this.preferences.get().shortcuts) {
       try {
-        this.keybindings.setOverride(override.commandId, override.chord)
+        this.keybindings.setOverride(
+          override.commandId,
+          override.chord === '' ? null : override.chord,
+        )
       } catch (error) {
         this.diagnostics.report({
           severity: 'warning',

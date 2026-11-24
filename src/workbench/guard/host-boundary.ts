@@ -27,7 +27,7 @@ const ALLOWED: Allowed[] = [
   { file: 'src/app/main.ts', line: 31, why: 'Reflect.get 读主题启动缓存，随后做形状窄化校验' },
   { file: 'src/workbench/host/createHost.ts', line: 19, why: '宿主分流唯一入口，读桥选择 Electron / 浏览器宿主' },
   { file: 'src/workbench/host/createHost.ts', line: 24, why: 'console.info 提示文本里的字样，不是读取' },
-  { file: 'src/workbench/app/WorkbenchApp.ts', line: 618, why: '读 webuiToken，失败回落 URL 查询串' },
+  { file: 'src/workbench/app/WorkbenchApp.ts', line: 621, why: '读 webuiToken，失败回落 URL 查询串' },
 ]
 
 function main(): void {
