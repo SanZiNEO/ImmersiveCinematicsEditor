@@ -1,0 +1,399 @@
+# 04 · 发布流水线（草稿优先） / 05 · 自动转正与失败演练
+#
+# 顺序：guard（算版本、定发不发）→ verify（发不发都跑质量闸门）→ package（--publish never，只产三件套）
+#      → release（本地产物校验 → HEAD 自检 → 版本未占用 → Latest 归属 → 禁止降级 → 建 draft → 复查 → 转正/停住）。
+#
+# 三条硬规矩：
+#   1. 构建阶段不创建任何 Release：electron-builder 一律 --publish never；
+#   2. Release 只在全部验证通过后由 release job 用 softprops/action-gh-release 创建，且 draft: true；
+#   3. 创建 draft 就会建 tag：release job 任一步失败，末尾 Clean up on failure 删草稿并 --cleanup-tag。
+#
+# 05 追加：
+#   - AUTO_PUBLISH 开关（默认 'false' = 停在草稿；'true' = 全部复查通过后自动转正）；
+#   - workflow_dispatch 的 publish 逃生口（本次 run 覆盖开关，不改仓库文件）；
+#   - Latest 归属判定（只有比已发布最高版本更新才 --latest=true）与"禁止降级发布"前置闸门；
+#   - 三个只在 drill/* 分支生效的演练钩子（清残留草稿 / 删 blockmap / 草稿后失败）。
+# 转正只有一条路径：gh release edit --draft=false 且显式 --latest，不借 action 的自动 publish。
+name: Release
+
+on:
+  # 发布暂未启用：push 不触发任何 Release / tag。
+  # 原因：基线 tag 尚未推到远端，guard 会把全部历史提交算进批次
+  # （commits>=10 必然命中），导致每次 push 都建 draft + tag。
+  # 等产品侧改进收口、决定正式启用时，恢复下面这段即可（drill/* 一并恢复）：
+  #
+  #   push:
+  #     branches:
+  #       - webui
+  #       # 演练分支命名空间：05 的失败演练在 drill/* 上跑，逻辑与 webui 完全同一条流水线。
+  #       - 'drill/*'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 强制发布（跳过 commits / days 阈值）
+        type: boolean
+        default: false
+      publish:
+        description: 转正逃生口：留空=跟随 AUTO_PUBLISH；true=本次转正；false=本次只停草稿
+        type: string
+        default: ''
+
+# 发布不能被下一次 push 半路砍掉：同分支排队串行，不取消在途 run。
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+# 只给 contents: write：建 draft、传资产、失败时 --cleanup-tag 都靠它。
+permissions:
+  contents: write
+
+env:
+  # 阈值只在这里调；next-version.mjs 里不得出现 10 / 7 字面量。
+  MIN_COMMITS: '10'
+  MAX_DAYS: '7'
+  # 05-01 开关（只有一个落点，下游都读 guard 的 auto_publish 输出）：
+  #   'false' = 未授权状态保持此值：复查通过后停在草稿，等人点 Publish；
+  #   'true'  = 启用发布：全部复查通过后 gh release edit --draft=false 自动转正。
+  AUTO_PUBLISH: 'false'
+  # 演练钩子：只在 drill/* 分支的提交里临时改 true；条件里同时要求分支名，生产（webui）永不可能触发。
+  DRILL_CLEAN_STALE: 'false'
+  DRILL_DROP_BLOCKMAP: 'false'
+  DRILL_FAIL_AFTER_DRAFT: 'false'
+
+jobs:
+  guard:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      publish: ${{ steps.next.outputs.publish }}
+      reason: ${{ steps.next.outputs.reason }}
+      auto_publish: ${{ steps.gate.outputs.auto_publish }}
+    steps:
+      - name: 1. checkout（全历史 + tag）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 2. 打印现有 tag（describe 找不到时用来定位）
+        run: git tag --sort=-v:refname
+
+      - name: 3. 计算版本与发布判定
+        id: next
+        env:
+          # workflow_dispatch 才有 force 输入；push 事件恒为 false。
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force || 'false' }}
+        run: node .github/scripts/next-version.mjs
+
+      - name: 4. 解析转正开关（dispatch publish > env AUTO_PUBLISH）
+        id: gate
+        env:
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: node .github/scripts/resolve-gate.mjs
+
+      - name: 5. 判定摘要
+        run: |
+          echo "version=${{ steps.next.outputs.version }} publish=${{ steps.next.outputs.publish }} reason=${{ steps.next.outputs.reason }} auto_publish=${{ steps.gate.outputs.auto_publish }}"
+          {
+            echo "### 发布判定"
+            echo ""
+            echo "| 键 | 值 |"
+            echo "|---|---|"
+            echo "| version | \`${{ steps.next.outputs.version }}\` |"
+            echo "| publish | \`${{ steps.next.outputs.publish }}\` |"
+            echo "| reason | \`${{ steps.next.outputs.reason }}\` |"
+            echo "| auto_publish | \`${{ steps.gate.outputs.auto_publish }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: guard
+    # 不设 if：guard 永远成功，不发布的批次也要跑完给反馈。
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: 1. checkout
+        uses: actions/checkout@v4
+
+      - name: 2. node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 3. Electron 下载缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron
+            ~\AppData\Local\electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('**/package-lock.json') }}
+
+      - name: 4. 依赖
+        run: npm ci
+        timeout-minutes: 10
+
+      - name: 5. 类型
+        run: npm run typecheck
+        timeout-minutes: 10
+
+      - name: 6. 自检（9 个 verify + 6 个守卫）
+        env:
+          # verify-09 需要本机模组仓库；CI 跑不到，只能记 NOT RUN。
+          # §4.3「NOT RUN 不参与判定」：这里显式允许 NOT RUN 不拉红整步，FAIL / BLOCKED 仍照常失败。
+          # 不设该变量的本机运行保持 02-01 的聚合口径（有 2 -> 整体 2）。
+          VERIFY_ALLOW_NOT_RUN: '1'
+        run: npm run verify:all
+        timeout-minutes: 20
+
+      - name: 7. 离线 e2e
+        run: npm run e2e:system:run -- --suite offline
+        timeout-minutes: 15
+
+      - name: 8. 构建
+        run: npm run build
+        timeout-minutes: 10
+
+      - name: 9. 失败留证
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-verify-artifacts-${{ github.run_number }}
+          path: e2e-system/artifacts/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  package:
+    needs: [guard, verify]
+    if: needs.guard.outputs.publish == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: 1. checkout
+        uses: actions/checkout@v4
+
+      - name: 2. node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 3. Electron 下载缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron
+            ~\AppData\Local\electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('**/package-lock.json') }}
+
+      - name: 4. 依赖
+        run: npm ci
+        timeout-minutes: 10
+
+      - name: 5. 清空旧产物（防 release/ 残留多份 exe）
+        run: if (Test-Path -LiteralPath release) { Remove-Item -LiteralPath release -Recurse -Force }
+
+      - name: 6. 构建 Vite 产物
+        run: npm run build
+        timeout-minutes: 10
+
+      - name: 7. 打包（--publish never + 版本注入）
+        run: npx electron-builder --win --publish never --c.extraMetadata.version=${{ needs.guard.outputs.version }}
+        timeout-minutes: 30
+
+      - name: 8. 打包后立刻校验三件套
+        run: node scripts/verify-release-assets.mjs --version ${{ needs.guard.outputs.version }}
+        timeout-minutes: 5
+
+      - name: 9. 列出待上传资产
+        run: Get-ChildItem -LiteralPath release -File | Select-Object Name, Length
+
+      - name: 10. 上传三件套 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ needs.guard.outputs.version }}
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [guard, package]
+    if: needs.guard.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 1. checkout（供 ls-remote / fetch --tags / 校验脚本使用）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 2. 下载三件套
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets-${{ needs.guard.outputs.version }}
+          path: release
+          merge-multiple: true
+
+      - name: 3. 【仅演练】删掉 blockmap（验证资产校验闸门）
+        if: env.DRILL_DROP_BLOCKMAP == 'true' && startsWith(github.ref_name, 'drill/')
+        run: |
+          echo "演练：删除 release/*.exe.blockmap，期望下一步本地产物校验 FAIL，且不建草稿"
+          rm -f release/*.exe.blockmap
+          ls -1 release
+
+      - name: 4. 本地产物校验（版本 / url / sha512 / size / blockmap）
+        run: node scripts/verify-release-assets.mjs --version "$VERSION"
+
+      - name: 5. 【仅演练】先清同名残留草稿
+        if: env.DRILL_CLEAN_STALE == 'true' && startsWith(github.ref_name, 'drill/')
+        run: |
+          state=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || echo absent)
+          if [ "$state" = "true" ]; then
+            echo "清理残留草稿 v$VERSION（含 tag）"
+            gh release delete "v$VERSION" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          else
+            echo "无残留草稿（state=$state），跳过"
+          fi
+
+      - name: 6. HEAD 自检（远端本分支必须还停在本次 SHA）
+        run: |
+          remote_sha=$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)
+          echo "branch=$GITHUB_REF_NAME remote=$remote_sha sha=$GITHUB_SHA"
+          if [ "$remote_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::远端 $GITHUB_REF_NAME 已前进（$remote_sha != $GITHUB_SHA），本次放弃发布：不建草稿、不建 tag"
+            exit 1
+          fi
+          echo "HEAD 未变，继续"
+
+      - name: 7. 版本号未被占用（tag 不存在才允许发）
+        run: |
+          git fetch --tags
+          if git rev-parse --verify --quiet "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::tag v$VERSION 已存在：该版本已发布或残留，拒绝覆盖"
+            exit 1
+          fi
+          echo "tag v$VERSION 未被占用"
+
+      - name: 8. Latest 归属（只有比已发布最高版本更新才拿 Latest）
+        id: latest
+        run: node .github/scripts/latest-make.mjs
+
+      - name: 9. 禁止降级发布（本次必须严格高于已发布最高版本）
+        run: |
+          relation="${{ steps.latest.outputs.relation }}"
+          highest="${{ steps.latest.outputs.highest }}"
+          echo "本次 v$VERSION / 已发布最高 v$highest / relation=$relation"
+          if [ "$relation" != "newer" ]; then
+            echo "::error::禁止降级发布：已发布最高为 v$highest，v$VERSION 不高于它；不建草稿、不建 tag。发错版本只能再发一个更高版本修正。"
+            exit 1
+          fi
+          echo "本次版本高于已发布最高版本（或尚无任何已发布版本），允许建草稿"
+
+      - name: 10. 打标记（之后可能创建草稿）
+        run: touch .release-created
+
+      - name: 11. 创建草稿 Release（draft=true，target_commitish 显式写本次 SHA）
+        # v3 起运行时是 node24；v2 声明的 node20 已于 2026-09-23 从 GitHub runner 移除，继续用 v2 会在这一步直接失败。
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          draft: true
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+
+      - name: 12. 上传后复查：资产恰好三件且与磁盘同名
+        run: |
+          mapfile -t disk < <(cd release && printf '%s\n' *.exe *.exe.blockmap latest.yml | LC_ALL=C sort)
+          mapfile -t remote < <(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)
+          echo "磁盘三件套："; printf '  %s\n' "${disk[@]}"
+          echo "Release 资产："; printf '  %s\n' "${remote[@]}"
+          test "${#remote[@]}" -eq 3
+          diff -u <(printf '%s\n' "${disk[@]}") <(printf '%s\n' "${remote[@]}")
+
+      - name: 13. 自动转正（AUTO_PUBLISH / dispatch publish 生效时才跑）
+        if: needs.guard.outputs.auto_publish == 'true'
+        run: |
+          echo "转正 v$VERSION，Latest=${{ steps.latest.outputs.make }}（唯一路径：gh release edit --draft=false --latest）"
+          gh release edit "v$VERSION" -R "$GITHUB_REPOSITORY" --draft=false --latest="${{ steps.latest.outputs.make }}"
+          gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isDraft,isLatest,tagName --jq '{isDraft,isLatest,tagName}'
+
+      - name: 14. 转正后复查（只告警，不回滚已发布状态）
+        if: needs.guard.outputs.auto_publish == 'true'
+        continue-on-error: true
+        run: |
+          mapfile -t disk < <(cd release && printf '%s\n' *.exe *.exe.blockmap latest.yml | LC_ALL=C sort)
+          mapfile -t remote < <(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)
+          tag_sha=$(git ls-remote --tags origin "refs/tags/v$VERSION" | cut -f1)
+          is_latest=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isLatest --jq '.isLatest')
+          echo "期望 Latest=${{ steps.latest.outputs.make }} 实际 isLatest=$is_latest tag=$tag_sha 本次 SHA=$GITHUB_SHA"
+          ok=1
+          [ "${#remote[@]}" -eq 3 ] || { echo "::warning::资产不是 3 件：${remote[*]}"; ok=0; }
+          diff -q <(printf '%s\n' "${disk[@]}") <(printf '%s\n' "${remote[@]}") >/dev/null || { echo "::warning::资产名与磁盘不一致"; ok=0; }
+          [ "$tag_sha" = "$GITHUB_SHA" ] || { echo "::warning::tag v$VERSION 指向 $tag_sha，本次 SHA=$GITHUB_SHA"; ok=0; }
+          [ "$is_latest" = "${{ steps.latest.outputs.make }}" ] || { echo "::warning::期望 Latest=v$VERSION / 实际 Latest 标记为 $is_latest"; ok=0; }
+          if [ "$ok" = "1" ]; then echo "转正后复查通过"; else echo "::warning::转正后复查有偏差：已发布状态不回滚，按 runbook 人工评估"; fi
+
+      - name: 15. 停在草稿（未启用自动转正）
+        if: needs.guard.outputs.auto_publish != 'true'
+        run: |
+          gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json url,isDraft,assets \
+            --jq '{url, isDraft, assets: [.assets[].name]}'
+          is_draft=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          test "$is_draft" = "true"
+          echo "AUTO_PUBLISH=$AUTO_PUBLISH：停在草稿，等待人工 Publish；本次不执行 gh release edit --draft=false。"
+
+      - name: 16. 【仅演练】草稿后失败，验证失败清理
+        if: env.DRILL_FAIL_AFTER_DRAFT == 'true' && startsWith(github.ref_name, 'drill/') && needs.guard.outputs.auto_publish != 'true'
+        run: |
+          echo "::error::DRILL：故意在草稿创建后失败，用于验证 Clean up on failure"
+          exit 1
+
+      - name: 17. 失败清理（只删本次建过的草稿，连带删 tag）
+        if: failure()
+        run: |
+          # 只在本次 run 确实创建过草稿时删除：避免失败早于创建（HEAD 自检 / 版本占用 / 降级闸门）时误删同名旧草稿。
+          if [ ! -f .release-created ]; then
+            echo "本次 run 未创建草稿（失败发生在创建之前），无需清理"
+            exit 0
+          fi
+          state=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || echo absent)
+          case "$state" in
+            true)
+              gh release delete "v$VERSION" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes
+              ;;
+            false)
+              echo "::warning::v$VERSION 已发布（非草稿）：失败清理不删除已发布 Release，按 runbook 人工评估"
+              exit 0
+              ;;
+            *)
+              echo "release v$VERSION 不存在：检查 action 是否只建了 tag、没建 Release"
+              # 第 7 步已确认 tag 不存在，此时出现的 v$VERSION 只可能是本次 run 建的，直接删远端 tag。
+              if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
+                git push origin ":refs/tags/v$VERSION"
+              fi
+              ;;
+          esac
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::清理后 Release 仍存在，需要人工 gh release delete --cleanup-tag"
+            exit 1
+          fi
+          if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
+            echo "::error::清理后 tag v$VERSION 仍存在，需要人工 --cleanup-tag"
+            exit 1
+          fi
+          echo "已清理：gh release list 无 v$VERSION，git ls-remote --tags 无该 tag"
