@@ -90,6 +90,8 @@ export interface CommandContribution {
   enabled?: (ctx: CommandContext) => boolean
   checked?: (ctx: CommandContext) => boolean
   menu?: MenuPlacement
+  /** 只进入命令面板，不进入菜单栏。 */
+  commandPaletteOnly?: boolean
   /** 默认 chord；用户可在设置页覆盖。 */
   keybinding?: string
   /** 默认 chord 的作用域；缺省 `global`。 */
@@ -120,12 +122,32 @@ export interface StatusContext {
   presetId: string
 }
 
+/** 设置分区可见级别：默认显示 / 高级 / 实验。 */
+export const SETTINGS_VISIBILITY_LEVELS = ['standard', 'advanced', 'experimental'] as const
+
+export type SettingsVisibility = (typeof SETTINGS_VISIBILITY_LEVELS)[number]
+
+export const DEFAULT_SETTINGS_VISIBILITY: SettingsVisibility = 'standard'
+
+/** 设置分区作用对象；只表达影响范围，不表达存储位置。 */
+export const SETTINGS_SCOPES = ['application', 'project'] as const
+
+export type SettingsScope = (typeof SETTINGS_SCOPES)[number]
+
+export const DEFAULT_SETTINGS_SCOPE: SettingsScope = 'application'
+
 /** 设置分区贡献（04-01 第六类）。 */
 export interface SettingsContribution {
   sectionId: string
   titleKey: string
   order: number
   component: () => Promise<Component>
+  /** 缺省 standard。 */
+  visibility?: SettingsVisibility
+  /** 缺省 application。 */
+  scope?: SettingsScope
+  /** 搜索补充词；与标题、titleKey、sectionId、pluginId 一起匹配。 */
+  searchKeywords?: readonly string[]
 }
 
 /** 七类贡献的集合。 */

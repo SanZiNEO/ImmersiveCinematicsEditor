@@ -13,6 +13,7 @@ import type { StatusApi } from '../api/context.ts'
 import type { PageRouter } from '../api/registries.ts'
 import { PAGE_ROUTER } from '../api/tokens.ts'
 import { useHost, useI18n, useLayout, useRouter, useServices } from '../shell/useWorkbench.ts'
+import { settingsWorkspacePageId } from './settingsModified.ts'
 
 const services = useServices()
 const i18n = useI18n()
@@ -21,6 +22,13 @@ const router = useRouter()
 const host = useHost()
 
 const BUILTIN_PRESETS = ['default', 'camera', 'subtitle', 'behavior', 'compact'] as const
+const PRESET_LABEL_KEYS: Record<(typeof BUILTIN_PRESETS)[number], string> = {
+  default: 'workspace.preset.default',
+  camera: 'workspace.preset.camera',
+  subtitle: 'workspace.preset.subtitle',
+  behavior: 'workspace.preset.behavior',
+  compact: 'workspace.preset.compact',
+}
 
 const tick = ref(0)
 const unsubscribe = layout.subscribe(() => {
@@ -30,8 +38,7 @@ onScopeDispose(unsubscribe)
 
 const pageId = computed(() => {
   void tick.value
-  const current = router.currentPageId
-  return current === 'settings' ? 'document' : current
+  return settingsWorkspacePageId(router.currentPageId)
 })
 
 const presetId = computed(() => {
@@ -52,6 +59,11 @@ function statusOf(): StatusApi {
   return services.require(STATUS_SERVICE)
 }
 
+function presetLabel(id: string): string {
+  const key = PRESET_LABEL_KEYS[id as keyof typeof PRESET_LABEL_KEYS]
+  return key === undefined ? id : i18n.t(key)
+}
+
 function layoutService(): WorkspaceLayoutService {
   return services.require(LAYOUT_SERVICE)
 }
@@ -62,7 +74,7 @@ function routerPort(): PageRouter {
 
 function switchTo(id: string): void {
   layoutService().applyPreset(pageId.value, id)
-  statusOf().notify(i18n.t('workspace.presetApplied', { id }))
+  statusOf().notify(i18n.t('workspace.presetApplied', { preset: presetLabel(id) }))
 }
 
 function resetLayout(): void {
@@ -78,7 +90,7 @@ function savePreset(): void {
   try {
     layoutService().savePreset(pageId.value, name)
     newPresetName.value = ''
-    statusOf().notify(i18n.t('workspace.presetSaved', { id: name }))
+    statusOf().notify(i18n.t('workspace.presetSaved', { name }))
   } catch (error) {
     statusOf().notify(error instanceof Error ? error.message : String(error), 'error')
   }
@@ -86,7 +98,7 @@ function savePreset(): void {
 
 function deletePreset(id: string): void {
   layoutService().deletePreset(pageId.value, id)
-  statusOf().notify(i18n.t('workspace.presetDeleted', { id }))
+  statusOf().notify(i18n.t('workspace.presetDeleted', { name: id }))
 }
 
 function revealUserData(): void {
@@ -99,7 +111,7 @@ void routerPort
 <template>
   <section class="section">
     <h3>{{ i18n.t('settings.workspace') }}</h3>
-    <p class="hint">{{ i18n.t('workspace.hint', { page: pageId }) }}</p>
+    <p class="hint">{{ i18n.t('workspace.hint') }}</p>
 
     <h4>{{ i18n.t('workspace.builtinPresets') }}</h4>
     <div class="row wrap">
@@ -112,7 +124,7 @@ void routerPort
         :aria-pressed="presetId === preset"
         @click="switchTo(preset)"
       >
-        {{ preset }}
+        {{ presetLabel(preset) }}
       </button>
     </div>
 

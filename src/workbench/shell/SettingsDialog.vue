@@ -2,97 +2,82 @@
 /**
  * 设置弹窗（04-08）：左侧分区导航 + 右侧内容。
  *
- * 分区来自 `settings` 贡献（核心六区 + 插件分区）；最前面额外固定一个「引导」分区，
- * 它不进 `SettingsRegistry`，也不写 `lastSectionId`。弹窗壳、遮罩、焦点与 Esc 由
- * `WorkbenchDialog` 负责，这里只做导航与懒加载。
+ * 分区来自 `settings` 贡献；可见性、搜索、作用域与已修改状态由共享浏览器提供。
+ * 弹窗壳、遮罩、焦点与 Esc 由 `WorkbenchDialog` 负责，这里只做导航与懒加载。
  */
-import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { Component } from 'vue'
 
-import type { RegisteredSettingsSection } from '../api/registries.ts'
-import { useI18n, usePreferences, useSettingsSections } from './useWorkbench.ts'
+import { useI18n } from './useWorkbench.ts'
+import { useSettingsBrowser } from '../settings/useSettingsBrowser.ts'
+import {
+  settingsScopeDescriptionKey,
+  settingsScopeLabelKey,
+  settingsVisibilityLabelKey,
+} from '../settings/settingsVisibility.ts'
+import type { SettingsSectionView } from '../settings/settingsVisibility.ts'
+import SettingsFilterBar from '../settings/SettingsFilterBar.vue'
 import WorkbenchDialog from './WorkbenchDialog.vue'
-import OnboardingSection from './OnboardingSection.vue'
-
-/** 内置引导分区 ID；不注册进 SettingsRegistry，也不持久化为 lastSectionId。 */
-const ONBOARDING_SECTION_ID = 'onboarding'
 
 const props = defineProps<{ sectionId?: string }>()
 const emit = defineEmits<{ close: [] }>()
 
 const i18n = useI18n()
-const registry = useSettingsSections()
-const preferences = usePreferences()
+const browser = useSettingsBrowser({
+  requestedSectionId: () => props.sectionId,
+})
+const {
+  visibleSections,
+  activeSectionId,
+  activeSection,
+  query,
+  showAdvanced,
+  showExperimental,
+  onlyModified,
+  hasExperimental,
+  emptyState,
+  modifiedCount,
+} = browser
 
-const sections = ref<RegisteredSettingsSection[]>([])
-const activeSectionId = ref<string>('')
 const loaded = shallowRef<Record<string, Component>>({})
 const failure = ref<string | null>(null)
 const attempt = ref(0)
 
-function refreshSections(): void {
-  sections.value = registry.list()
-}
-
-const unsubscribeRegistry = registry.subscribe(() => {
-  refreshSections()
-})
-onScopeDispose(unsubscribeRegistry)
-refreshSections()
-
-function isKnownSection(sectionId: string): boolean {
-  return sectionId === ONBOARDING_SECTION_ID
-    || sections.value.some((entry) => entry.contribution.sectionId === sectionId)
-}
-
-function initialSection(): string {
-  const wanted = props.sectionId
-    ?? preferences.get().settings.lastSectionId
-    ?? sections.value[0]?.contribution.sectionId
-    ?? ONBOARDING_SECTION_ID
-  return isKnownSection(wanted) ? wanted : ONBOARDING_SECTION_ID
-}
-
 async function loadSection(sectionId: string): Promise<void> {
-  if (sectionId === '' || sectionId === ONBOARDING_SECTION_ID) {
+  if (sectionId === '') {
     return
   }
-  const entry = sections.value.find((item) => item.contribution.sectionId === sectionId)
-  if (entry === undefined) {
+  const section = browser.sections.value.find((entry) => entry.sectionId === sectionId)
+  if (section === undefined) {
     failure.value = i18n.t('settings.missingSection', { sectionId })
     return
   }
   try {
-    const module = await entry.contribution.component()
+    const module = await section.load()
     loaded.value = { ...loaded.value, [sectionId]: module as Component }
   } catch (error) {
-    failure.value = error instanceof Error ? error.message : String(error)
+    if (activeSectionId.value === sectionId) {
+      failure.value = error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
-activeSectionId.value = initialSection()
-
 void watch(activeSectionId, async (sectionId) => {
   failure.value = null
-  if (sectionId === '' || sectionId === ONBOARDING_SECTION_ID) {
+  if (sectionId === '') {
     return
   }
-  preferences.patch({ settings: { ...preferences.get().settings, lastSectionId: sectionId } })
   if (loaded.value[sectionId] !== undefined) {
     return
   }
   await loadSection(sectionId)
 }, { immediate: true })
 
-// 弹窗已打开时外部再次请求分区（例如再次按 Mod+,）也要跟随。
-void watch(() => props.sectionId, (sectionId) => {
-  if (sectionId !== undefined && sectionId !== activeSectionId.value && isKnownSection(sectionId)) {
-    activeSectionId.value = sectionId
-  }
-})
-
 function retry(): void {
   const sectionId = activeSectionId.value
+  if (sectionId === '') {
+    return
+  }
   const next = { ...loaded.value }
   delete next[sectionId]
   loaded.value = next
@@ -102,18 +87,49 @@ function retry(): void {
 }
 
 const activeTitle = computed(() => {
-  if (activeSectionId.value === ONBOARDING_SECTION_ID) {
-    return i18n.t('onboarding.title')
-  }
-  const entry = sections.value.find((item) => item.contribution.sectionId === activeSectionId.value)
-  return entry === undefined ? i18n.t('nav.settings') : i18n.t(entry.contribution.titleKey)
+  return activeSection.value?.title ?? i18n.t('nav.settings')
 })
 
-function select(sectionId: string): void {
-  if (sectionId === activeSectionId.value) {
+function visibilityLabel(section: SettingsSectionView | undefined): string | null {
+  if (section === undefined) {
+    return null
+  }
+  const key = settingsVisibilityLabelKey(section.visibility)
+  return key === null ? null : i18n.t(key)
+}
+
+const emptyCopy = computed(() => {
+  switch (emptyState.value) {
+    case 'search':
+    case 'filtered':
+      return {
+        title: i18n.t('settings.search.emptyTitle'),
+        hint: i18n.t('settings.search.emptyHint'),
+        action: 'clear' as const,
+      }
+    case 'modified':
+      return {
+        title: i18n.t('settings.filter.modifiedEmptyTitle'),
+        hint: i18n.t('settings.filter.modifiedEmptyHint'),
+        action: 'all' as const,
+      }
+    case 'noSections':
+      return {
+        title: i18n.t('settings.search.noSections'),
+        hint: '',
+        action: null,
+      }
+    default:
+      return null
+  }
+})
+
+function runEmptyAction(): void {
+  if (emptyCopy.value?.action === 'all') {
+    browser.showAllSections()
     return
   }
-  activeSectionId.value = sectionId
+  browser.clearSearch()
 }
 
 function close(): void {
@@ -130,32 +146,68 @@ function close(): void {
   >
     <div class="settings-dialog">
       <nav class="settings-dialog__nav" :aria-label="i18n.t('nav.settings')">
+        <SettingsFilterBar
+          :query="query"
+          :show-advanced="showAdvanced"
+          :show-experimental="showExperimental"
+          :experimental-available="hasExperimental"
+          :only-modified="onlyModified"
+          :modified-count="modifiedCount"
+          @update:query="query = $event"
+          @update:show-advanced="showAdvanced = $event"
+          @update:show-experimental="showExperimental = $event"
+          @update:only-modified="browser.setOnlyModified($event)"
+        />
         <button
+          v-for="entry in visibleSections"
+          :key="entry.sectionId"
           type="button"
           class="nav-item"
-          :aria-current="activeSectionId === 'onboarding'"
-          @click="select('onboarding')"
+          :aria-current="activeSectionId === entry.sectionId"
+          @click="browser.selectSection(entry.sectionId)"
         >
-          {{ i18n.t('onboarding.title') }}
-        </button>
-        <button
-          v-for="entry in sections"
-          :key="entry.contribution.sectionId"
-          type="button"
-          class="nav-item"
-          :aria-current="activeSectionId === entry.contribution.sectionId"
-          @click="select(entry.contribution.sectionId)"
-        >
-          {{ i18n.t(entry.contribution.titleKey) }}
+          <span class="nav-item__main">
+            <span class="nav-item__label">{{ entry.title }}</span>
+            <span class="nav-item__scope">{{ i18n.t(settingsScopeLabelKey(entry.scope)) }}</span>
+          </span>
+          <span class="nav-item__badges">
+            <span
+              v-if="visibilityLabel(entry) !== null"
+              class="badge"
+            >
+              {{ visibilityLabel(entry) }}
+            </span>
+            <span v-if="browser.isSectionModified(entry.sectionId)" class="modified-dot" aria-hidden="true"></span>
+          </span>
         </button>
       </nav>
 
       <section class="settings-dialog__content">
-        <h3 class="settings-dialog__title">{{ activeTitle }}</h3>
-        <OnboardingSection
-          v-if="activeSectionId === 'onboarding'"
-          @done="close"
-        />
+        <header class="settings-dialog__heading">
+          <h3 class="settings-dialog__title">{{ activeTitle }}</h3>
+          <div v-if="activeSection" class="settings-dialog__meta">
+            <span
+              class="badge"
+              :title="i18n.t(settingsScopeDescriptionKey(activeSection.scope))"
+            >
+              {{ i18n.t(settingsScopeLabelKey(activeSection.scope)) }}
+            </span>
+            <span v-if="visibilityLabel(activeSection) !== null" class="badge">
+              {{ visibilityLabel(activeSection) }}
+            </span>
+            <span v-if="browser.isSectionModified(activeSection.sectionId)" class="modified-label">
+              {{ i18n.t('settings.modified') }}
+            </span>
+          </div>
+        </header>
+
+        <div v-if="emptyCopy" class="settings-dialog__empty" role="status">
+          <p class="settings-dialog__empty-title">{{ emptyCopy.title }}</p>
+          <p v-if="emptyCopy.hint" class="hint">{{ emptyCopy.hint }}</p>
+          <button v-if="emptyCopy.action" type="button" class="ghost" @click="runEmptyAction">
+            {{ i18n.t(emptyCopy.action === 'all' ? 'settings.filter.showAll' : 'settings.search.clear') }}
+          </button>
+        </div>
         <div v-else-if="failure" class="settings-dialog__error" role="alert">
           <span>{{ failure }}</span>
           <button type="button" class="ghost" @click="retry">{{ i18n.t('panel.retry') }}</button>
@@ -180,7 +232,7 @@ function close(): void {
 }
 
 .settings-dialog__nav {
-  width: 208px;
+  width: 248px;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -192,6 +244,10 @@ function close(): void {
 }
 
 .nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   text-align: left;
   background: transparent;
   border: 0;
@@ -217,6 +273,31 @@ function close(): void {
   outline-offset: 1px;
 }
 
+.nav-item__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nav-item__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-item__scope {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.nav-item__badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .settings-dialog__content {
   flex: 1;
   min-width: 0;
@@ -224,9 +305,66 @@ function close(): void {
   overflow: auto;
 }
 
-.settings-dialog__title {
+.settings-dialog__heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0 0 14px;
+}
+
+.settings-dialog__title {
+  margin: 0;
   font-size: 15px;
+}
+
+.settings-dialog__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.modified-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.modified-label {
+  color: var(--warning);
+  font-size: 10px;
+}
+
+.settings-dialog__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.settings-dialog__empty-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .settings-dialog__error {
